@@ -1,0 +1,99 @@
+import enum
+
+
+class UserRole(str, enum.Enum):
+    OWNER = "OWNER"
+    ADMIN = "ADMIN"
+    PRODUCT_OWNER = "PRODUCT_OWNER"
+    ENGINEERING_MANAGER = "ENGINEERING_MANAGER"
+    DEVELOPER = "DEVELOPER"
+    STAKEHOLDER = "STAKEHOLDER"
+
+
+class SprintPlanStatus(str, enum.Enum):
+    GENERATING = "GENERATING"
+    PENDING_REVIEW = "PENDING_REVIEW"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    REGENERATING = "REGENERATING"
+    SYNCING = "SYNCING"
+    SYNCED = "SYNCED"
+    SYNCED_PARTIAL = "SYNCED_PARTIAL"
+    UNDONE = "UNDONE"
+    EXPIRED = "EXPIRED"
+
+
+class WorkItemStatus(str, enum.Enum):
+    BACKLOG = "BACKLOG"
+    TODO = "TODO"
+    IN_PROGRESS = "IN_PROGRESS"
+    IN_REVIEW = "IN_REVIEW"
+    DONE = "DONE"
+    CLOSED = "CLOSED"
+
+
+class PRStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    AWAITING_REVIEW = "AWAITING_REVIEW"
+    CHANGES_REQUESTED = "CHANGES_REQUESTED"
+    APPROVED = "APPROVED"
+    MERGED = "MERGED"
+    CLOSED = "CLOSED"
+
+
+class CIStatus(str, enum.Enum):
+    PASSING = "PASSING"
+    FAILING = "FAILING"
+    PENDING = "PENDING"
+    UNKNOWN = "UNKNOWN"
+
+
+class HealthSignalType(str, enum.Enum):
+    BURNOUT_RISK = "BURNOUT_RISK"
+    VELOCITY_VARIANCE = "VELOCITY_VARIANCE"
+    STALLED_TICKET = "STALLED_TICKET"
+    REVIEW_LAG = "REVIEW_LAG"
+    CI_FAILURE = "CI_FAILURE"
+    AFTER_HOURS = "AFTER_HOURS"
+    INACTIVITY = "INACTIVITY"
+    CAPACITY_OVERLOAD = "CAPACITY_OVERLOAD"
+
+
+class HealthSeverity(str, enum.Enum):
+    GREEN = "GREEN"
+    AMBER = "AMBER"
+    RED = "RED"
+
+
+class NotificationChannel(str, enum.Enum):
+    SLACK = "SLACK"
+    TEAMS = "TEAMS"
+    EMAIL = "EMAIL"
+    IN_APP = "IN_APP"
+
+
+class SourceTool(str, enum.Enum):
+    JIRA = "JIRA"
+    ADO = "ADO"
+    GITHUB = "GITHUB"
+    NOTION = "NOTION"
+    LINEAR = "LINEAR"
+
+
+class ActivityEventType(str, enum.Enum):
+    COMMIT_PUSHED = "COMMIT_PUSHED"
+    PR_OPENED = "PR_OPENED"
+    PR_UPDATED = "PR_UPDATED"
+    PR_REVIEWED = "PR_REVIEWED"
+    PR_MERGED = "PR_MERGED"
+    PR_CLOSED = "PR_CLOSED"
+    CI_RUN = "CI_RUN"
+    TICKET_STATUS_CHANGED = "TICKET_STATUS_CHANGED"
+    TICKET_ASSIGNED = "TICKET_ASSIGNED"
+
+
+class BlockerStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    ESCALATED = "ESCALATED"
+    RESOLVED = "RESOLVED"

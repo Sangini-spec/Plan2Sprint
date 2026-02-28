@@ -1,0 +1,55 @@
+# ============================================================================
+# Plan2Sprint — Docker Compose
+# Services: api (FastAPI), web (Next.js)
+# Database: Supabase PostgreSQL (external, not containerized)
+# ============================================================================
+
+services:
+  # ── FastAPI Backend ──
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: plan2sprint-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./apps/api/.env
+    environment:
+      - CORS_ORIGINS=["http://localhost:3000","http://web:3000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - plan2sprint
+
+  # ── Next.js Frontend ──
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-https://obmbpfoormxbbizudrrp.supabase.co}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+    container_name: plan2sprint-web
+    ports:
+      - "3000:3000"
+    environment:
+      # Server-side rewrite proxy → api service via Docker network
+      - API_URL=http://api:8000
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-https://obmbpfoormxbbizudrrp.supabase.co}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - plan2sprint
+
+networks:
+  plan2sprint:
+    driver: bridge

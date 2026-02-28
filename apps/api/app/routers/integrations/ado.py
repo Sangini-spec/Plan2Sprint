@@ -1,0 +1,970 @@
+"""
+Azure DevOps integration router — Azure AD OAuth 2.0 flow.
+
+Endpoints (all prefixed with /api/integrations/ado by main.py):
+  GET  /connect        - Initiate Azure AD OAuth redirect
+  GET  /callback       - Handle OAuth callback, exchange code, store tokens
+  GET  /status         - Check ADO connection status
+  POST /disconnect     - Remove ADO connection
+  GET  /projects       - Fetch projects using stored OAuth token
+  POST /projects       - Fetch projects (backward compat)
+  GET  /iterations     - List iterations (demo mock)
+  POST /iterations     - Fetch real iterations
+  GET  /work-items     - List work items (demo mock)
+  POST /work-items     - Fetch by project OR write-back fields
+  POST /team-members   - Fetch team members for a project
+  POST /webhooks       - Receive ADO service hook events
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ...auth.supabase import get_current_user
+from ...config import settings
+from ...database import get_db
+from ...models.tool_connection import ToolConnection
+from ...services.encryption import encrypt_token, decrypt_token
+import httpx
+
+router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+# Azure DevOps resource ID for OAuth scope
+ADO_RESOURCE_ID = "499b84ac-1321-427f-aa17-267ca6975798"
+ADO_SCOPE = f"{ADO_RESOURCE_ID}/.default offline_access"
+
+# In-memory CSRF state store (in production, use Redis or DB)
+_oauth_states: dict[str, dict] = {}
+
+# ---------------------------------------------------------------------------
+# Write-back allowlist (frozen) -- mirrors writeback.ts
+# ---------------------------------------------------------------------------
+ADO_WRITEBACK_ALLOWLIST: frozenset[str] = frozenset([
+    "System.AssignedTo",
+    "System.IterationPath",
+    "Microsoft.VSTS.Scheduling.StoryPoints",
+])
+
+# ---------------------------------------------------------------------------
+# Mock data
+# ---------------------------------------------------------------------------
+MOCK_ADO_PROJECTS = [
+    {"id": "ap-1", "name": "Acme Platform", "description": "Main platform project", "state": "wellFormed", "url": "https://dev.azure.com/acme/AcmePlatform"},
+    {"id": "ap-2", "name": "Acme Mobile", "description": "Mobile app project", "state": "wellFormed", "url": "https://dev.azure.com/acme/AcmeMobile"},
+    {"id": "ap-3", "name": "Acme Internal", "description": "Internal tools", "state": "wellFormed", "url": "https://dev.azure.com/acme/AcmeInternal"},
+]
+
+MOCK_ADO_ITERATIONS = [
+    {"id": "ai-1", "name": "Sprint 24", "path": "Acme Platform\\Sprint 24", "startDate": "2026-02-09T00:00:00Z", "finishDate": "2026-02-23T00:00:00Z"},
+    {"id": "ai-2", "name": "Sprint 25", "path": "Acme Platform\\Sprint 25", "startDate": "2026-02-23T00:00:00Z", "finishDate": "2026-03-09T00:00:00Z"},
+    {"id": "ai-3", "name": "Sprint 23", "path": "Acme Platform\\Sprint 23", "startDate": "2026-01-26T00:00:00Z", "finishDate": "2026-02-09T00:00:00Z"},
+]
+
+MOCK_ADO_TEAM_MEMBERS = [
+    {"id": "1", "displayName": "Alex Kim", "uniqueName": "alex.kim@demo.com"},
+    {"id": "2", "displayName": "Sarah Chen", "uniqueName": "sarah.chen@demo.com"},
+    {"id": "3", "displayName": "Priya Patel", "uniqueName": "priya.patel@demo.com"},
+]
+
+MOCK_ADO_WORK_ITEMS = [
+    {"id": "ado-wi-1", "organizationId": "org-1", "externalId": "1001", "sourceTool": "ADO", "title": "Checkout flow step navigation", "status": "IN_PROGRESS", "storyPoints": 8, "priority": 2, "type": "User Story", "labels": [], "iterationId": "ai-1"},
+    {"id": "ado-wi-2", "organizationId": "org-1", "externalId": "1002", "sourceTool": "ADO", "title": "Payment gateway integration", "status": "IN_PROGRESS", "storyPoints": 13, "priority": 1, "type": "User Story", "labels": [], "iterationId": "ai-1"},
+    {"id": "ado-wi-3", "organizationId": "org-1", "externalId": "1003", "sourceTool": "ADO", "title": "Cart summary component", "status": "New", "storyPoints": 5, "priority": 2, "type": "User Story", "labels": [], "iterationId": "ai-1"},
+    {"id": "ado-wi-4", "organizationId": "org-1", "externalId": "1004", "sourceTool": "ADO", "title": "Order confirmation email", "status": "New", "storyPoints": 5, "priority": 3, "type": "User Story", "labels": [], "iterationId": "ai-1"},
+    {"id": "ado-wi-5", "organizationId": "org-1", "externalId": "1005", "sourceTool": "ADO", "title": "Mobile responsive checkout", "status": "Closed", "storyPoints": 3, "priority": 2, "type": "Bug", "labels": [], "iterationId": "ai-1"},
+]
+
+MOCK_ADO_WORK_ITEMS_DETAILED = [
+    {"id": 1001, "title": "Checkout flow step navigation", "state": "Active", "workItemType": "User Story", "assignedTo": "Alex Kim", "storyPoints": 8, "priority": 2},
+    {"id": 1002, "title": "Payment gateway integration", "state": "Active", "workItemType": "User Story", "assignedTo": "Sarah Kim", "storyPoints": 13, "priority": 1},
+    {"id": 1003, "title": "Cart summary component", "state": "New", "workItemType": "User Story", "assignedTo": "Marcus Johnson", "storyPoints": 5, "priority": 2},
+    {"id": 1004, "title": "Order confirmation email", "state": "New", "workItemType": "User Story", "assignedTo": "Emma Davis", "storyPoints": 5, "priority": 3},
+    {"id": 1005, "title": "Mobile responsive checkout", "state": "Closed", "workItemType": "Bug", "assignedTo": "Alex Kim", "storyPoints": 3, "priority": 2},
+]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _validate_writeback(fields: dict) -> list[str]:
+    """Return list of disallowed field names (empty if all valid)."""
+    return [f for f in fields if f not in ADO_WRITEBACK_ALLOWLIST]
+
+
+async def _get_ado_connection(db: AsyncSession, org_id: str) -> ToolConnection | None:
+    """Get the active ADO connection for an org."""
+    query = (
+        select(ToolConnection)
+        .where(ToolConnection.organization_id == org_id)
+        .where(ToolConnection.source_tool == "ADO")
+        .order_by(ToolConnection.created_at.desc())
+    )
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
+def _get_ado_auth_info(conn: ToolConnection) -> tuple[str, str | None]:
+    """
+    Return (org_url, auth_header_override) for a connection.
+    - OAuth: Bearer token (auth_header = None, use access_token from _get_valid_access_token)
+    - PAT: Basic auth header
+    """
+    import base64
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+    org_url = config.get("org_url", "")
+
+    if auth_method == "pat":
+        pat = decrypt_token(conn.access_token)
+        auth_str = base64.b64encode(f":{pat}".encode()).decode()
+        return org_url, f"Basic {auth_str}"
+    else:
+        return org_url, None
+
+
+async def _get_valid_access_token(db: AsyncSession, conn: ToolConnection) -> str:
+    """
+    Get a valid access token, refreshing if needed.
+    Azure AD tokens expire in ~1 hour.
+    """
+    config = conn.config or {}
+    refresh_token = config.get("refresh_token")
+    access_token = decrypt_token(conn.access_token)
+
+    # Check token age
+    token_age = None
+    if config.get("token_updated_at"):
+        try:
+            updated = datetime.fromisoformat(config["token_updated_at"])
+            token_age = (datetime.now(timezone.utc) - updated).total_seconds()
+        except (ValueError, TypeError):
+            pass
+
+    if token_age and token_age > 3000 and refresh_token:
+        tenant_id = settings.ado_tenant_id or "common"
+        token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(
+                    token_url,
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": settings.ado_client_id,
+                        "client_secret": settings.ado_client_secret,
+                        "refresh_token": refresh_token,
+                        "scope": ADO_SCOPE,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                if res.status_code == 200:
+                    tokens = res.json()
+                    new_access = tokens["access_token"]
+                    new_refresh = tokens.get("refresh_token", refresh_token)
+
+                    conn.access_token = encrypt_token(new_access)
+                    config["refresh_token"] = new_refresh
+                    config["token_updated_at"] = datetime.now(timezone.utc).isoformat()
+                    conn.config = config
+                    await db.commit()
+
+                    return new_access
+        except Exception:
+            pass  # Fall through to existing token
+
+    return access_token
+
+
+async def _ado_api(
+    method: str,
+    url: str,
+    access_token: str,
+    json_body: dict | None = None,
+    params: dict | None = None,
+    content_type: str = "application/json",
+    auth_header: str | None = None,
+) -> dict:
+    """Make an authenticated Azure DevOps API request."""
+    headers = {
+        "Authorization": auth_header or f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": content_type,
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        if method.upper() == "GET":
+            res = await client.get(url, headers=headers, params=params)
+        elif method.upper() == "POST":
+            res = await client.post(url, headers=headers, json=json_body, params=params)
+        elif method.upper() == "PATCH":
+            res = await client.patch(url, headers=headers, content=json.dumps(json_body), params=params)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+
+        if res.status_code == 401:
+            raise HTTPException(status_code=401, detail="ADO token expired or invalid")
+        if res.is_error:
+            raise HTTPException(
+                status_code=res.status_code,
+                detail=f"ADO API error: {res.status_code} - {res.text[:200]}",
+            )
+        if res.status_code == 204:
+            return {}
+        return res.json()
+
+
+# ===================================================================
+# OAUTH 2.0 FLOW (Azure AD)
+# ===================================================================
+
+@router.get("/connect")
+async def initiate_ado_oauth(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    GET /connect
+    Redirect user to Microsoft OAuth consent screen for Azure DevOps.
+    """
+    if settings.is_demo_mode:
+        return RedirectResponse(url=f"{settings.frontend_url}/po/notifications?ado=demo")
+
+    client_id = settings.ado_client_id
+    redirect_uri = settings.ado_redirect_uri
+    tenant_id = settings.ado_tenant_id or "common"
+
+    if not client_id:
+        raise HTTPException(status_code=500, detail="ADO OAuth not configured (missing client_id)")
+
+    # Generate CSRF state
+    state = str(uuid.uuid4())
+    org_id = current_user.get("organization_id", "demo-org")
+    user_id = current_user.get("id", "")
+    _oauth_states[state] = {
+        "user_id": user_id,
+        "org_id": org_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "scope": ADO_SCOPE,
+        "state": state,
+        "prompt": "select_account",
+    }
+
+    authorize_url = (
+        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize"
+        f"?{urlencode(params)}"
+    )
+    return RedirectResponse(url=authorize_url)
+
+
+@router.get("/callback")
+async def ado_oauth_callback(
+    request: Request,
+    code: str = Query(None),
+    state: str = Query(None),
+    error: str = Query(None),
+    error_description: str = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    GET /callback
+    Handle Azure AD OAuth callback.
+    Exchange code for tokens, discover ADO orgs, store encrypted in DB.
+    """
+    if error:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/po/notifications?ado_error={error}"
+        )
+
+    if not code or not state:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/po/notifications?ado_error=missing_params"
+        )
+
+    # Validate CSRF state
+    state_data = _oauth_states.pop(state, None)
+    if not state_data:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/po/notifications?ado_error=invalid_state"
+        )
+
+    org_id = state_data["org_id"]
+    tenant_id = settings.ado_tenant_id or "common"
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # Step 1: Exchange code for tokens
+        try:
+            token_res = await client.post(
+                token_url,
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": settings.ado_client_id,
+                    "client_secret": settings.ado_client_secret,
+                    "code": code,
+                    "redirect_uri": settings.ado_redirect_uri,
+                    "scope": ADO_SCOPE,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            if token_res.is_error:
+                return RedirectResponse(
+                    url=f"{settings.frontend_url}/po/notifications?ado_error=token_exchange_failed"
+                )
+            tokens = token_res.json()
+        except httpx.RequestError:
+            return RedirectResponse(
+                url=f"{settings.frontend_url}/po/notifications?ado_error=network_error"
+            )
+
+        access_token = tokens["access_token"]
+        refresh_token = tokens.get("refresh_token", "")
+
+        # Step 2: Get user profile to find their member ID
+        try:
+            profile_res = await client.get(
+                "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.0",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            profile = profile_res.json() if profile_res.status_code == 200 else {}
+        except httpx.RequestError:
+            profile = {}
+
+        member_id = profile.get("id", "")
+        display_name = profile.get("displayName", "Azure DevOps")
+        email = profile.get("emailAddress", "")
+
+        # Step 3: Get accessible organizations
+        org_name = ""
+        org_url = ""
+        try:
+            if member_id:
+                accounts_res = await client.get(
+                    f"https://app.vssps.visualstudio.com/_apis/accounts?memberId={member_id}&api-version=7.0",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                if accounts_res.status_code == 200:
+                    accounts = accounts_res.json()
+                    orgs = accounts.get("value", [])
+                    if orgs:
+                        # Use the first org
+                        org_name = orgs[0].get("accountName", "")
+                        org_url = f"https://dev.azure.com/{org_name}"
+        except httpx.RequestError:
+            pass
+
+    # Step 4: Remove existing ADO connection
+    existing = await _get_ado_connection(db, org_id)
+    if existing:
+        await db.delete(existing)
+        await db.flush()
+
+    # Step 5: Store connection with encrypted tokens
+    conn = ToolConnection(
+        organization_id=org_id,
+        source_tool="ADO",
+        access_token=encrypt_token(access_token),
+        sync_status="connected",
+        config={
+            "org_name": org_name,
+            "org_url": org_url,
+            "display_name": display_name,
+            "email": email,
+            "member_id": member_id,
+            "refresh_token": refresh_token,
+            "token_updated_at": datetime.now(timezone.utc).isoformat(),
+            "auth_method": "oauth2",
+        },
+    )
+    db.add(conn)
+    await db.commit()
+
+    return RedirectResponse(
+        url=f"{settings.frontend_url}/po/notifications?ado=connected"
+    )
+
+
+# ===================================================================
+# PAT CONNECT (for shared / external ADO orgs)
+# ===================================================================
+
+@router.post("/connect-token")
+async def connect_with_pat(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /connect-token
+    Connect to an Azure DevOps organization using a Personal Access Token.
+    Use this when connecting to a shared/external ADO org.
+
+    Body: { "org_url": "https://dev.azure.com/orgname", "pat": "..." }
+    """
+    import base64
+
+    org_url = (body.get("org_url") or "").rstrip("/")
+    pat = body.get("pat", "")
+
+    if not org_url or not pat:
+        raise HTTPException(
+            status_code=400,
+            detail="org_url and pat are required",
+        )
+
+    # Validate credentials by calling ADO API
+    auth_str = base64.b64encode(f":{pat}".encode()).decode()
+    headers = {
+        "Authorization": f"Basic {auth_str}",
+        "Accept": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            res = await client.get(
+                f"{org_url}/_apis/projects?api-version=7.0&$top=1",
+                headers=headers,
+            )
+            if res.status_code in (401, 403):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid PAT or insufficient permissions. Check your token and try again.",
+                )
+            if res.is_error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"ADO API error: {res.status_code}",
+                )
+            projects_data = res.json()
+        except httpx.RequestError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not reach ADO organization: {str(e)}",
+            )
+
+    org_id = current_user.get("organization_id", "demo-org")
+
+    # Extract org name from URL (e.g., "orgname" from "https://dev.azure.com/orgname")
+    org_name = org_url.rstrip("/").split("/")[-1]
+    project_count = projects_data.get("count", 0)
+
+    # Remove existing connection
+    existing = await _get_ado_connection(db, org_id)
+    if existing:
+        await db.delete(existing)
+        await db.flush()
+
+    # Store connection with encrypted PAT
+    conn = ToolConnection(
+        organization_id=org_id,
+        source_tool="ADO",
+        access_token=encrypt_token(pat),
+        sync_status="connected",
+        config={
+            "org_name": org_name,
+            "org_url": org_url,
+            "auth_method": "pat",
+        },
+    )
+    db.add(conn)
+    await db.commit()
+    await db.refresh(conn)
+
+    return {
+        "connected": True,
+        "org_name": org_name,
+        "org_url": org_url,
+        "project_count": project_count,
+    }
+
+
+# ===================================================================
+# STATUS & DISCONNECT
+# ===================================================================
+
+@router.get("/status")
+async def ado_status(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """GET /status — Check if ADO is connected."""
+    if settings.is_demo_mode:
+        return {"connected": False, "demo": True}
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+
+    if not conn:
+        return {"connected": False}
+
+    config = conn.config or {}
+    return {
+        "connected": True,
+        "org_name": config.get("org_name", ""),
+        "org_url": config.get("org_url", ""),
+        "display_name": config.get("display_name", "Azure DevOps"),
+        "email": config.get("email", ""),
+        "auth_method": config.get("auth_method", "pat"),
+        "connected_at": conn.created_at.isoformat() if conn.created_at else None,
+    }
+
+
+@router.post("/disconnect")
+async def disconnect_ado(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /disconnect — Remove ADO connection."""
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+
+    if not conn:
+        return {"disconnected": True, "message": "No connection found"}
+
+    await db.delete(conn)
+    await db.commit()
+    return {"disconnected": True}
+
+
+# ===================================================================
+# PROJECTS
+# ===================================================================
+
+@router.get("/projects")
+async def list_projects(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """GET /projects — Fetch ADO projects using stored credentials (OAuth or PAT)."""
+    if settings.is_demo_mode:
+        return {"projects": MOCK_ADO_PROJECTS}
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+
+    if not conn:
+        raise HTTPException(status_code=404, detail="ADO not connected")
+
+    org_url, auth_header = _get_ado_auth_info(conn)
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+
+    if auth_method == "oauth2":
+        access_token = await _get_valid_access_token(db, conn)
+    else:
+        access_token = ""
+
+    if not org_url:
+        raise HTTPException(status_code=400, detail="No ADO organization URL found")
+
+    data = await _ado_api(
+        "GET",
+        f"{org_url}/_apis/projects?api-version=7.0",
+        access_token,
+        auth_header=auth_header,
+    )
+
+    projects = [
+        {
+            "id": p.get("id"),
+            "name": p.get("name"),
+            "description": p.get("description", ""),
+            "state": p.get("state", "wellFormed"),
+            "url": p.get("url", ""),
+        }
+        for p in data.get("value", [])
+    ]
+    return {"projects": projects}
+
+
+@router.post("/projects")
+async def fetch_projects(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /projects — backward compat, uses stored credentials (OAuth or PAT)."""
+    if settings.is_demo_mode:
+        return {"projects": MOCK_ADO_PROJECTS}
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+
+    if not conn:
+        raise HTTPException(status_code=404, detail="ADO not connected")
+
+    org_url, auth_header = _get_ado_auth_info(conn)
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+
+    if auth_method == "oauth2":
+        access_token = await _get_valid_access_token(db, conn)
+    else:
+        access_token = ""
+
+    if not org_url:
+        raise HTTPException(status_code=400, detail="No ADO organization URL found")
+
+    data = await _ado_api(
+        "GET",
+        f"{org_url}/_apis/projects?api-version=7.0",
+        access_token,
+        auth_header=auth_header,
+    )
+
+    projects = [
+        {
+            "id": p.get("id"),
+            "name": p.get("name"),
+            "description": p.get("description", ""),
+            "state": p.get("state", "wellFormed"),
+            "url": p.get("url", ""),
+        }
+        for p in data.get("value", [])
+    ]
+    return {"projects": projects}
+
+
+# ===================================================================
+# ITERATIONS
+# ===================================================================
+
+@router.get("/iterations")
+async def list_iterations_demo(
+    projectId: str = Query("ap-1"),
+    current_user: dict = Depends(get_current_user),
+):
+    """GET /iterations?projectId=... — demo mock."""
+    if settings.is_demo_mode:
+        return {"iterations": MOCK_ADO_ITERATIONS}
+    return {"iterations": MOCK_ADO_ITERATIONS}
+
+
+@router.post("/iterations")
+async def fetch_iterations(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /iterations — fetch real iterations using stored credentials (OAuth or PAT)."""
+    project_name = body.get("projectName")
+
+    if settings.is_demo_mode:
+        return {"iterations": MOCK_ADO_ITERATIONS}
+
+    if not project_name:
+        raise HTTPException(status_code=400, detail="projectName is required")
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+
+    if not conn:
+        raise HTTPException(status_code=404, detail="ADO not connected")
+
+    org_url, auth_header = _get_ado_auth_info(conn)
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+
+    if auth_method == "oauth2":
+        access_token = await _get_valid_access_token(db, conn)
+    else:
+        access_token = ""
+
+    data = await _ado_api(
+        "GET",
+        f"{org_url}/{project_name}/_apis/work/teamsettings/iterations?api-version=7.0",
+        access_token,
+        auth_header=auth_header,
+    )
+
+    iterations = [
+        {
+            "id": i.get("id", ""),
+            "name": i.get("name", ""),
+            "path": i.get("path", ""),
+            "startDate": (i.get("attributes") or {}).get("startDate"),
+            "finishDate": (i.get("attributes") or {}).get("finishDate"),
+        }
+        for i in data.get("value", [])
+    ]
+    return {"iterations": iterations}
+
+
+# ===================================================================
+# WORK ITEMS
+# ===================================================================
+
+@router.get("/work-items")
+async def list_work_items(
+    iterationPath: str = Query(""),
+    current_user: dict = Depends(get_current_user),
+):
+    """GET /work-items — demo mock."""
+    if settings.is_demo_mode:
+        return {"workItems": MOCK_ADO_WORK_ITEMS}
+    return {"workItems": MOCK_ADO_WORK_ITEMS}
+
+
+@router.post("/work-items")
+async def fetch_or_writeback_work_items(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /work-items — two modes:
+    1. With projectName: Fetch all work items using stored OAuth token
+    2. With itemId + fields: Write-back fields to a work item
+    """
+    project_name = body.get("projectName")
+    item_id = body.get("itemId")
+    fields = body.get("fields")
+
+    # ----- Mode 1: Fetch work items by project -----
+    if project_name:
+        if settings.is_demo_mode:
+            return {"workItems": MOCK_ADO_WORK_ITEMS_DETAILED}
+
+        org_id = current_user.get("organization_id", "demo-org")
+        conn = await _get_ado_connection(db, org_id)
+
+        if not conn:
+            raise HTTPException(status_code=404, detail="ADO not connected")
+
+        org_url, auth_header = _get_ado_auth_info(conn)
+        config = conn.config or {}
+        auth_method = config.get("auth_method", "oauth2")
+
+        if auth_method == "oauth2":
+            access_token = await _get_valid_access_token(db, conn)
+        else:
+            access_token = ""
+
+        # WIQL query to get work item IDs
+        wiql_data = await _ado_api(
+            "POST",
+            f"{org_url}/{project_name}/_apis/wit/wiql?api-version=7.0",
+            access_token,
+            json_body={
+                "query": (
+                    f"SELECT [System.Id], [System.Title], [System.State], "
+                    f"[System.WorkItemType], [System.AssignedTo], "
+                    f"[Microsoft.VSTS.Scheduling.StoryPoints] "
+                    f"FROM WorkItems "
+                    f"WHERE [System.TeamProject] = '{project_name}' "
+                    f"ORDER BY [System.WorkItemType] ASC, [System.Id] ASC"
+                ),
+            },
+            auth_header=auth_header,
+        )
+
+        ids = [wi["id"] for wi in wiql_data.get("workItems", [])][:200]
+        if not ids:
+            return {"workItems": []}
+
+        # Fetch full details
+        details_data = await _ado_api(
+            "GET",
+            f"{org_url}/_apis/wit/workitems",
+            access_token,
+            params={
+                "ids": ",".join(str(i) for i in ids),
+                "$expand": "all",
+                "api-version": "7.0",
+            },
+            auth_header=auth_header,
+        )
+
+        work_items = [
+            {
+                "id": wi.get("id"),
+                "title": (wi.get("fields") or {}).get("System.Title", ""),
+                "state": (wi.get("fields") or {}).get("System.State", ""),
+                "workItemType": (wi.get("fields") or {}).get("System.WorkItemType", ""),
+                "assignedTo": ((wi.get("fields") or {}).get("System.AssignedTo") or {}).get("displayName"),
+                "areaPath": (wi.get("fields") or {}).get("System.AreaPath"),
+                "iterationPath": (wi.get("fields") or {}).get("System.IterationPath"),
+                "storyPoints": (wi.get("fields") or {}).get(
+                    "Microsoft.VSTS.Scheduling.StoryPoints",
+                    (wi.get("fields") or {}).get("Microsoft.VSTS.Scheduling.Effort"),
+                ),
+                "priority": (wi.get("fields") or {}).get("Microsoft.VSTS.Common.Priority"),
+                "tags": (wi.get("fields") or {}).get("System.Tags"),
+                "createdDate": (wi.get("fields") or {}).get("System.CreatedDate"),
+                "changedDate": (wi.get("fields") or {}).get("System.ChangedDate"),
+                "description": (wi.get("fields") or {}).get("System.Description"),
+            }
+            for wi in details_data.get("value", [])
+        ]
+        return {"workItems": work_items}
+
+    # ----- Mode 2: Write-back -----
+    if not item_id or not fields or not isinstance(fields, dict):
+        if settings.is_demo_mode and not item_id:
+            return {"workItems": MOCK_ADO_WORK_ITEMS_DETAILED}
+        raise HTTPException(status_code=400, detail="Missing itemId or fields")
+
+    disallowed = _validate_writeback(fields)
+    if disallowed:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Write-back denied: disallowed fields",
+                "disallowedFields": disallowed,
+                "allowedFields": list(ADO_WRITEBACK_ALLOWLIST),
+            },
+        )
+
+    if settings.is_demo_mode:
+        return {"success": True, "itemId": item_id, "fields": fields}
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+
+    if not conn:
+        raise HTTPException(status_code=404, detail="ADO not connected")
+
+    org_url, auth_header = _get_ado_auth_info(conn)
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+
+    if auth_method == "oauth2":
+        access_token = await _get_valid_access_token(db, conn)
+    else:
+        access_token = ""
+
+    patch_document = [
+        {"op": "replace", "path": f"/fields/{field}", "value": value}
+        for field, value in fields.items()
+    ]
+
+    await _ado_api(
+        "PATCH",
+        f"{org_url}/_apis/wit/workitems/{item_id}?api-version=7.0",
+        access_token,
+        json_body=patch_document,
+        content_type="application/json-patch+json",
+        auth_header=auth_header,
+    )
+
+    return {"success": True, "itemId": item_id, "fields": fields}
+
+
+# ===================================================================
+# TEAM MEMBERS
+# ===================================================================
+
+@router.post("/team-members")
+async def fetch_team_members(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /team-members — fetch team members for an ADO project."""
+    project_name = body.get("projectName")
+
+    if settings.is_demo_mode:
+        return {"members": MOCK_ADO_TEAM_MEMBERS}
+
+    if not project_name:
+        raise HTTPException(status_code=400, detail="projectName is required")
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+
+    if not conn:
+        raise HTTPException(status_code=404, detail="ADO not connected")
+
+    org_url, auth_header = _get_ado_auth_info(conn)
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+
+    if auth_method == "oauth2":
+        access_token = await _get_valid_access_token(db, conn)
+    else:
+        access_token = ""
+
+    try:
+        # Get teams for project
+        teams_data = await _ado_api(
+            "GET",
+            f"{org_url}/_apis/projects/{project_name}/teams?api-version=7.0",
+            access_token,
+            auth_header=auth_header,
+        )
+    except HTTPException:
+        return {"members": []}
+
+    teams = teams_data.get("value", [])
+    if not teams:
+        return {"members": []}
+
+    all_members: list[dict] = []
+    seen_ids: set[str] = set()
+
+    for team in teams[:5]:
+        try:
+            members_data = await _ado_api(
+                "GET",
+                f"{org_url}/_apis/projects/{project_name}/teams/{team['id']}/members?api-version=7.0",
+                access_token,
+                auth_header=auth_header,
+            )
+            for m in members_data.get("value", []):
+                member = m.get("identity") or m
+                member_id = member.get("id", "")
+                if member_id not in seen_ids:
+                    seen_ids.add(member_id)
+                    all_members.append({
+                        "id": member_id,
+                        "displayName": member.get("displayName", ""),
+                        "uniqueName": member.get("uniqueName", ""),
+                        "imageUrl": member.get("imageUrl"),
+                    })
+        except HTTPException:
+            continue
+
+    return {"members": all_members}
+
+
+# ===================================================================
+# WEBHOOKS
+# ===================================================================
+
+@router.post("/webhooks")
+async def receive_webhook(request: Request):
+    """POST /webhooks — Receive Azure DevOps service hook events."""
+    try:
+        body_bytes = await request.body()
+        body_text = body_bytes.decode("utf-8")
+
+        payload = json.loads(body_text)
+        event_type = payload.get("eventType", "unknown")
+
+        if event_type == "workitem.updated":
+            pass  # TODO: Normalize and update local WorkItem
+        elif event_type == "workitem.created":
+            pass  # TODO: Create local WorkItem
+
+        return {
+            "received": True,
+            "event": event_type,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception:
+        raise HTTPException(status_code=500, detail="Webhook processing failed")

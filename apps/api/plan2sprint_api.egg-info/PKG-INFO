@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: plan2sprint-api
+Version: 0.1.0
+Summary: Plan2Sprint FastAPI backend
+Requires-Python: >=3.12
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn[standard]>=0.30.0
+Requires-Dist: sqlalchemy[asyncio]>=2.0.0
+Requires-Dist: asyncpg>=0.30.0
+Requires-Dist: alembic>=1.14.0
+Requires-Dist: pydantic>=2.10.0
+Requires-Dist: pydantic-settings>=2.6.0
+Requires-Dist: python-jose[cryptography]>=3.3.0
+Requires-Dist: httpx>=0.28.0
+Requires-Dist: cryptography>=44.0.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: python-multipart>=0.0.12
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.25.0; extra == "dev"
