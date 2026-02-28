@@ -1,0 +1,213 @@
+@import "tailwindcss";
+
+/* ============================
+   PLAN2SPRINT DESIGN SYSTEM
+   Colors extracted from logo:
+   Primary (Navy): #0F2A48
+   Secondary (Blue): #0D96E6
+   Accent (Amber): #D07D4E
+   ============================ */
+
+:root {
+  /* Brand Colors */
+  --color-brand-primary: #0F2A48;
+  --color-brand-secondary: #0D96E6;
+  --color-brand-accent: #D07D4E;
+
+  /* Brand with opacity variants */
+  --color-brand-primary-rgb: 15, 42, 72;
+  --color-brand-secondary-rgb: 13, 150, 230;
+  --color-brand-accent-rgb: 208, 125, 78;
+
+  /* RAG Status Colors */
+  --color-rag-green: #22C55E;
+  --color-rag-amber: #F59E0B;
+  --color-rag-red: #EF4444;
+
+  /* Gradients */
+  --gradient-cta: linear-gradient(135deg, #0D96E6 0%, #0F2A48 100%);
+  --gradient-cta-hover: linear-gradient(135deg, #2BA5F0 0%, #153A5E 100%);
+  --gradient-card-border: linear-gradient(135deg, rgba(13, 150, 230, 0.4), rgba(15, 42, 72, 0.2));
+  --gradient-glow: radial-gradient(ellipse at 50% 0%, rgba(13, 150, 230, 0.2) 0%, transparent 70%);
+}
+
+/* Light Mode (default) */
+:root {
+  --bg-base: #F8F8FC;
+  --bg-surface: #FFFFFF;
+  --bg-surface-raised: #F0F0F8;
+  --text-primary: #0F0F18;
+  --text-secondary: #5A5A72;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --gradient-hero: radial-gradient(ellipse at 20% 50%, rgba(13, 150, 230, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(15, 42, 72, 0.06) 0%, transparent 50%),
+    #F8F8FC;
+}
+
+/* Dark Mode */
+.dark {
+  --bg-base: #0A0A0F;
+  --bg-surface: #13131A;
+  --bg-surface-raised: #1C1C26;
+  --text-primary: #F0F0F5;
+  --text-secondary: #9090A8;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --gradient-hero: radial-gradient(ellipse at 20% 50%, rgba(13, 150, 230, 0.15) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(15, 42, 72, 0.10) 0%, transparent 50%),
+    #0A0A0F;
+}
+
+/* Base Styles */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Glassmorphism Utility */
+.glass {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-subtle);
+}
+
+.dark .glass {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Gradient Text */
+.gradient-text {
+  background: var(--gradient-cta);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Animated Gradient Mesh Background */
+@keyframes gradientMesh {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.animate-gradient-mesh {
+  background-size: 200% 200%;
+  animation: gradientMesh 30s ease infinite;
+}
+
+/* Floating Animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-10px) rotate(1deg); }
+}
+
+@keyframes float-delayed {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-8px) rotate(-1deg); }
+}
+
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-12px); }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-float-delayed {
+  animation: float-delayed 4s ease-in-out infinite;
+}
+
+.animate-float-slow {
+  animation: float-slow 5s ease-in-out infinite;
+}
+
+/* Grid Pattern Overlay */
+.grid-pattern {
+  background-image:
+    linear-gradient(rgba(13, 150, 230, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(13, 150, 230, 0.04) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+/* Subtle Bounce for Scroll Indicator */
+@keyframes bounce-subtle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(8px); }
+}
+
+.animate-bounce-subtle {
+  animation: bounce-subtle 2s ease-in-out infinite;
+}
+
+/* Selection Color */
+::selection {
+  background: rgba(13, 150, 230, 0.3);
+  color: var(--text-primary);
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(13, 150, 230, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(13, 150, 230, 0.5);
+}
+
+/* Dashboard scrollbar (thin) */
+.dashboard-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.dashboard-scroll::-webkit-scrollbar-thumb {
+  background: rgba(13, 150, 230, 0.2);
+  border-radius: 2px;
+}
+
+.dashboard-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(13, 150, 230, 0.4);
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .animate-float,
+  .animate-float-delayed,
+  .animate-float-slow,
+  .animate-gradient-mesh,
+  .animate-bounce-subtle {
+    animation: none;
+  }
+}
+
+/* Tailwind v4 theme extension */
+@theme {
+  --color-brand-primary: #0F2A48;
+  --color-brand-secondary: #0D96E6;
+  --color-brand-accent: #D07D4E;
+  --color-bg-base: var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-surface-raised: var(--bg-surface-raised);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-border-subtle: var(--border-subtle);
+
+  --font-display: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}

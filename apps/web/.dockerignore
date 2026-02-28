@@ -1,0 +1,12 @@
+node_modules
+.next
+.env
+.env.local
+.env.development.local
+.git
+.gitignore
+*.md
+.vscode
+.idea
+prisma
+src/generated
