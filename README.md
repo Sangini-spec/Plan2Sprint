@@ -25,7 +25,7 @@ Plan2Sprint transforms agile team management by integrating with Jira, Azure Dev
 ## Key Features
 
 ### AI Sprint Planning
-- Claude-powered sprint optimization with confidence scoring
+- AI-powered sprint optimization with confidence scoring
 - Automatic skill-to-task matching and workload balancing
 - Spillover risk assessment and success probability forecasting
 - One-click approval with write-back to Jira / Azure DevOps
