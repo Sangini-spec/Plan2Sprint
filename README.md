@@ -1,8 +1,8 @@
 # Plan2Sprint
 
-**AI-Powered Sprint Planning & Team Health Monitoring Platform**
+**AI-Powered Sprint Planning**
 
-Plan2Sprint transforms agile team management by integrating with Jira, Azure DevOps, and GitHub to deliver intelligent sprint planning, real-time health signals, automated standups, and cross-tool observability — all powered by Claude AI.
+Plan2Sprint transforms agile team management by integrating with Jira, Azure DevOps, and GitHub to deliver intelligent sprint planning, real-time health signals, automated standups, and cross-tool observability.
 
 ---
 
