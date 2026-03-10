@@ -297,6 +297,35 @@ async def submit_standup_note(
             await db.commit()
             await db.refresh(report)
 
+        # Notify PO and broadcast WebSocket event
+        try:
+            await ws_manager.broadcast(org_id, {
+                "type": "standup_note_submitted",
+                "data": {"author": author, "date": today.isoformat()},
+            })
+        except Exception:
+            pass
+
+        try:
+            from ..services.delivery_queue import enqueue_notification
+            from ..services import card_builders
+            from .notifications import get_po_email
+
+            po_email = await get_po_email(db, org_id)
+            if po_email:
+                await enqueue_notification(
+                    org_id=org_id,
+                    recipient_email=po_email,
+                    notification_type="standup_report",
+                    in_app_payload={
+                        "title": "Standup Note Submitted",
+                        "body": f"{author} submitted a standup note",
+                        "type": "standup_report",
+                    },
+                )
+        except Exception as e:
+            logger.warning(f"Standup notification failed: {e}")
+
         return {
             "success": True,
             "entry": {

@@ -7,10 +7,16 @@ interface SocialAuthButtonsProps {
   className?: string;
 }
 
-export function SocialAuthButtons({ className }: SocialAuthButtonsProps) {
-  const supabase = createClient();
+// Singleton — reuse the same Supabase client across renders
+let _supabase: ReturnType<typeof createClient> | null = null;
+function getSupabase() {
+  if (!_supabase) _supabase = createClient();
+  return _supabase;
+}
 
+export function SocialAuthButtons({ className }: SocialAuthButtonsProps) {
   const handleGoogleLogin = async () => {
+    const supabase = getSupabase();
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
@@ -20,6 +26,7 @@ export function SocialAuthButtons({ className }: SocialAuthButtonsProps) {
   };
 
   const handleMicrosoftLogin = async () => {
+    const supabase = getSupabase();
     await supabase.auth.signInWithOAuth({
       provider: "azure",
       options: {

@@ -38,6 +38,18 @@ async def get_sprint_overview(
 ):
     org_id = current_user.get("organization_id", "demo-org")
 
+    # ── Auto-complete expired sprints (date-based detection) ──
+    try:
+        from ..services.sprint_completion import check_and_complete_sprints
+        completed = await check_and_complete_sprints(db, org_id, projectId)
+        if completed:
+            logger.info(
+                f"Auto-completed {len(completed)} sprint(s) on GET /api/sprints: "
+                + ", ".join(c["iterationName"] for c in completed)
+            )
+    except Exception as e:
+        logger.warning(f"Auto-completion check failed (non-fatal): {e}")
+
     # Get the active (or most recent) iteration, scoped to project if provided
     iter_query = select(Iteration).where(Iteration.organization_id == org_id)
     if projectId:
@@ -137,6 +149,9 @@ async def get_sprint_overview(
             "successProbability": plan.success_probability,
             "spilloverRiskSP": plan.spillover_risk_sp,
             "forecastUpdatedAt": plan.forecast_updated_at.isoformat() if plan.forecast_updated_at else None,
+            "estimatedWeeksTotal": plan.estimated_weeks_total,
+            "projectCompletionSummary": plan.project_completion_summary,
+            "capacityRecommendations": plan.capacity_recommendations,
         }
 
     return {
@@ -263,6 +278,9 @@ async def get_plan_details(
             "successProbability": plan.success_probability,
             "spilloverRiskSP": plan.spillover_risk_sp,
             "forecastUpdatedAt": plan.forecast_updated_at.isoformat() if plan.forecast_updated_at else None,
+            "estimatedWeeksTotal": plan.estimated_weeks_total,
+            "projectCompletionSummary": plan.project_completion_summary,
+            "capacityRecommendations": plan.capacity_recommendations,
         },
         "assignments": [
             {
@@ -277,6 +295,7 @@ async def get_plan_details(
                 "skillMatch": a.skill_match,
                 "isHumanEdited": a.is_human_edited,
                 "sprintNumber": a.sprint_number or 1,
+                "suggestedPriority": a.suggested_priority,
             }
             for a in assignments
         ],
@@ -596,3 +615,43 @@ async def update_sprint_plan(
     })
 
     return {"success": True, "message": "Sprint plan updated", "planId": plan_id}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/sprints/complete — Force-complete a sprint (for testing/demo)
+# ---------------------------------------------------------------------------
+
+@router.post("/sprints/complete")
+async def complete_sprint(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Force-complete a sprint regardless of end date.
+    Used for testing and demo purposes — in production, sprints are
+    auto-completed when the end date passes (date-based detection).
+    """
+    org_id = current_user.get("organization_id", "demo-org")
+    project_id = body.get("projectId")
+    iteration_id = body.get("iterationId")
+
+    if not project_id or not iteration_id:
+        raise HTTPException(
+            status_code=400,
+            detail="projectId and iterationId are required",
+        )
+
+    from ..services.sprint_completion import force_complete_sprint
+
+    result = await force_complete_sprint(
+        db=db,
+        org_id=org_id,
+        project_id=project_id,
+        iteration_id=iteration_id,
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return {"ok": True, **result}

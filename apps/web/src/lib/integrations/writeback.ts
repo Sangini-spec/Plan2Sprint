@@ -9,12 +9,16 @@ export const JIRA_WRITEBACK_ALLOWLIST = Object.freeze([
   "assignee",
   "sprint_id",
   "story_points",
+  "status",
 ] as const);
 
 export const ADO_WRITEBACK_ALLOWLIST = Object.freeze([
   "System.AssignedTo",
   "System.IterationPath",
   "Microsoft.VSTS.Scheduling.StoryPoints",
+  "Microsoft.VSTS.Scheduling.StartDate",
+  "Microsoft.VSTS.Scheduling.TargetDate",
+  "System.State",
 ] as const);
 
 // GitHub is read-only — no write-back allowed

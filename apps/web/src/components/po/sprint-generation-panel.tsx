@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Zap, RefreshCw, ExternalLink, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Zap, RefreshCw, ExternalLink, Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge, Button, Progress } from "@/components/ui";
@@ -40,10 +41,12 @@ interface SprintGenerationPanelProps {
 }
 
 export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps) {
+  const router = useRouter();
   const { selectedProject } = useSelectedProject();
   const [plan, setPlan] = useState<PlanData | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const refreshKey = useAutoRefresh(["sprint_plan_generated", "sprint_plan_updated", "sync_complete"]);
 
   // ---------- Fetch sprint data from API ----------
@@ -53,6 +56,8 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
   const fetchSprintData = useCallback(async () => {
     try {
       const params = projectId ? `?projectId=${projectId}` : "";
+      // Invalidate cache to always get fresh sprint data
+      invalidateCache(`/api/sprints${params}`);
       const res = await cachedFetch(`/api/sprints${params}`);
       if (res.ok) {
         const data = res.data as { plan?: PlanData };
@@ -80,6 +85,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
     if (!selectedProject) return;
 
     setGenerating(true);
+    setError(null);
     try {
       const res = await fetch("/api/sprints", {
         method: "POST",
@@ -90,12 +96,16 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
       });
 
       if (res.ok) {
-        const data = await res.json();
+        // Invalidate cache to ensure fresh data
+        invalidateCache("/api/sprints");
         // Refresh the panel to show the new plan
         await fetchSprintData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.detail || data.error || `Generation failed (${res.status})`);
       }
-    } catch (e) {
-      console.error("Failed to generate sprint plan:", e);
+    } catch {
+      setError("Cannot reach backend. Ensure the API server is running on port 8000.");
     } finally {
       setGenerating(false);
     }
@@ -105,6 +115,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
     if (!selectedProject || !plan) return;
 
     setGenerating(true);
+    setError(null);
     try {
       const res = await fetch("/api/sprints", {
         method: "POST",
@@ -116,10 +127,14 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
       });
 
       if (res.ok) {
+        invalidateCache("/api/sprints");
         await fetchSprintData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.detail || data.error || `Regeneration failed (${res.status})`);
       }
-    } catch (e) {
-      console.error("Failed to regenerate sprint plan:", e);
+    } catch {
+      setError("Cannot reach backend. Ensure the API server is running on port 8000.");
     } finally {
       setGenerating(false);
     }
@@ -175,6 +190,13 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
               </>
             )}
           </Button>
+
+          {error && (
+            <div className="flex items-start gap-2 rounded-lg bg-[var(--color-rag-red)]/10 border border-[var(--color-rag-red)]/20 px-3 py-2">
+              <AlertCircle size={14} className="text-[var(--color-rag-red)] shrink-0 mt-0.5" />
+              <span className="text-xs text-[var(--color-rag-red)]">{error}</span>
+            </div>
+          )}
         </div>
       </DashboardPanel>
     );
@@ -266,7 +288,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
         )}
 
         {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] p-4">
+        <div className="grid grid-cols-3 gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] p-3">
           <div className="text-center">
             <p className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider mb-1">
               Total SP
@@ -309,11 +331,18 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
             )}
             {generating ? "Generating..." : "Regenerate Plan"}
           </Button>
-          <Button variant="primary" size="sm" className="flex-1" onClick={onViewPlan}>
+          <Button variant="primary" size="sm" className="flex-1" onClick={() => onViewPlan ? onViewPlan() : router.push("/po/planning")}>
             <ExternalLink className="h-3.5 w-3.5" />
             View Full Plan
           </Button>
         </div>
+
+        {error && (
+          <div className="flex items-start gap-2 rounded-lg bg-[var(--color-rag-red)]/10 border border-[var(--color-rag-red)]/20 px-3 py-2">
+            <AlertCircle size={14} className="text-[var(--color-rag-red)] shrink-0 mt-0.5" />
+            <span className="text-xs text-[var(--color-rag-red)]">{error}</span>
+          </div>
+        )}
       </div>
     </DashboardPanel>
   );

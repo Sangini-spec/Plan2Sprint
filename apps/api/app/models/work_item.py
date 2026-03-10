@@ -75,6 +75,12 @@ class WorkItem(Base):
     epic_id: Mapped[Optional[str]] = mapped_column(
         String, name="epic_id", nullable=True
     )
+    planned_start: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), name="planned_start", nullable=True
+    )
+    planned_end: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), name="planned_end", nullable=True
+    )
     iteration_id: Mapped[Optional[str]] = mapped_column(
         String(25),
         ForeignKey("iterations.id"),
@@ -92,6 +98,9 @@ class WorkItem(Base):
         ForeignKey("imported_projects.id"),
         name="imported_project_id",
         nullable=True,
+    )
+    source_status: Mapped[Optional[str]] = mapped_column(
+        String(100), name="source_status", nullable=True
     )
     spillover_risk: Mapped[Optional[str]] = mapped_column(
         String(20), name="spillover_risk", nullable=True

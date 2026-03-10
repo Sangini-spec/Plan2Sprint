@@ -153,6 +153,25 @@ async def sync_project(
         except Exception:
             logger.warning("Signal evaluation after sync failed (non-fatal)")
 
+        # Auto-complete expired sprints (date-based detection)
+        try:
+            from ...services.sprint_completion import check_and_complete_sprints
+            completed = await check_and_complete_sprints(db, org_id, project_id)
+            if completed:
+                logger.info(
+                    f"Auto-completed {len(completed)} sprint(s) after sync: "
+                    + ", ".join(c["iterationName"] for c in completed)
+                )
+        except Exception:
+            logger.warning("Sprint auto-completion after sync failed (non-fatal)")
+
+        # Refresh sprint forecast after sync
+        try:
+            from ...services.sprint_forecast import refresh_forecast
+            await refresh_forecast(db, org_id, project_id)
+        except Exception:
+            logger.warning("Forecast refresh after sync failed (non-fatal)")
+
         # Broadcast sync_complete to all connected clients
         await ws_manager.broadcast(org_id, {
             "type": "sync_complete",

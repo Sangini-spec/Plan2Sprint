@@ -97,7 +97,7 @@ export function MyNotificationInbox() {
           const { icon: Icon, color } = typeConfig[notif.type];
           return (
             <div
-              key={i}
+              key={`${notif.type}-${notif.time}-${i}`}
               className={cn(
                 "flex items-start gap-3 rounded-xl border p-3 transition-colors",
                 notif.read

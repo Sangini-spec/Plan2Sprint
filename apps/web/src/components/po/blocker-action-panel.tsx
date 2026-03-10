@@ -42,7 +42,7 @@ const statusBadgeVariant: Record<BlockerStatus, "rag-red" | "rag-amber" | "rag-g
 export function BlockerActionPanel() {
   const [blockers, setBlockers] = useState<BlockerData[]>([]);
   const [loading, setLoading] = useState(true);
-  const refreshKey = useAutoRefresh(["sync_complete", "standup_generated"]);
+  const refreshKey = useAutoRefresh(["sync_complete", "standup_generated", "github_activity"]);
 
   const fetchBlockers = useCallback(async () => {
     setLoading(true);

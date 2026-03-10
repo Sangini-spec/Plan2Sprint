@@ -84,22 +84,32 @@ async def get_analytics(
 
     wi_base = _wi_base_filters(org_id, projectId)
 
+    # Batch: get allocated SP per member in ONE query (was N+1)
+    member_ids = [m.id for m in members]
+    alloc_map: dict[str, float] = {}
+    if member_ids:
+        alloc_query = (
+            select(
+                WorkItem.assignee_id,
+                func.coalesce(func.sum(WorkItem.story_points), 0).label("sp"),
+            )
+            .where(
+                *wi_base,
+                WorkItem.assignee_id.in_(member_ids),
+                WorkItem.status.in_(["IN_PROGRESS", "IN_REVIEW", "DONE"]),
+            )
+            .group_by(WorkItem.assignee_id)
+        )
+        alloc_result = await db.execute(alloc_query)
+        for row in alloc_result.all():
+            alloc_map[row[0]] = float(row[1])
+
     capacity_members = []
     total_hours = 0
     for m in members:
         cap = m.default_capacity or 40
         total_hours += cap
-        # Estimate allocation from assigned work items story points
-        wi_query = (
-            select(func.coalesce(func.sum(WorkItem.story_points), 0))
-            .where(
-                *wi_base,
-                WorkItem.assignee_id == m.id,
-                WorkItem.status.in_(["IN_PROGRESS", "IN_REVIEW", "DONE"]),
-            )
-        )
-        wi_result = await db.execute(wi_query)
-        allocated = float(wi_result.scalar() or 0)
+        allocated = alloc_map.get(m.id, 0.0)
         # Scale story points to hours (rough: 1 SP ~ 4-6 hours)
         allocated_hours = min(int(allocated * 5), int(cap * 1.15))
         capacity_members.append({

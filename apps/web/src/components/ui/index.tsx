@@ -48,10 +48,9 @@ const variantClasses: Record<ButtonVariant, string> = {
   primary: [
     "text-white font-semibold",
     "bg-[image:var(--gradient-cta)]",
-    "shadow-lg shadow-[var(--color-brand-secondary)]/20",
-    "hover:shadow-xl hover:shadow-[var(--color-brand-secondary)]/30",
+    "shadow-sm shadow-[var(--color-brand-secondary)]/15",
+    "hover:shadow-md hover:shadow-[var(--color-brand-secondary)]/20",
     "hover:bg-[image:var(--gradient-cta-hover)]",
-    "active:scale-[0.98]",
   ].join(" "),
   secondary: [
     "bg-transparent font-medium",
@@ -73,10 +72,9 @@ export const Button = forwardRef<
   ButtonProps
 >(({ variant = "primary", size = "md", className, children, ...props }, ref) => {
   const classes = cn(
-    "inline-flex items-center justify-center whitespace-nowrap transition-all duration-200 ease-out",
+    "inline-flex items-center justify-center whitespace-nowrap transition-colors duration-150",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-secondary)] focus-visible:ring-offset-2",
     "disabled:pointer-events-none disabled:opacity-50",
-    "hover:scale-[1.02] active:scale-[0.98]",
     "cursor-pointer select-none",
     sizeClasses[size],
     variantClasses[variant],
@@ -829,9 +827,9 @@ export function DropdownMenu({
               align === "right" ? "right-0" : "left-0"
             )}
           >
-            {items.map((item, i) => (
+            {items.map((item) => (
               <button
-                key={i}
+                key={item.label}
                 onClick={() => {
                   if (!item.disabled) {
                     item.onClick();

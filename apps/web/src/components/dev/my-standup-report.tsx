@@ -245,7 +245,7 @@ export function MyStandupReport() {
               const future = isFuture(day);
 
               return (
-                <button key={idx}
+                <button key={key}
                   onClick={() => { setSelectedDate(day); setSubmitted(false); setNoteText(""); setSubmitError(null); }}
                   disabled={future}
                   className={cn(
@@ -339,7 +339,7 @@ export function MyStandupReport() {
                       <p className="text-sm text-[var(--text-tertiary)] italic">No completed items</p>
                     ) : (
                       completedItems.map((item, i) => (
-                        <div key={i} className="flex flex-wrap items-center gap-2 py-1.5 text-sm text-[var(--text-primary)]">
+                        <div key={item.ticketId || `completed-${i}`} className="flex flex-wrap items-center gap-2 py-1.5 text-sm text-[var(--text-primary)]">
                           <span>{item.title}</span>
                           {item.ticketId && <Badge variant="brand" className="text-[10px] px-2 py-0.5">{item.ticketId}</Badge>}
                           {item.prId && <Badge variant="rag-green" className="text-[10px] px-2 py-0.5">PR #{item.prId}</Badge>}
@@ -361,7 +361,7 @@ export function MyStandupReport() {
                       <p className="text-sm text-[var(--text-tertiary)] italic">No items in progress</p>
                     ) : (
                       inProgressItems.map((item, i) => (
-                        <div key={i} className="flex flex-wrap items-center gap-2 py-1.5 text-sm text-[var(--text-primary)]">
+                        <div key={item.ticketId || `inprogress-${i}`} className="flex flex-wrap items-center gap-2 py-1.5 text-sm text-[var(--text-primary)]">
                           <span>{item.title}</span>
                           {item.ticketId && <Badge variant="brand" className="text-[10px] px-2 py-0.5">{item.ticketId}</Badge>}
                           {item.prStatus && (
@@ -389,7 +389,7 @@ export function MyStandupReport() {
                         <span className="text-sm font-medium text-[var(--color-rag-green)]">No blockers</span>
                       </div>
                     ) : blockerItems.map((item, i) => (
-                      <div key={i} className="flex flex-wrap items-center gap-2 py-1.5 text-sm text-[var(--text-primary)]">
+                      <div key={item.ticketId || `blocker-${i}`} className="flex flex-wrap items-center gap-2 py-1.5 text-sm text-[var(--text-primary)]">
                         <span>{item.description}</span>
                         {item.ticketId && <Badge variant="rag-red" className="text-[10px] px-2 py-0.5">{item.ticketId}</Badge>}
                         <Badge

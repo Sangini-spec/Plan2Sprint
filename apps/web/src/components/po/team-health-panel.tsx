@@ -157,7 +157,7 @@ export function TeamHealthPanel() {
   const [signals, setSignals] = useState<HealthSignalData[]>([]);
   const [backlogHealth, setBacklogHealth] = useState<BacklogHealthData | null>(null);
   const [loading, setLoading] = useState(true);
-  const refreshKey = useAutoRefresh(["sync_complete", "health_evaluated"]);
+  const refreshKey = useAutoRefresh(["sync_complete", "health_evaluated", "github_activity"]);
 
   const projectId = selectedProject?.internalId;
 

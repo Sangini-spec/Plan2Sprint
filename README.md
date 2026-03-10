@@ -349,6 +349,8 @@ The application will be available at `http://localhost:3000`.
 | GET | `/api/dashboard/work-items` | Work items with filters |
 | GET | `/api/dashboard/team` | Team member stats |
 | GET | `/api/dashboard/sprints` | Active and recent iterations |
+| GET | `/api/dashboard/feature-progress` | Feature/module progress with KPIs |
+| GET | `/api/dashboard/project-plan` | Project plan with Gantt timeline data |
 
 ### Sprint Planning
 | Method | Endpoint | Description |
@@ -494,7 +496,7 @@ Plan2Sprint implements 6 roles with granular dashboard access:
 | Stakeholder | — | — | Full | Own profile |
 
 ### Dashboard Panel Counts
-- **Product Owner:** Sprint overview, velocity charts, developer progress board, team health signals, blocker/action panel, sprint forecast, GitHub monitoring, standup digest, retrospective hub, write-back confirmation (10 panels)
+- **Product Owner:** Project hero banner (KPIs + timeline stepper), project overview (module status cards), sprint forecast, GitHub monitoring, standup digest, retrospective hub, write-back confirmation, project plan Gantt (8 panels)
 - **Developer:** Sprint board, assigned work, PR list, commit activity, velocity trend, standup submission, blocker flagging, notification center (8 panels)
 - **Stakeholder:** Portfolio health summary, delivery predictability, epic/milestone tracker, team health summary, standup replacement status, export/reporting (6 panels)
 
@@ -509,7 +511,7 @@ Write-back operations use **frozen allowlists** to prevent accidental data modif
 | Tool | Allowed Fields |
 |------|---------------|
 | Jira | `assignee`, `sprint_id`, `story_points` |
-| Azure DevOps | `AssignedTo`, `IterationPath`, `StoryPoints` |
+| Azure DevOps | `AssignedTo`, `IterationPath`, `StoryPoints`, `StartDate`, `TargetDate` |
 | GitHub | **Read-only** (no write-back) |
 
 All write-back operations:
@@ -591,7 +593,7 @@ npm run docker:restart   # Restart containers
 | `/login` | Authentication |
 | `/signup` | Registration |
 | `/onboarding` | Organization setup wizard |
-| `/po` | Product Owner overview |
+| `/po` | Product Owner dashboard (hero banner + module status) & project plan Gantt |
 | `/po/planning` | Sprint planning interface |
 | `/po/standups` | Standup digest |
 | `/po/health` | Team health signals |

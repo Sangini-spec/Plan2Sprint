@@ -93,7 +93,7 @@ export function GithubMonitoringPanel() {
   const [pullRequests, setPullRequests] = useState<PRData[]>([]);
   const [loading, setLoading] = useState(true);
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
-  const refreshKey = useAutoRefresh(["sync_complete", "github_sync"]);
+  const refreshKey = useAutoRefresh(["sync_complete", "github_sync", "github_activity"]);
 
   const fetchPRs = useCallback(async () => {
     setLoading(true);

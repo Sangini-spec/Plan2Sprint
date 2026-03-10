@@ -19,6 +19,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -280,10 +281,14 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     };
   }, [connect]);
 
+  // Memoize context value to prevent child re-renders on every WS message
+  const value = useMemo(
+    () => ({ status, subscribe, subscribeAll, lastEvent }),
+    [status, subscribe, subscribeAll, lastEvent]
+  );
+
   return (
-    <WebSocketContext.Provider
-      value={{ status, subscribe, subscribeAll, lastEvent }}
-    >
+    <WebSocketContext.Provider value={value}>
       {children}
     </WebSocketContext.Provider>
   );

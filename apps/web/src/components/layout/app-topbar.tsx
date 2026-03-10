@@ -195,7 +195,7 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
   return (
     <header
       className={cn(
-        "flex items-center justify-between h-16 px-4 sm:px-6",
+        "flex items-center justify-between h-14 px-4 sm:px-6",
         "bg-[var(--bg-surface)]/80 backdrop-blur-xl",
         "border-b border-[var(--border-subtle)]",
         "sticky top-0 z-30"
@@ -215,7 +215,7 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
         >
           <Menu size={20} />
         </button>
-        <h1 className="text-lg font-semibold text-[var(--text-primary)]">
+        <h1 className="text-base font-semibold text-[var(--text-primary)]">
           {pageTitle}
         </h1>
 

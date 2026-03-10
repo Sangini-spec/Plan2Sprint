@@ -8,11 +8,12 @@ Immutable allowlists — Python tuples cannot be modified at runtime.
 from typing import Literal
 
 # Frozen allowlists — equivalent to Object.freeze() in TypeScript
-JIRA_WRITEBACK_ALLOWLIST: tuple[str, ...] = ("assignee", "sprint_id", "story_points")
+JIRA_WRITEBACK_ALLOWLIST: tuple[str, ...] = ("assignee", "sprint_id", "story_points", "status")
 ADO_WRITEBACK_ALLOWLIST: tuple[str, ...] = (
     "System.AssignedTo",
     "System.IterationPath",
     "Microsoft.VSTS.Scheduling.StoryPoints",
+    "System.State",
 )
 GITHUB_WRITEBACK_ALLOWLIST: tuple[str, ...] = ()  # GitHub is read-only
 

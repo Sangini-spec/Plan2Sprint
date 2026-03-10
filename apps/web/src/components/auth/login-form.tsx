@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui";
-import { SocialAuthButtons } from "./social-auth-buttons";
 import {
   Mail,
   Lock,
@@ -22,6 +22,19 @@ import { ROLE_DASHBOARD_ROUTES, type UserRole } from "@/lib/types/auth";
 const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
+
+// Lazy-load social auth buttons — only needed in non-demo mode
+const SocialAuthButtons = dynamic(
+  () => import("./social-auth-buttons").then((m) => m.SocialAuthButtons),
+  { ssr: false, loading: () => <div className="h-[108px]" /> }
+);
+
+// Singleton Supabase client for form submit — avoids re-creation per submit
+let _supabase: ReturnType<typeof createClient> | null = null;
+function getSupabase() {
+  if (!_supabase) _supabase = createClient();
+  return _supabase;
+}
 
 const QUICK_ROLES: { value: UserRole; label: string; icon: React.ReactNode }[] = [
   { value: "product_owner", label: "Product Owner", icon: <LayoutDashboard className="h-4 w-4" /> },
@@ -78,7 +91,7 @@ export function LoginForm() {
     }
 
     try {
-      const supabase = createClient();
+      const supabase = getSupabase();
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,

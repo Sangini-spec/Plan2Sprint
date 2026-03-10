@@ -41,6 +41,7 @@ ADO_WRITEBACK_ALLOWLIST = frozenset([
     "System.AssignedTo",
     "System.IterationPath",
     "Microsoft.VSTS.Scheduling.StoryPoints",
+    "System.State",
 ])
 
 
@@ -423,3 +424,152 @@ def _add_audit_entry(
         metadata_=metadata,
     )
     db.add(entry)
+
+
+# ---------------------------------------------------------------------------
+# Board Status Write-Back — write board column changes to ADO
+# ---------------------------------------------------------------------------
+
+async def writeback_board_statuses(
+    db: AsyncSession,
+    org_id: str,
+    changes: list[dict],
+    approver_id: str = "system",
+) -> dict:
+    """
+    Write back board status changes from Plan2Sprint to ADO.
+
+    Each change dict: {
+        "workItemId": "internal-id",
+        "externalId": "12345",
+        "fromStatus": "TODO",
+        "toStatus": "IN_PROGRESS",
+        "title": "Item title",
+    }
+
+    Returns: { synced: int, failed: int, errors: [...] }
+    """
+    from ..adapters.status_maps import reverse_map_ado_status
+
+    # 1. Get ADO connection
+    conn = await _get_ado_connection(db, org_id)
+    if not conn:
+        return {"error": "ADO not connected", "synced": 0, "failed": 0}
+
+    org_url, auth_header = _get_auth_info(conn)
+    if not org_url:
+        return {"error": "No ADO org URL", "synced": 0, "failed": 0}
+
+    access_token = await _get_valid_token(db, conn)
+
+    synced = 0
+    failed = 0
+    errors: list[str] = []
+    results: list[dict] = []
+
+    for change in changes:
+        external_id = change.get("externalId", "")
+        to_status = change.get("toStatus", "")
+        from_status = change.get("fromStatus", "")
+        title = change.get("title", external_id)
+        work_item_id = change.get("workItemId", "")
+
+        if not external_id or not to_status:
+            errors.append(f"Missing externalId or toStatus for change")
+            failed += 1
+            continue
+
+        # Map unified status to ADO System.State
+        ado_state = reverse_map_ado_status(to_status)
+
+        # Build PATCH document
+        patch_document = [
+            {
+                "op": "replace",
+                "path": "/fields/System.State",
+                "value": ado_state,
+            },
+        ]
+
+        try:
+            result = await _ado_patch(
+                f"{org_url}/_apis/wit/workitems/{external_id}?api-version=7.1",
+                access_token,
+                patch_document,
+                auth_header,
+            )
+
+            if "error" in result:
+                errors.append(f"ADO PATCH failed for {external_id}: {result['error']}")
+                failed += 1
+                _add_audit_entry(
+                    db, org_id, approver_id, "board_writeback_failed",
+                    "work_item", work_item_id, success=False,
+                    metadata={
+                        "tool": "ado",
+                        "externalId": external_id,
+                        "itemTitle": title,
+                        "fromStatus": from_status,
+                        "toStatus": to_status,
+                        "adoState": ado_state,
+                        "error": result["error"],
+                    },
+                )
+                results.append({"externalId": external_id, "ok": False, "error": result["error"]})
+                continue
+
+            # Add a discussion comment
+            comment_html = (
+                f"<b>Plan2Sprint Board Update</b><br>"
+                f"Status changed: {from_status} -> {to_status}<br>"
+                f"ADO State set to: {ado_state}<br>"
+                f"Updated via Plan2Sprint sprint board"
+            )
+            comment_patch = [
+                {"op": "add", "path": "/fields/System.History", "value": comment_html}
+            ]
+
+            try:
+                await _ado_patch(
+                    f"{org_url}/_apis/wit/workitems/{external_id}?api-version=7.1",
+                    access_token,
+                    comment_patch,
+                    auth_header,
+                )
+            except Exception as ce:
+                logger.warning(f"Failed to add board comment to {external_id}: {ce}")
+
+            synced += 1
+            results.append({"externalId": external_id, "ok": True, "adoState": ado_state})
+
+            _add_audit_entry(
+                db, org_id, approver_id, "board_writeback",
+                "work_item", work_item_id, success=True,
+                metadata={
+                    "tool": "ado",
+                    "externalId": external_id,
+                    "itemTitle": title,
+                    "fromStatus": from_status,
+                    "toStatus": to_status,
+                    "adoState": ado_state,
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"Board writeback error for {external_id}: {e}")
+            errors.append(f"Exception for {external_id}: {str(e)[:100]}")
+            failed += 1
+            _add_audit_entry(
+                db, org_id, approver_id, "board_writeback_failed",
+                "work_item", work_item_id, success=False,
+                metadata={
+                    "tool": "ado",
+                    "externalId": external_id,
+                    "error": str(e)[:200],
+                },
+            )
+
+    await db.commit()
+
+    logger.info(f"ADO board writeback: {synced} synced, {failed} failed")
+    return {"synced": synced, "failed": failed, "errors": errors, "results": results}

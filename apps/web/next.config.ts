@@ -1,8 +1,13 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   /* ── Production ── */
   output: "standalone",
+
+  /* Pin workspace root to this project — prevents Next.js from
+     picking up stray package.json files in parent directories */
+  outputFileTracingRoot: path.join(__dirname, "../../"),
 
   /* ── Dev-mode speed optimizations ── */
   reactStrictMode: false, // prevents double-render in dev

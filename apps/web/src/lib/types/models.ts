@@ -94,6 +94,8 @@ export interface WorkItem {
   labels: string[];
   acceptanceCriteria?: string;
   epicId?: string;
+  plannedStart?: string;
+  plannedEnd?: string;
   iterationId?: string;
   assigneeId?: string;
 }
@@ -352,4 +354,65 @@ export interface DeliveryPredictabilityScore {
   sprintGoalAttainment: number;
   carryForwardRate: number;
   trend: { sprint: string; score: number }[];
+}
+
+// ============================================================================
+// FEATURE PROGRESS / PROJECT PLAN TYPES
+// ============================================================================
+
+export type FeaturePhase = "TESTING" | "DEVELOPMENT" | "PLANNING";
+
+export interface FeatureBreakdown {
+  done: number;
+  inProgress: number;
+  readyForTest: number;
+  remaining: number;
+}
+
+export interface FeatureProgressCard {
+  id: string;
+  externalId: string;
+  title: string;
+  description: string;
+  phase: FeaturePhase;
+  completePct: number;
+  totalStories: number;
+  breakdown: FeatureBreakdown;
+  plannedStart?: string;
+  plannedEnd?: string;
+  sourceStatus?: string;
+  sourceTool?: string;
+}
+
+export interface FeatureProgressData {
+  totalFeatures: number;
+  totalStories: number;
+  overallCompletePct: number;
+  readyForTestCount: number;
+  features: FeatureProgressCard[];
+}
+
+export type GanttStatus = "not_started" | "in_progress" | "blocked" | "complete";
+
+export interface ProjectPlanRow {
+  id: string;
+  externalId: string;
+  title: string;
+  phase: FeaturePhase;
+  status: GanttStatus;
+  completePct: number;
+  totalStories: number;
+  doneStories: number;
+  plannedStart?: string;
+  plannedEnd?: string;
+  assignees: string[];
+}
+
+export interface ProjectPlanData {
+  features: ProjectPlanRow[];
+  phases: { name: string; count: number }[];
+  totalPhases: number;
+  complete: number;
+  inProgress: number;
+  estDurationWeeks?: number;
 }

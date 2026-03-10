@@ -25,7 +25,7 @@ interface VelocityData {
 export function MyVelocityTrend() {
   const [chartData, setChartData] = useState<VelocityData[]>([]);
   const [loading, setLoading] = useState(true);
-  const refreshKey = useAutoRefresh(["sync_complete"]);
+  const refreshKey = useAutoRefresh(["sync_complete", "sprint_completed"]);
 
   const fetchVelocity = useCallback(async () => {
     setLoading(true);

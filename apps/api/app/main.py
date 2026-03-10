@@ -17,6 +17,45 @@ async def lifespan(app: FastAPI):
     # Startup
     print(f"Plan2Sprint API starting... (demo_mode={settings.is_demo_mode})")
 
+    # Auto-migrate: add new columns if they don't exist
+    from .database import engine
+    from sqlalchemy import text
+    async with engine.begin() as conn:
+        # source_status on work_items (Task 3 — dynamic board columns)
+        await conn.execute(text(
+            "ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_status VARCHAR(100)"
+        ))
+        # in_app_notifications table (Task 2 — notification system)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS in_app_notifications (
+                id VARCHAR(25) PRIMARY KEY,
+                organization_id VARCHAR(25) NOT NULL,
+                recipient_email VARCHAR NOT NULL,
+                notification_type VARCHAR NOT NULL,
+                title VARCHAR NOT NULL,
+                body TEXT NOT NULL,
+                read BOOLEAN DEFAULT FALSE,
+                data_json JSONB,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_in_app_notifications_org ON in_app_notifications(organization_id)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_in_app_notifications_email ON in_app_notifications(recipient_email)"
+        ))
+        # planned_start / planned_end on work_items (Feature/Epic progress + Gantt)
+        await conn.execute(text(
+            "ALTER TABLE work_items ADD COLUMN IF NOT EXISTS planned_start TIMESTAMPTZ"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE work_items ADD COLUMN IF NOT EXISTS planned_end TIMESTAMPTZ"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_work_items_epic_id ON work_items(epic_id)"
+        ))
+
     # Start the delivery queue background worker
     from .services.delivery_queue import start_delivery_worker, stop_delivery_worker
     await start_delivery_worker()

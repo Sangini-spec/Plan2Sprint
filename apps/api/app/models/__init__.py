@@ -33,6 +33,7 @@ from .analytics import VelocityProfile, HealthSignal, BurnoutAlert
 from .retrospective import Retrospective, RetroActionItem
 from .audit_log import AuditLogEntry
 from .notification import NotificationPreference
+from .in_app_notification import InAppNotification
 from .imported_project import ImportedProject, UserProjectPreference
 from .sprint_constraint import SprintConstraint
 
@@ -74,6 +75,7 @@ __all__ = [
     "RetroActionItem",
     "AuditLogEntry",
     "NotificationPreference",
+    "InAppNotification",
     "ImportedProject",
     "UserProjectPreference",
     "SprintConstraint",

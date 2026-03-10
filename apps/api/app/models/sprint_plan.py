@@ -95,6 +95,15 @@ class SprintPlan(Base):
     human_edits: Mapped[Optional[Any]] = mapped_column(
         JSON, name="human_edits", nullable=True
     )
+    estimated_weeks_total: Mapped[Optional[int]] = mapped_column(
+        Integer, name="estimated_weeks_total", nullable=True
+    )
+    project_completion_summary: Mapped[Optional[str]] = mapped_column(
+        String, name="project_completion_summary", nullable=True
+    )
+    capacity_recommendations: Mapped[Optional[Any]] = mapped_column(
+        JSON, name="capacity_recommendations", nullable=True
+    )
     rejection_feedback: Mapped[Optional[str]] = mapped_column(
         String, name="rejection_feedback", nullable=True
     )
@@ -175,6 +184,9 @@ class PlanAssignment(Base):
     )
     is_human_edited: Mapped[bool] = mapped_column(
         Boolean, name="is_human_edited", nullable=False, default=False
+    )
+    suggested_priority: Mapped[Optional[int]] = mapped_column(
+        Integer, name="suggested_priority", nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), name="created_at", server_default=func.now()

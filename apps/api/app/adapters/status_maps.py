@@ -180,3 +180,43 @@ def map_github_ci_status(conclusion: str | None, status: str | None = None) -> s
     if status:
         return GITHUB_CI_STATUS.get(status.lower().strip(), "UNKNOWN")
     return "UNKNOWN"
+
+
+# ---------------------------------------------------------------------------
+# Reverse Maps: Unified Status → Tool-Specific State (for write-back)
+# ---------------------------------------------------------------------------
+
+# Unified → ADO System.State (for PATCH /fields/System.State)
+UNIFIED_TO_ADO_STATE: dict[str, str] = {
+    "TODO": "New",
+    "BACKLOG": "New",
+    "IN_PROGRESS": "Active",
+    "IN_REVIEW": "Resolved",
+    "DONE": "Closed",
+    "CANCELLED": "Removed",
+}
+
+# Unified → Jira target status name (used to find the right transition)
+# Match priority: exact name first, then statusCategory fallback
+UNIFIED_TO_JIRA_STATUS: dict[str, tuple[str, str]] = {
+    # (target_status_name, fallback_category_key)
+    "TODO": ("To Do", "new"),
+    "BACKLOG": ("Backlog", "new"),
+    "IN_PROGRESS": ("In Progress", "indeterminate"),
+    "IN_REVIEW": ("In Review", "indeterminate"),
+    "DONE": ("Done", "done"),
+    "CANCELLED": ("Cancelled", "done"),
+}
+
+
+def reverse_map_ado_status(unified: str) -> str:
+    """Map a unified status to the ADO System.State value for write-back."""
+    return UNIFIED_TO_ADO_STATE.get(unified.upper(), "New")
+
+
+def reverse_map_jira_status(unified: str) -> tuple[str, str]:
+    """
+    Map a unified status to (target_status_name, fallback_category_key)
+    for Jira transition discovery.
+    """
+    return UNIFIED_TO_JIRA_STATUS.get(unified.upper(), ("To Do", "new"))
