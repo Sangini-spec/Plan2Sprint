@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -35,56 +34,53 @@ export function DashboardPanel({
     <section
       id={id}
       className={cn(
-        "rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 backdrop-blur-xl shadow-lg shadow-black/5 dark:shadow-black/20",
+        "rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)]",
         className
       )}
     >
       {/* Header */}
       <div
         className={cn(
-          "flex items-center justify-between px-6 py-4",
+          "flex items-center justify-between px-5 py-3",
           collapsible && "cursor-pointer select-none",
           !collapsed && !noPadding && "border-b border-[var(--border-subtle)]"
         )}
         onClick={collapsible ? () => setCollapsed(!collapsed) : undefined}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           {Icon && (
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-brand-secondary)]/10">
-              <Icon className="h-4 w-4 text-[var(--color-brand-secondary)]" />
+            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-[var(--color-brand-secondary)]/10">
+              <Icon className="h-3.5 w-3.5 text-[var(--color-brand-secondary)]" />
             </div>
           )}
-          <h2 className="text-base font-semibold text-[var(--text-primary)]">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">
             {title}
           </h2>
         </div>
         <div className="flex items-center gap-2">
           {actions}
           {collapsible && (
-            <motion.div
-              animate={{ rotate: collapsed ? -90 : 0 }}
-              transition={{ duration: 0.2 }}
+            <div
+              className={cn(
+                "transition-transform duration-200",
+                collapsed && "-rotate-90"
+              )}
             >
               <ChevronDown className="h-4 w-4 text-[var(--text-secondary)]" />
-            </motion.div>
+            </div>
           )}
         </div>
       </div>
 
       {/* Content */}
-      <AnimatePresence initial={false}>
-        {!collapsed && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeInOut" }}
-            className="overflow-hidden"
-          >
-            <div className={cn(!noPadding && "p-6")}>{children}</div>
-          </motion.div>
+      <div
+        className={cn(
+          "transition-all duration-200 overflow-hidden",
+          collapsed ? "h-0 opacity-0" : "h-auto opacity-100"
         )}
-      </AnimatePresence>
+      >
+        <div className={cn(!noPadding && "p-5")}>{children}</div>
+      </div>
     </section>
   );
 }

@@ -4,8 +4,10 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useState,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import type {
@@ -93,6 +95,17 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
               },
             ];
           });
+        } else {
+          // Backend says Jira is NOT connected — remove stale localStorage entry
+          setConnections((prev) => {
+            const hadJira = prev.some((c) => c.tool === "jira");
+            if (hadJira) {
+              const updated = prev.filter((c) => c.tool !== "jira");
+              saveToLocalStorage(updated);
+              return updated;
+            }
+            return prev;
+          });
         }
       }
     } catch {
@@ -129,10 +142,54 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
               },
             ];
           });
+        } else {
+          // Backend says ADO is NOT connected — remove stale localStorage entry
+          setConnections((prev) => {
+            const hadAdo = prev.some((c) => c.tool === "ado");
+            if (hadAdo) {
+              const updated = prev.filter((c) => c.tool !== "ado");
+              saveToLocalStorage(updated);
+              return updated;
+            }
+            return prev;
+          });
         }
       }
     } catch {
       // Ignore — ADO status check is optional
+    }
+  }, []);
+
+  // Check GitHub token status from backend — a developer may have persisted their token
+  const refreshGithubStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/integrations/github/status");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.connected) {
+          setConnections((prev) => {
+            const existingGh = prev.find((c) => c.tool === "github");
+            const others = prev.filter((c) => c.tool !== "github");
+            return [
+              ...others,
+              {
+                id: existingGh?.id ?? `conn-github-oauth`,
+                tool: "github" as const,
+                variant: "cloud" as const,
+                status: "connected" as const,
+                displayName: data.user_name || data.user_login || existingGh?.displayName || "GitHub",
+                syncMode: "manual" as const,
+                connectedAt: data.connected_at || existingGh?.connectedAt,
+                lastSyncedAt: existingGh?.lastSyncedAt || data.connected_at,
+                selectedProjects: existingGh?.selectedProjects,
+                credentials: existingGh?.credentials,
+              },
+            ];
+          });
+        }
+      }
+    } catch {
+      // Ignore — GitHub status check is optional
     }
   }, []);
 
@@ -145,7 +202,8 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
     // Also check OAuth-based connections from backend
     refreshJiraStatus();
     refreshAdoStatus();
-  }, [refreshJiraStatus, refreshAdoStatus]);
+    refreshGithubStatus();
+  }, [refreshJiraStatus, refreshAdoStatus, refreshGithubStatus]);
 
   // Persist whenever connections change
   useEffect(() => {
@@ -248,13 +306,16 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
       if (isDemoMode) {
         await simulateDisconnect(tool);
       }
-      setConnections((prev) => prev.filter((c) => c.tool !== tool));
-      // Clear localStorage
-      saveToLocalStorage(connections.filter((c) => c.tool !== tool));
+      setConnections((prev) => {
+        const updated = prev.filter((c) => c.tool !== tool);
+        // Save to localStorage using the fresh updated value (fixes stale closure)
+        saveToLocalStorage(updated);
+        return updated;
+      });
     } catch {
       // Silently fail
     }
-  }, [connections]);
+  }, []);
 
   const triggerSync = useCallback(async (tool: ToolType) => {
     setConnections((prev) =>
@@ -364,27 +425,40 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  // Stable callbacks for modal
+  const openModal = useCallback(() => setModalOpen(true), []);
+  const closeModal = useCallback(() => setModalOpen(false), []);
+
+  // Memoize context value to prevent child re-renders
+  const value = useMemo(
+    () => ({
+      connections,
+      loading,
+      getConnection,
+      isConnected,
+      hasAnyConnection,
+      connect,
+      disconnect,
+      triggerSync,
+      getSyncStatus,
+      fetchProjects,
+      selectProjects,
+      refreshJiraStatus,
+      refreshAdoStatus,
+      modalOpen,
+      openModal,
+      closeModal,
+    }),
+    [
+      connections, loading, getConnection, isConnected, hasAnyConnection,
+      connect, disconnect, triggerSync, getSyncStatus, fetchProjects,
+      selectProjects, refreshJiraStatus, refreshAdoStatus, modalOpen,
+      openModal, closeModal,
+    ]
+  );
+
   return (
-    <IntegrationContext.Provider
-      value={{
-        connections,
-        loading,
-        getConnection,
-        isConnected,
-        hasAnyConnection,
-        connect,
-        disconnect,
-        triggerSync,
-        getSyncStatus,
-        fetchProjects,
-        selectProjects,
-        refreshJiraStatus,
-        refreshAdoStatus,
-        modalOpen,
-        openModal: () => setModalOpen(true),
-        closeModal: () => setModalOpen(false),
-      }}
-    >
+    <IntegrationContext.Provider value={value}>
       {children}
     </IntegrationContext.Provider>
   );

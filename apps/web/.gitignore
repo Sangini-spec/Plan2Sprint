@@ -1,5 +1,16 @@
 node_modules
 # Keep environment variables out of version control
 .env
+.env.local
+.env.docker
 
+# Generated code
 /src/generated/prisma
+
+# Build cache
+.next/
+tsconfig.tsbuildinfo
+
+# Windows shell artifacts
+nul
+NUL

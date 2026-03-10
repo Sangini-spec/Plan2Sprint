@@ -97,7 +97,7 @@ export function RetrospectiveHubPanel() {
   const { selectedProject } = useSelectedProject();
   const [retro, setRetro] = useState<RetrospectiveData | null>(null);
   const [loading, setLoading] = useState(true);
-  const refreshKey = useAutoRefresh(["sync_complete"]);
+  const refreshKey = useAutoRefresh(["sync_complete", "sprint_completed"]);
 
   const projectId = selectedProject?.internalId;
 

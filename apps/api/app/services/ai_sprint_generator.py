@@ -197,12 +197,19 @@ def build_sprint_prompt(
     # Format team members with velocity and computed SP capacity
     team_text = ""
     total_team_capacity = 0.0
+    cold_start_count = 0
+    no_skills_count = 0
     for member in team_members:
         vel = velocity_map.get(member["token"], {})
         avg_sp = vel.get("avg_sp", 15)
-        cold = " (cold-start estimate)" if vel.get("is_cold_start") else ""
+        is_cold = vel.get("is_cold_start", False)
+        cold = " (cold-start estimate)" if is_cold else ""
+        if is_cold:
+            cold_start_count += 1
         hours_per_week = member.get("capacity", 40)
         skills = ", ".join(member.get("skills", [])) if member.get("skills") else "general"
+        if skills == "general":
+            no_skills_count += 1
 
         # Compute SP capacity for this sprint duration
         weeks = sprint_days / 7.0
@@ -224,6 +231,40 @@ def build_sprint_prompt(
             f"Hours: {hours_per_week}h/week{health_warnings}\n"
         )
 
+    # Detect data gaps for AI compensation
+    zero_priority_count = sum(1 for item in backlog_items if item.get("priority", 0) == 0)
+    unestimated_count = sum(1 for item in backlog_items if not item.get("story_points"))
+    total_items = len(backlog_items)
+
+    data_gaps_section = ""
+    if zero_priority_count > 0 or unestimated_count > 0 or no_skills_count > 0 or cold_start_count > 0:
+        gap_lines = ["DATA GAPS DETECTED (compensate for these):"]
+        if zero_priority_count > 0:
+            gap_lines.append(
+                f"  - {zero_priority_count}/{total_items} items have priority=0 (unset). "
+                f"You MUST assign a suggested_priority (1=Critical, 2=High, 3=Medium, 4=Low, 5=Trivial) "
+                f"based on item type, title complexity, and dependencies."
+            )
+        if unestimated_count > 0:
+            gap_lines.append(
+                f"  - {unestimated_count}/{total_items} items have no story points. "
+                f"Estimate SP from the item type AND title complexity (not just default by type). "
+                f"A 'Redesign checkout flow' story is larger than a 'Fix button color' story."
+            )
+        if no_skills_count > 0:
+            gap_lines.append(
+                f"  - {no_skills_count}/{len(team_members)} developers have no skill tags. "
+                f"Assign work based on capacity and velocity rather than skill matching. "
+                f"Distribute work evenly among skill-unknown developers."
+            )
+        if cold_start_count > 0:
+            gap_lines.append(
+                f"  - {cold_start_count}/{len(team_members)} developers have cold-start velocity (no history). "
+                f"Use conservative estimates: cap their sprint load at 80% of stated capacity."
+            )
+        gap_lines.append("")
+        data_gaps_section = "\n".join(gap_lines) + "\n"
+
     # Build sprint info
     sprint_name = iteration.get("name", "Current Sprint")
     sprint_goal = iteration.get("goal") or "No specific goal set"
@@ -240,7 +281,7 @@ The Product Owner rejected the previous plan with this feedback:
 Take this into account when generating the new plan.
 """
 
-    prompt = f"""You are a sprint planning AI for an agile development team. Your job is to create a COMPLETE project plan by assigning ALL backlog items to developers across multiple sprints.
+    prompt = f"""You are a sprint planning AI for an agile development team. Your job is to create a COMPLETE project plan by assigning ALL backlog items to developers across multiple sprints. You also provide project-level insights: total weeks to complete the project, team capacity analysis, and priority recommendations for unprioritized items.
 
 SPRINT CONTEXT:
 - Sprint duration: {sprint_days} days per sprint ({start_date} → {end_date} is Sprint 1)
@@ -256,7 +297,7 @@ CARRY-FORWARD ITEMS (must be included in Sprint 1 if possible):
 
 BACKLOG ITEMS (ordered by priority, highest first):
 {backlog_text}
-{feedback_section}
+{data_gaps_section}{feedback_section}
 {_format_constraints(constraints)}RULES:
 1. Assign ALL items to developers — do NOT leave items unplanned unless they are [BLOCKED].
 2. If the total work exceeds one sprint's capacity, spread items across multiple sprints (Sprint 1, Sprint 2, Sprint 3, etc.). Each sprint has the same duration ({sprint_days} days).
@@ -264,11 +305,14 @@ BACKLOG ITEMS (ordered by priority, highest first):
 4. Use each developer's "Sprint capacity (per sprint)" as their maximum SP per sprint. A developer can be assigned work in multiple sprints.
 5. Carry-forward items should be prioritized in Sprint 1.
 6. [BLOCKED] items must NOT be assigned — include them in unplanned_items with reason.
-7. Items without story points: estimate based on type (story=5, bug=3, task=2, feature=8, epic=13).
+7. Items without story points: estimate based on type AND title complexity (not just a flat default). Consider: "Redesign checkout" ≈ 8 SP vs "Fix typo" ≈ 1 SP. General defaults: story=5, bug=3, task=2, feature=8, epic=13.
 8. For each assignment, provide a rationale and a sprint_number (1, 2, 3, etc.).
 9. Calculate a confidence score (0.0 to 1.0) for each assignment.
 10. Provide estimated_sprints (total number of sprints needed to complete ALL work).
 11. IMPORTANT: Every non-blocked item MUST be assigned. The plan should cover the entire backlog across however many sprints are needed.
+12. Calculate estimated_weeks_total — the total calendar weeks needed to finish ALL backlog items across all sprints.
+13. Provide capacity_recommendations: analyze whether the team is under-staffed or over-staffed for this backlog, identify bottleneck skill areas, and suggest how many additional developers (if any) would help.
+14. For EVERY assignment where the original item had priority=0, include a "suggested_priority" field (1-5) in that assignment. For items that already have a priority, omit suggested_priority or set it to null.
 
 Respond with ONLY a JSON object (no markdown, no explanation outside JSON) matching this schema:
 
@@ -277,6 +321,15 @@ Respond with ONLY a JSON object (no markdown, no explanation outside JSON) match
   "goal_attainment_confidence": 0.85,
   "risk_level": "LOW | MODERATE | HIGH",
   "estimated_sprints": 3,
+  "estimated_weeks_total": 6,
+  "project_completion_summary": "string — 2-3 sentences about the full project timeline, key milestones, and when all work should be done",
+  "capacity_recommendations": {{
+    "team_utilization_pct": 85,
+    "understaffed": false,
+    "recommended_additions": 0,
+    "bottleneck_skills": ["backend"],
+    "summary": "string — 1-2 sentence capacity analysis"
+  }},
   "assignments": [
     {{
       "work_item_id": "string — the item ID from the backlog",
@@ -285,7 +338,8 @@ Respond with ONLY a JSON object (no markdown, no explanation outside JSON) match
       "sprint_number": 1,
       "confidence_score": 0.85,
       "rationale": "string — why this person for this item",
-      "risk_flags": ["skill_gap", "overloaded"]
+      "risk_flags": ["skill_gap", "overloaded"],
+      "suggested_priority": null
     }}
   ],
   "unplanned_items": [
@@ -614,6 +668,11 @@ async def generate_sprint_plan_ai(
         risk_level = ai_plan.get("risk_level", "MODERATE")
         estimated_sprints = ai_plan.get("estimated_sprints", 1)
 
+        # New project-level fields
+        estimated_weeks_total = ai_plan.get("estimated_weeks_total")
+        project_completion_summary = ai_plan.get("project_completion_summary", "")
+        capacity_recommendations = ai_plan.get("capacity_recommendations")
+
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         logger.error(f"Failed to parse AI response: {e}")
         plan.status = "FAILED"
@@ -657,6 +716,12 @@ async def generate_sprint_plan_ai(
         risk_flags = a.get("risk_flags", [])
 
         sprint_num = int(a.get("sprint_number", 1))
+        suggested_pri = a.get("suggested_priority")
+        if suggested_pri is not None:
+            try:
+                suggested_pri = int(suggested_pri)
+            except (ValueError, TypeError):
+                suggested_pri = None
 
         pa = PlanAssignment(
             id=generate_cuid(),
@@ -670,6 +735,7 @@ async def generate_sprint_plan_ai(
             skill_match=None,
             is_human_edited=False,
             sprint_number=sprint_num,
+            suggested_priority=suggested_pri,
         )
         db.add(pa)
 
@@ -692,6 +758,23 @@ async def generate_sprint_plan_ai(
     plan.overall_rationale = reconstruct_pii(overall_rationale, reverse_map)
     plan.goal_attainment_confidence = float(goal_confidence)
     plan.estimated_sprints = int(estimated_sprints) if estimated_sprints else 1
+    # New project-level fields
+    if estimated_weeks_total is not None:
+        try:
+            plan.estimated_weeks_total = int(estimated_weeks_total)
+        except (ValueError, TypeError):
+            pass
+    if project_completion_summary:
+        plan.project_completion_summary = reconstruct_pii(
+            str(project_completion_summary), reverse_map
+        )
+    if capacity_recommendations and isinstance(capacity_recommendations, dict):
+        # Reconstruct PII in the summary text
+        if "summary" in capacity_recommendations:
+            capacity_recommendations["summary"] = reconstruct_pii(
+                str(capacity_recommendations["summary"]), reverse_map
+            )
+        plan.capacity_recommendations = capacity_recommendations
     # Calculate estimated end date based on sprint count and duration
     if iteration.start_date and plan.estimated_sprints:
         from datetime import timedelta
@@ -757,6 +840,9 @@ async def generate_sprint_plan_ai(
         "estimatedSprints": plan.estimated_sprints,
         "estimatedEndDate": plan.estimated_end_date.isoformat() if plan.estimated_end_date else None,
         "successProbability": plan.success_probability,
+        "estimatedWeeksTotal": plan.estimated_weeks_total,
+        "projectCompletionSummary": plan.project_completion_summary,
+        "capacityRecommendations": plan.capacity_recommendations,
     }
 
 

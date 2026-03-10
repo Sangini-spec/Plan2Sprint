@@ -68,6 +68,17 @@ async def calculate_success_probability(
             .limit(1)
         )
     iteration = it_result.scalar_one_or_none()
+
+    # Fallback: if no project-scoped active iteration, try org-wide
+    if not iteration and project_id and not iteration_id:
+        fallback_result = await db.execute(
+            select(Iteration)
+            .where(Iteration.organization_id == org_id, Iteration.state == "active")
+            .order_by(Iteration.start_date.desc())
+            .limit(1)
+        )
+        iteration = fallback_result.scalar_one_or_none()
+
     if not iteration:
         return {"successProbability": None, "spilloverRiskSP": 0, "error": "No active iteration"}
 
@@ -269,6 +280,17 @@ async def calculate_spillover_risk(
             .limit(1)
         )
     iteration = it_result.scalar_one_or_none()
+
+    # Fallback: if no project-scoped active iteration, try org-wide
+    if not iteration and project_id and not iteration_id:
+        fallback_result = await db.execute(
+            select(Iteration)
+            .where(Iteration.organization_id == org_id, Iteration.state == "active")
+            .order_by(Iteration.start_date.desc())
+            .limit(1)
+        )
+        iteration = fallback_result.scalar_one_or_none()
+
     if not iteration:
         return {"items": [], "totalSpilloverSP": 0}
 

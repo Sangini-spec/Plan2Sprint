@@ -180,6 +180,26 @@ async def generate_sprint_plan(
         max_sprint_number,
     )
 
+    # 11b. Compute project-level insight fields (deterministic estimates)
+    plan.estimated_weeks_total = max(1, int(math.ceil(max_sprint_number * sprint_days / 7.0)))
+    plan.project_completion_summary = (
+        f"Deterministic plan: {len(assignments)} items across {max_sprint_number} sprint(s), "
+        f"~{plan.estimated_weeks_total} weeks total. "
+        f"Team utilization based on capacity-aware greedy assignment."
+    )
+    total_capacity = sum(capacity_map.values())
+    utilization_pct = int(round((total_sp / max(total_capacity * max_sprint_number, 1)) * 100))
+    plan.capacity_recommendations = {
+        "team_utilization_pct": min(utilization_pct, 100),
+        "understaffed": utilization_pct > 90,
+        "recommended_additions": 1 if utilization_pct > 95 else 0,
+        "bottleneck_skills": [],
+        "summary": (
+            f"Team utilization at {utilization_pct}%. "
+            + ("Consider adding developers — team is near full capacity." if utilization_pct > 90 else "Team capacity is adequate.")
+        ),
+    }
+
     # 12. Attach success probability at generation time
     try:
         from .sprint_forecast import calculate_success_probability
@@ -223,6 +243,9 @@ async def generate_sprint_plan(
         "estimatedSprints": max_sprint_number,
         "estimatedEndDate": plan.estimated_end_date.isoformat() if plan.estimated_end_date else None,
         "successProbability": plan.success_probability,
+        "estimatedWeeksTotal": plan.estimated_weeks_total,
+        "projectCompletionSummary": plan.project_completion_summary,
+        "capacityRecommendations": plan.capacity_recommendations,
     }
 
 

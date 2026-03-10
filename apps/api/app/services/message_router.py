@@ -336,10 +336,41 @@ async def deliver_notification(
     else:
         result["channels"]["teams"] = "skipped"
 
-    # 4. In-app notification (always available)
+    # 4. In-app notification (always available — persisted to DB)
     if in_app_payload:
-        # TODO: Create NotificationPreference record / push to websocket
-        result["channels"]["in_app"] = "sent"
+        try:
+            from ..models.in_app_notification import InAppNotification
+            notif = InAppNotification(
+                organization_id=org_id,
+                recipient_email=recipient_email,
+                notification_type=notification_type,
+                title=in_app_payload.get("title", "Notification"),
+                body=in_app_payload.get("body", ""),
+                data_json=in_app_payload,
+            )
+            db.add(notif)
+            await db.commit()
+            await db.refresh(notif)
+
+            # Broadcast via WebSocket so NotificationBell updates in real-time
+            try:
+                from ..routers.ws import ws_manager
+                await ws_manager.broadcast(org_id, {
+                    "type": "notification",
+                    "data": {
+                        "id": notif.id,
+                        "title": notif.title,
+                        "body": notif.body,
+                        "notificationType": notification_type,
+                    },
+                })
+            except Exception:
+                pass  # WS broadcast is best-effort
+
+            result["channels"]["in_app"] = "sent"
+        except Exception as e:
+            result["channels"]["in_app"] = "error"
+            result["errors"].append(f"In-app: {str(e)}")
         await _log_delivery(
             db, org_id, recipient_email, notification_type, "in_app", "sent"
         )

@@ -486,3 +486,192 @@ Return ONLY valid JSON:
             }
 
     return {"type": "EXECUTION", "confidence": 50}
+
+
+# ---------------------------------------------------------------------------
+# Success Retrospective — for sprints completing at 85% or above
+# ---------------------------------------------------------------------------
+
+async def generate_success_retrospective(
+    db: AsyncSession,
+    org_id: str,
+    project_id: str,
+    iteration_id: str,
+    *,
+    completion_rate: float = 100.0,
+    done_sp: float = 0,
+    total_sp: float = 0,
+    done_items: int = 0,
+    total_items: int = 0,
+) -> dict[str, Any]:
+    """
+    Generate a positive retrospective for sprints that completed successfully
+    (≥85% completion rate). Captures what went well so the team and AI can
+    learn from successful patterns.
+    """
+    # --- Load iteration ---
+    it_result = await db.execute(
+        select(Iteration).where(Iteration.id == iteration_id)
+    )
+    iteration = it_result.scalar_one_or_none()
+    if not iteration:
+        return {"error": "Iteration not found"}
+
+    # --- Check for existing retro (idempotent) ---
+    existing_result = await db.execute(
+        select(Retrospective).where(
+            Retrospective.organization_id == org_id,
+            Retrospective.iteration_id == iteration_id,
+        ).limit(1)
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing:
+        logger.info(f"Retrospective already exists for iteration {iteration_id}")
+        return {"skipped": True, "reason": "already_exists"}
+
+    # --- Gather positive signals ---
+    what_went_well: list[str] = []
+
+    # Completion rate
+    what_went_well.append(
+        f"Sprint completed at {completion_rate:.0f}% "
+        f"({done_sp:.0f}/{total_sp:.0f} SP, {done_items}/{total_items} items)"
+    )
+
+    # Team contribution — did all devs contribute?
+    members_result = await db.execute(
+        select(TeamMember).where(
+            TeamMember.organization_id == org_id,
+            TeamMember.role == "developer",
+        )
+    )
+    developers = list(members_result.scalars().all())
+    contributing_devs = 0
+    for dev in developers:
+        dev_done = await db.execute(
+            select(func.count()).select_from(WorkItem).where(
+                WorkItem.assignee_id == dev.id,
+                WorkItem.iteration_id == iteration_id,
+                WorkItem.status.in_(["DONE", "Closed", "CLOSED", "Done"]),
+            )
+        )
+        if (dev_done.scalar() or 0) > 0:
+            contributing_devs += 1
+
+    if contributing_devs == len(developers) and len(developers) > 0:
+        what_went_well.append(
+            f"All {len(developers)} team members delivered completed work"
+        )
+    elif contributing_devs > 0:
+        what_went_well.append(
+            f"{contributing_devs}/{len(developers)} team members contributed"
+        )
+
+    # Blocker resolution
+    blocker_result = await db.execute(
+        select(BlockerFlag)
+        .join(StandupReport, BlockerFlag.standup_report_id == StandupReport.id)
+        .where(StandupReport.organization_id == org_id)
+    )
+    blockers = list(blocker_result.scalars().all())
+    resolved_blockers = [b for b in blockers if b.status == "RESOLVED"]
+    if blockers and len(resolved_blockers) == len(blockers):
+        what_went_well.append("All blockers were resolved during the sprint")
+    elif not blockers:
+        what_went_well.append("No blockers were reported during the sprint")
+
+    # PR review efficiency
+    pr_result = await db.execute(
+        select(PullRequest).where(
+            PullRequest.status.in_(["MERGED", "APPROVED"]),
+        )
+    )
+    merged_prs = list(pr_result.scalars().all())
+    if merged_prs:
+        what_went_well.append(f"{len(merged_prs)} PRs merged successfully")
+
+    # Velocity trend — compare with previous sprint
+    prev_vel_result = await db.execute(
+        select(VelocityProfile)
+        .where(
+            VelocityProfile.iteration_id.isnot(None),
+            VelocityProfile.iteration_id != iteration_id,
+        )
+        .order_by(VelocityProfile.recorded_at.desc())
+        .limit(10)
+    )
+    prev_velocities = list(prev_vel_result.scalars().all())
+    if prev_velocities:
+        prev_total = sum(vp.completed_sp for vp in prev_velocities)
+        prev_avg_per_sprint = prev_total / len(prev_velocities) if prev_velocities else 0
+        if done_sp > prev_avg_per_sprint * 1.1 and prev_avg_per_sprint > 0:
+            improvement = round((done_sp / prev_avg_per_sprint - 1) * 100)
+            what_went_well.append(
+                f"Team velocity improved by {improvement}% compared to recent average"
+            )
+
+    # --- Build what could improve (even for successful sprints) ---
+    what_didnt_go_well: list[str] = []
+    leftover = total_items - done_items
+    if leftover > 0:
+        what_didnt_go_well.append(
+            f"{leftover} item(s) were not completed and spilled over"
+        )
+
+    open_blockers = [b for b in blockers if b.status in ("OPEN", "ACKNOWLEDGED", "ESCALATED")]
+    if open_blockers:
+        what_didnt_go_well.append(
+            f"{len(open_blockers)} blocker(s) remained unresolved"
+        )
+
+    if not what_didnt_go_well:
+        what_didnt_go_well.append("No significant issues identified — excellent sprint!")
+
+    # --- Feed-forward signals (positive) ---
+    feed_forward: list[dict] = []
+    if completion_rate >= 95:
+        feed_forward.append({
+            "type": "high_performance",
+            "reason": f"Team achieved {completion_rate:.0f}% completion — consider slightly increasing commitment",
+            "adjustment": 5,
+        })
+
+    # --- Persist ---
+    retro = Retrospective(
+        id=generate_cuid(),
+        organization_id=org_id,
+        iteration_id=iteration_id,
+        what_went_well={"items": what_went_well},
+        what_didnt_go_well={"items": what_didnt_go_well},
+        root_cause_analysis=None,
+        failure_classification=None,
+        failure_evidence={
+            "completionRate": completion_rate,
+            "totalSP": total_sp,
+            "doneSP": done_sp,
+            "type": "success",
+        },
+        pattern_detected=False,
+        consecutive_failure_count=0,
+        feed_forward_signals={
+            "signals": [ff["reason"] for ff in feed_forward],
+            "details": feed_forward,
+        },
+        is_draft=False,
+        finalized_at=datetime.now(timezone.utc),
+    )
+    db.add(retro)
+    await db.flush()
+
+    logger.info(
+        f"Success retrospective generated for iteration {iteration_id}: "
+        f"{completion_rate:.0f}% completion, {len(what_went_well)} positive items"
+    )
+
+    return {
+        "type": "success",
+        "completionRate": completion_rate,
+        "whatWentWell": what_went_well,
+        "whatDidntGoWell": what_didnt_go_well,
+        "feedForward": [ff["reason"] for ff in feed_forward],
+    }

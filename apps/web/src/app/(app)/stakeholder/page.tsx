@@ -4,7 +4,7 @@ import { PortfolioHealthSummary } from "@/components/stakeholder/portfolio-healt
 
 export default function StakeholderDashboardPage() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <PortfolioHealthSummary />
     </div>
   );

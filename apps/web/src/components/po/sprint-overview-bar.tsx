@@ -37,7 +37,7 @@ export function SprintOverviewBar() {
   const [sprint, setSprint] = useState<SprintData | null>(null);
   const [successProbability, setSuccessProbability] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-  const refreshKey = useAutoRefresh(["sync_complete", "writeback_success", "writeback_undo"]);
+  const refreshKey = useAutoRefresh(["sync_complete", "writeback_success", "writeback_undo", "sprint_completed", "github_activity"]);
 
   const projectId = selectedProject?.internalId;
 

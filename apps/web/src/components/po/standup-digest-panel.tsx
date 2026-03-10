@@ -83,7 +83,7 @@ export function StandupDigestPanel() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [digest, setDigest] = useState<DigestData | null>(null);
   const [loading, setLoading] = useState(true);
-  const refreshKey = useAutoRefresh(["standup_generated", "sync_complete"]);
+  const refreshKey = useAutoRefresh(["standup_generated", "standup_note_submitted", "sync_complete"]);
 
   const fetchDigest = useCallback(async () => {
     setLoading(true);
@@ -196,8 +196,8 @@ export function StandupDigestPanel() {
             </div>
           )}
 
-          {reports.map((report) => {
-            const rowId = report.teamMemberId;
+          {reports.map((report, idx) => {
+            const rowId = `${report.teamMemberId}-${idx}`;
             const isExpanded = expandedIds.has(rowId);
             const memberNotes = getNotesForMember(report.displayName);
             const hasNote = hasSubmittedNote(report.displayName);
@@ -277,8 +277,8 @@ export function StandupDigestPanel() {
                               Completed ({report.completed.length})
                             </h4>
                             <ul className="space-y-1">
-                              {report.completed.map((item, idx) => (
-                                <li key={idx} className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                              {report.completed.map((item, cidx) => (
+                                <li key={item.ticketId || `completed-${cidx}`} className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
                                   <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--color-rag-green)]" />
                                   <span>{item.title}</span>
                                   {item.ticketId && <span className="text-xs text-[var(--text-secondary)]">({item.ticketId})</span>}
@@ -296,8 +296,8 @@ export function StandupDigestPanel() {
                               In Progress ({report.inProgress.length})
                             </h4>
                             <ul className="space-y-1.5">
-                              {report.inProgress.map((item, idx) => (
-                                <li key={idx} className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                              {report.inProgress.map((item, pidx) => (
+                                <li key={item.ticketId || `inprogress-${pidx}`} className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
                                   <Circle className="h-3.5 w-3.5 shrink-0 text-[var(--color-brand-secondary)]" />
                                   <span className="truncate">{item.title}</span>
                                   {item.ticketId && <span className="text-xs text-[var(--text-secondary)] shrink-0">({item.ticketId})</span>}
@@ -320,8 +320,8 @@ export function StandupDigestPanel() {
                           <div className="rounded-lg border border-[var(--color-rag-red)]/30 bg-[var(--color-rag-red)]/5 p-3">
                             <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-rag-red)] mb-1.5">Blockers</h4>
                             <ul className="space-y-1">
-                              {report.blockers.map((blocker, idx) => (
-                                <li key={idx} className="flex items-start gap-2 text-sm text-[var(--color-rag-red)]">
+                              {report.blockers.map((blocker, bidx) => (
+                                <li key={`blocker-${bidx}-${blocker.description.slice(0, 20)}`} className="flex items-start gap-2 text-sm text-[var(--color-rag-red)]">
                                   <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                                   <span>{blocker.description}</span>
                                 </li>

@@ -18,7 +18,11 @@ import {
   Search,
   ArrowUpRight,
   GitMerge,
+  Plus,
+  Lock,
+  Globe,
 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge } from "@/components/ui";
@@ -186,6 +190,16 @@ export function MyGithubActivity() {
   const [repoSearch, setRepoSearch] = useState("");
   const [loadingRepos, setLoadingRepos] = useState(false);
 
+  // Create repo modal
+  const [showCreateRepo, setShowCreateRepo] = useState(false);
+  const [createRepoName, setCreateRepoName] = useState("");
+  const [createRepoDesc, setCreateRepoDesc] = useState("");
+  const [createRepoPrivate, setCreateRepoPrivate] = useState(true);
+  const [createRepoAutoInit, setCreateRepoAutoInit] = useState(true);
+  const [creatingRepo, setCreatingRepo] = useState(false);
+  const [createRepoError, setCreateRepoError] = useState<string | null>(null);
+  const [createRepoSuccess, setCreateRepoSuccess] = useState<string | null>(null);
+
   // Real data
   const [pulls, setPulls] = useState<RealPR[]>([]);
   const [commits, setCommits] = useState<RealCommit[]>([]);
@@ -203,6 +217,25 @@ export function MyGithubActivity() {
     if (saved.token) setToken(saved.token);
     if (saved.user) setUser(saved.user);
     if (saved.linkedRepos?.length) setLinkedRepos(saved.linkedRepos);
+
+    // Bootstrap: persist existing localStorage token to backend (one-time)
+    if (saved.token && saved.user) {
+      const key = "plan2sprint_github_synced";
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, "1");
+        fetch("/api/integrations/github/save-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accessToken: saved.token,
+            userLogin: saved.user.login,
+            userName: saved.user.name,
+            avatarUrl: saved.user.avatarUrl,
+            linkedRepos: (saved.linkedRepos ?? []).map((r) => r.fullName),
+          }),
+        }).catch(() => {});
+      }
+    }
   }, []);
 
   // ---------- Handle OAuth code from URL ----------
@@ -231,6 +264,18 @@ export function MyGithubActivity() {
       setToken(ghToken);
       setUser(userObj);
       saveGitHubState({ token: ghToken, user: userObj, linkedRepos: [] });
+      // Persist token to backend so PO can see activity
+      fetch("/api/integrations/github/save-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessToken: ghToken,
+          userLogin: userObj.login,
+          userName: userObj.name,
+          avatarUrl: userObj.avatarUrl,
+          linkedRepos: [],
+        }),
+      }).catch(() => {});
       window.history.replaceState({}, "", window.location.pathname);
       setShowRepoSelector(true);
       return;
@@ -266,6 +311,18 @@ export function MyGithubActivity() {
         setToken(data.accessToken);
         setUser(userObj);
         saveGitHubState({ token: data.accessToken, user: userObj, linkedRepos: [] });
+        // Persist token to backend so PO can see activity
+        fetch("/api/integrations/github/save-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accessToken: data.accessToken,
+            userLogin: userObj.login,
+            userName: userObj.name,
+            avatarUrl: userObj.avatarUrl,
+            linkedRepos: [],
+          }),
+        }).catch(() => {});
         setShowRepoSelector(true);
       } catch {
         setAuthError("OAuth exchange failed");
@@ -359,12 +416,24 @@ export function MyGithubActivity() {
     localStorage.removeItem(STORAGE_KEY);
   };
 
+  // Sync linked repos to backend so PO monitoring can use them
+  const syncLinkedReposToBackend = (repos: LinkedRepo[]) => {
+    fetch("/api/integrations/github/update-linked-repos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        linkedRepos: repos.map((r) => r.fullName),
+      }),
+    }).catch(() => {});
+  };
+
   // ---------- Repo toggle ----------
   const toggleRepo = (repo: LinkedRepo) => {
     setLinkedRepos((prev) => {
       const exists = prev.find((r) => r.id === repo.id);
       const next = exists ? prev.filter((r) => r.id !== repo.id) : [...prev, repo];
       saveGitHubState({ token: token!, user: user!, linkedRepos: next });
+      syncLinkedReposToBackend(next);
       return next;
     });
   };
@@ -373,8 +442,56 @@ export function MyGithubActivity() {
     setLinkedRepos((prev) => {
       const next = prev.filter((r) => r.id !== repoId);
       saveGitHubState({ token: token!, user: user!, linkedRepos: next });
+      syncLinkedReposToBackend(next);
       return next;
     });
+  };
+
+  // ---------- Create new repo ----------
+  const handleCreateRepo = async () => {
+    if (!token || !createRepoName.trim()) return;
+    setCreatingRepo(true);
+    setCreateRepoError(null);
+    setCreateRepoSuccess(null);
+    try {
+      const res = await fetch("/api/integrations/github/repos/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessToken: token,
+          name: createRepoName.trim(),
+          description: createRepoDesc.trim(),
+          isPrivate: createRepoPrivate,
+          autoInit: createRepoAutoInit,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setCreateRepoError(data.detail ?? data.error ?? "Failed to create repository");
+        setCreatingRepo(false);
+        return;
+      }
+      const newRepo: LinkedRepo = data.repo;
+      setLinkedRepos((prev) => {
+        const next = [...prev, newRepo];
+        saveGitHubState({ token: token!, user: user!, linkedRepos: next });
+        syncLinkedReposToBackend(next);
+        return next;
+      });
+      setAvailableRepos((prev) => [newRepo, ...prev]);
+      setCreateRepoSuccess(`Repository "${newRepo.fullName}" created and linked!`);
+      setTimeout(() => {
+        setShowCreateRepo(false);
+        setCreateRepoName("");
+        setCreateRepoDesc("");
+        setCreateRepoPrivate(true);
+        setCreateRepoAutoInit(true);
+        setCreateRepoSuccess(null);
+      }, 1500);
+    } catch {
+      setCreateRepoError("Failed to create repository");
+    }
+    setCreatingRepo(false);
   };
 
   // Filtered repos for selector
@@ -447,6 +564,12 @@ export function MyGithubActivity() {
                 <span className="text-xs text-[var(--text-tertiary)]">@{user?.login}</span>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setShowCreateRepo(true); setCreateRepoError(null); setCreateRepoSuccess(null); }}
+                  className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium border border-[var(--color-brand-secondary)]/30 text-[var(--color-brand-secondary)] hover:bg-[var(--color-brand-secondary)]/10 transition-colors cursor-pointer"
+                >
+                  <Plus size={12} /> New Repo
+                </button>
                 <button onClick={() => { setShowRepoSelector(true); fetchAvailableRepos(); }}
                   className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-surface-raised)] transition-colors cursor-pointer">
                   <GitBranch size={12} /> Manage Repos
@@ -547,6 +670,140 @@ export function MyGithubActivity() {
                 </div>
               </div>
             )}
+
+            {/* Create Repo Modal */}
+            <AnimatePresence>
+              {showCreateRepo && (
+                <>
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+                    onClick={() => setShowCreateRepo(false)}
+                  />
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                    className={cn(
+                      "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
+                      "w-[90vw] max-w-md",
+                      "rounded-2xl border border-[var(--border-subtle)]",
+                      "bg-[var(--bg-surface)]/95 backdrop-blur-xl",
+                      "shadow-2xl"
+                    )}
+                  >
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-subtle)]">
+                      <div>
+                        <h2 className="text-base font-semibold text-[var(--text-primary)]">Create Repository</h2>
+                        <p className="text-xs text-[var(--text-secondary)] mt-0.5">Create a new GitHub repository and link it to this project</p>
+                      </div>
+                      <button onClick={() => setShowCreateRepo(false)} className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-raised)] transition-colors cursor-pointer">
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    {/* Form */}
+                    <div className="px-6 py-5 space-y-4">
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium text-[var(--text-primary)]">Repository Name <span className="text-[var(--color-rag-red)]">*</span></label>
+                        <input
+                          type="text"
+                          value={createRepoName}
+                          onChange={(e) => setCreateRepoName(e.target.value)}
+                          placeholder="my-awesome-project"
+                          className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]/50 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-secondary)]/40"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium text-[var(--text-primary)]">Description</label>
+                        <input
+                          type="text"
+                          value={createRepoDesc}
+                          onChange={(e) => setCreateRepoDesc(e.target.value)}
+                          placeholder="A brief description of the repository"
+                          className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]/50 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-secondary)]/40"
+                        />
+                      </div>
+
+                      {/* Visibility toggle */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {createRepoPrivate ? <Lock size={14} className="text-[var(--text-secondary)]" /> : <Globe size={14} className="text-[var(--text-secondary)]" />}
+                          <span className="text-sm font-medium text-[var(--text-primary)]">{createRepoPrivate ? "Private" : "Public"}</span>
+                          <span className="text-xs text-[var(--text-secondary)]">
+                            {createRepoPrivate ? "Only you and collaborators" : "Anyone on the internet"}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => setCreateRepoPrivate(!createRepoPrivate)}
+                          className={cn(
+                            "relative h-6 w-11 rounded-full transition-colors cursor-pointer",
+                            createRepoPrivate ? "bg-[var(--color-brand-secondary)]" : "bg-[var(--border-subtle)]"
+                          )}
+                        >
+                          <span className={cn(
+                            "absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform",
+                            createRepoPrivate ? "translate-x-5" : "translate-x-0"
+                          )} />
+                        </button>
+                      </div>
+
+                      {/* Auto-init checkbox */}
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <button
+                          onClick={() => setCreateRepoAutoInit(!createRepoAutoInit)}
+                          className={cn(
+                            "flex h-5 w-5 items-center justify-center rounded border transition-colors",
+                            createRepoAutoInit ? "bg-[var(--color-brand-secondary)] border-[var(--color-brand-secondary)]" : "border-[var(--border-subtle)]"
+                          )}
+                        >
+                          {createRepoAutoInit && <Check size={12} className="text-white" />}
+                        </button>
+                        <span className="text-sm text-[var(--text-primary)]">Initialize with a README</span>
+                      </label>
+
+                      {createRepoError && (
+                        <div className="flex items-center gap-2 rounded-lg bg-[var(--color-rag-red)]/10 border border-[var(--color-rag-red)]/20 px-3 py-2">
+                          <AlertCircle size={14} className="text-[var(--color-rag-red)] shrink-0" />
+                          <span className="text-xs text-[var(--color-rag-red)]">{createRepoError}</span>
+                        </div>
+                      )}
+                      {createRepoSuccess && (
+                        <div className="flex items-center gap-2 rounded-lg bg-[var(--color-rag-green)]/10 border border-[var(--color-rag-green)]/20 px-3 py-2">
+                          <CheckCircle2 size={14} className="text-[var(--color-rag-green)] shrink-0" />
+                          <span className="text-xs text-[var(--color-rag-green)]">{createRepoSuccess}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Footer */}
+                    <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/30 rounded-b-2xl">
+                      <button onClick={() => setShowCreateRepo(false)} className="rounded-lg px-4 py-2 text-sm font-medium border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-raised)] transition-colors cursor-pointer">
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleCreateRepo}
+                        disabled={!createRepoName.trim() || creatingRepo}
+                        className={cn(
+                          "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white",
+                          "bg-[var(--color-brand-secondary)] hover:bg-[var(--color-brand-secondary)]/90",
+                          "transition-all cursor-pointer",
+                          "disabled:opacity-50 disabled:cursor-not-allowed"
+                        )}
+                      >
+                        {creatingRepo ? <><Loader2 size={14} className="animate-spin" /> Creating...</> : <><Plus size={14} /> Create Repository</>}
+                      </button>
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
           </>
         )}
 

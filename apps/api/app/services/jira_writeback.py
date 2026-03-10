@@ -42,6 +42,7 @@ JIRA_WRITEBACK_ALLOWLIST = frozenset([
     "assignee",
     "sprint_id",
     "story_points",
+    "status",
 ])
 
 ATLASSIAN_API_BASE = "https://api.atlassian.com"
@@ -464,3 +465,254 @@ def _add_audit_entry(
         metadata_=metadata,
     )
     db.add(entry)
+
+
+# ---------------------------------------------------------------------------
+# Jira helper: GET request (for transition discovery)
+# ---------------------------------------------------------------------------
+
+async def _jira_get(
+    url: str,
+    access_token: str,
+    auth_header: str | None = None,
+) -> dict:
+    """GET from Jira API."""
+    headers = {
+        "Authorization": auth_header or f"Bearer {access_token}",
+        "Accept": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        res = await client.get(url, headers=headers)
+        if res.is_error:
+            logger.error(f"Jira GET {url} failed: {res.status_code} {res.text[:300]}")
+            return {"error": f"Jira API error: {res.status_code}", "status_code": res.status_code}
+        return res.json()
+
+
+async def _find_transition(
+    base_url: str,
+    access_token: str,
+    issue_key: str,
+    target_name: str,
+    fallback_category: str,
+    auth_header: str | None = None,
+) -> dict | None:
+    """
+    Discover the right transition ID for an issue to reach the target status.
+
+    1. GET /rest/api/3/issue/{key}/transitions
+    2. Match by exact target status name (case-insensitive)
+    3. Fallback: match by statusCategory.key
+    """
+    result = await _jira_get(
+        f"{base_url}/rest/api/3/issue/{issue_key}/transitions",
+        access_token,
+        auth_header,
+    )
+
+    if "error" in result:
+        return None
+
+    transitions = result.get("transitions", [])
+    target_lower = target_name.lower().strip()
+
+    # Priority 1: exact name match
+    for t in transitions:
+        to_status = t.get("to", {})
+        if to_status.get("name", "").lower().strip() == target_lower:
+            return {"id": t["id"], "name": t.get("name", ""), "toStatus": to_status.get("name", "")}
+
+    # Priority 2: category match
+    for t in transitions:
+        to_status = t.get("to", {})
+        cat = to_status.get("statusCategory", {}).get("key", "")
+        if cat.lower() == fallback_category.lower():
+            return {"id": t["id"], "name": t.get("name", ""), "toStatus": to_status.get("name", "")}
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Board Status Write-Back — write board column changes to Jira via transitions
+# ---------------------------------------------------------------------------
+
+async def writeback_board_statuses(
+    db: AsyncSession,
+    org_id: str,
+    changes: list[dict],
+    approver_id: str = "system",
+) -> dict:
+    """
+    Write back board status changes from Plan2Sprint to Jira.
+
+    Each change dict: {
+        "workItemId": "internal-id",
+        "externalId": "PROJ-123",
+        "fromStatus": "TODO",
+        "toStatus": "IN_PROGRESS",
+        "title": "Item title",
+    }
+
+    For Jira, status changes require transitions:
+    1. GET available transitions for the issue
+    2. Find transition matching the target status
+    3. POST the transition to execute it
+
+    Returns: { synced: int, failed: int, errors: [...] }
+    """
+    from ..adapters.status_maps import reverse_map_jira_status
+
+    # 1. Get Jira connection
+    conn = await _get_jira_connection(db, org_id)
+    if not conn:
+        return {"error": "Jira not connected", "synced": 0, "failed": 0}
+
+    base_url, auth_header = _get_auth_info(conn)
+    if not base_url:
+        return {"error": "No Jira base URL", "synced": 0, "failed": 0}
+
+    access_token = await _get_valid_token(db, conn)
+
+    synced = 0
+    failed = 0
+    errors: list[str] = []
+    results: list[dict] = []
+
+    for change in changes:
+        external_id = change.get("externalId", "")
+        to_status = change.get("toStatus", "")
+        from_status = change.get("fromStatus", "")
+        title = change.get("title", external_id)
+        work_item_id = change.get("workItemId", "")
+
+        if not external_id or not to_status:
+            errors.append(f"Missing externalId or toStatus for change")
+            failed += 1
+            continue
+
+        # Map unified status to Jira target (name + fallback category)
+        target_name, fallback_category = reverse_map_jira_status(to_status)
+
+        try:
+            # Discover the right transition
+            transition = await _find_transition(
+                base_url, access_token, external_id,
+                target_name, fallback_category, auth_header,
+            )
+
+            if not transition:
+                msg = f"No transition found for {external_id} to reach '{target_name}'"
+                errors.append(msg)
+                failed += 1
+                _add_audit_entry(
+                    db, org_id, approver_id, "board_writeback_failed",
+                    "work_item", work_item_id, success=False,
+                    metadata={
+                        "tool": "jira",
+                        "externalId": external_id,
+                        "itemTitle": title,
+                        "targetStatus": target_name,
+                        "error": msg,
+                    },
+                )
+                results.append({"externalId": external_id, "ok": False, "error": msg})
+                continue
+
+            # Execute the transition
+            transition_result = await _jira_post(
+                f"{base_url}/rest/api/3/issue/{external_id}/transitions",
+                access_token,
+                {"transition": {"id": transition["id"]}},
+                auth_header,
+            )
+
+            if "error" in transition_result:
+                errors.append(f"Jira transition failed for {external_id}: {transition_result['error']}")
+                failed += 1
+                _add_audit_entry(
+                    db, org_id, approver_id, "board_writeback_failed",
+                    "work_item", work_item_id, success=False,
+                    metadata={
+                        "tool": "jira",
+                        "externalId": external_id,
+                        "itemTitle": title,
+                        "error": transition_result["error"],
+                    },
+                )
+                results.append({"externalId": external_id, "ok": False, "error": transition_result["error"]})
+                continue
+
+            # Add a comment
+            comment_body = {
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "Plan2Sprint Board Update", "marks": [{"type": "strong"}]},
+                            ],
+                        },
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": f"Status changed: {from_status} -> {to_status}\n"},
+                                {"type": "text", "text": f"Jira transition: {transition['name']} -> {transition['toStatus']}\n"},
+                                {"type": "text", "text": "Updated via Plan2Sprint sprint board"},
+                            ],
+                        },
+                    ],
+                },
+            }
+
+            try:
+                await _jira_post(
+                    f"{base_url}/rest/api/3/issue/{external_id}/comment",
+                    access_token,
+                    comment_body,
+                    auth_header,
+                )
+            except Exception as ce:
+                logger.warning(f"Failed to add board comment to {external_id}: {ce}")
+
+            synced += 1
+            results.append({
+                "externalId": external_id,
+                "ok": True,
+                "transitionUsed": transition["name"],
+                "jiraStatus": transition["toStatus"],
+            })
+
+            _add_audit_entry(
+                db, org_id, approver_id, "board_writeback",
+                "work_item", work_item_id, success=True,
+                metadata={
+                    "tool": "jira",
+                    "externalId": external_id,
+                    "itemTitle": title,
+                    "fromStatus": from_status,
+                    "toStatus": to_status,
+                    "transitionUsed": transition["name"],
+                    "jiraStatus": transition["toStatus"],
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"Jira board writeback error for {external_id}: {e}")
+            errors.append(f"Exception for {external_id}: {str(e)[:100]}")
+            failed += 1
+            _add_audit_entry(
+                db, org_id, approver_id, "board_writeback_failed",
+                "work_item", work_item_id, success=False,
+                metadata={
+                    "tool": "jira",
+                    "externalId": external_id,
+                    "error": str(e)[:200],
+                },
+            )
+
+    await db.commit()
+
+    logger.info(f"Jira board writeback: {synced} synced, {failed} failed")
+    return {"synced": synced, "failed": failed, "errors": errors, "results": results}

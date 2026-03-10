@@ -251,11 +251,16 @@ async def upsert_work_items(
             existing.title = clean_data.get("title") or existing.title
             existing.description = clean_data.get("description") or existing.description
             existing.status = clean_data.get("status") or existing.status
+            existing.source_status = clean_data.get("source_status") or existing.source_status
             existing.story_points = clean_data.get("story_points")
             existing.priority = clean_data.get("priority", existing.priority)
             existing.type = clean_data.get("type") or existing.type
             existing.labels = clean_data.get("labels", existing.labels)
             existing.acceptance_criteria = clean_data.get("acceptance_criteria") or existing.acceptance_criteria
+            if clean_data.get("planned_start"):
+                existing.planned_start = clean_data["planned_start"]
+            if clean_data.get("planned_end"):
+                existing.planned_end = clean_data["planned_end"]
             if assignee_id:
                 existing.assignee_id = assignee_id
             if iteration_id:
@@ -272,11 +277,14 @@ async def upsert_work_items(
                 title=clean_data.get("title", "Untitled"),
                 description=clean_data.get("description"),
                 status=clean_data.get("status", "TODO"),
+                source_status=clean_data.get("source_status"),
                 story_points=clean_data.get("story_points"),
                 priority=clean_data.get("priority", 2),
                 type=clean_data.get("type", "story"),
                 labels=clean_data.get("labels", []),
                 acceptance_criteria=clean_data.get("acceptance_criteria"),
+                planned_start=clean_data.get("planned_start"),
+                planned_end=clean_data.get("planned_end"),
                 assignee_id=assignee_id,
                 iteration_id=iteration_id,
                 imported_project_id=project_id,
@@ -285,6 +293,47 @@ async def upsert_work_items(
             upserted_ids.append(item.id)
 
     await db.flush()
+
+    # ── Epic / parent ID resolution pass ──
+    # Build external_id → internal_id lookup for this org so we can
+    # resolve _parent_id (ADO) and _epic_key (Jira) to WorkItem.epic_id.
+    ext_to_internal: dict[str, str] = {}
+    lookup_result = await db.execute(
+        select(WorkItem.external_id, WorkItem.id).where(
+            WorkItem.organization_id == org_id,
+        )
+    )
+    for row in lookup_result.all():
+        ext_to_internal[row[0]] = row[1]
+
+    epic_updates = 0
+    for wi in items:
+        parent_ext = wi.get("_parent_id")   # ADO: System.Parent external ID
+        epic_key = wi.get("_epic_key")       # Jira: Epic link key
+        resolved_id = None
+
+        if parent_ext and parent_ext in ext_to_internal:
+            resolved_id = ext_to_internal[parent_ext]
+        elif epic_key and epic_key in ext_to_internal:
+            resolved_id = ext_to_internal[epic_key]
+
+        if resolved_id:
+            result = await db.execute(
+                select(WorkItem).where(
+                    WorkItem.organization_id == org_id,
+                    WorkItem.external_id == wi["external_id"],
+                    WorkItem.source_tool == wi.get("source_tool", "ADO"),
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing and existing.epic_id != resolved_id:
+                existing.epic_id = resolved_id
+                epic_updates += 1
+
+    if epic_updates:
+        logger.info(f"Resolved epic_id for {epic_updates} work items in org {org_id}")
+        await db.flush()
+
     return upserted_ids
 
 

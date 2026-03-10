@@ -16,6 +16,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useCallback,
   useMemo,
@@ -194,20 +195,33 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   }, [liveProjects, initialized]);
 
   // Save preference to DB whenever selectedProject changes (after init)
+  // Debounced to avoid rapid-fire POSTs during initialization cascade
+  const savePrefTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!initialized) return;
 
-    const projectId = selectedProject?.internalId ?? null;
-    fetch("/api/projects/preferences/selected", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId }),
-    }).catch(() => {});
+    if (savePrefTimer.current) clearTimeout(savePrefTimer.current);
+    savePrefTimer.current = setTimeout(() => {
+      const projectId = selectedProject?.internalId ?? null;
+      fetch("/api/projects/preferences/selected", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId }),
+      }).catch(() => {});
+    }, 500); // 500ms debounce
+
+    return () => {
+      if (savePrefTimer.current) clearTimeout(savePrefTimer.current);
+    };
   }, [selectedProject, initialized]);
 
   const selectProject = useCallback((project: ProjectItem | null) => {
     setSelectedProject(project);
   }, []);
+
+  // Use ref for selectedProject to avoid re-creating refreshProjects on every selection
+  const selectedProjectRef = useRef(selectedProject);
+  selectedProjectRef.current = selectedProject;
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -229,16 +243,17 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
       setProjects(newProjects);
 
       // If current selection no longer exists, reset to first
+      const current = selectedProjectRef.current;
       if (
-        selectedProject &&
-        !newProjects.some((p) => p.internalId === selectedProject.internalId)
+        current &&
+        !newProjects.some((p) => p.internalId === current.internalId)
       ) {
         setSelectedProject(newProjects[0] ?? null);
       }
     } catch {
       // ignore
     }
-  }, [selectedProject]);
+  }, []); // No dependency on selectedProject — uses ref instead
 
   const value = useMemo(
     () => ({

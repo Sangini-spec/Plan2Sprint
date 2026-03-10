@@ -25,11 +25,64 @@ from urllib.parse import urlencode, quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select as sa_select
 from ...auth.supabase import get_current_user
+from ...database import get_db
 from ...config import settings
 import httpx
 
 router = APIRouter()
+
+
+# ===================================================================
+# HELPERS: GitHub connection persistence
+# ===================================================================
+
+async def _get_github_connection(db: AsyncSession, org_id: str):
+    """Get stored GitHub ToolConnection for this org."""
+    from ...models.tool_connection import ToolConnection
+    result = await db.execute(
+        sa_select(ToolConnection).where(
+            ToolConnection.organization_id == org_id,
+            ToolConnection.source_tool == "GITHUB",
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _save_github_connection(
+    db: AsyncSession, org_id: str, access_token: str,
+    user_login: str = "", user_name: str = "", avatar_url: str = "",
+    linked_repos: list[str] | None = None,
+):
+    """Create or update GitHub ToolConnection with access token."""
+    from ...models.tool_connection import ToolConnection
+    from ...models.base import generate_cuid
+
+    conn = await _get_github_connection(db, org_id)
+    config = {
+        "user_login": user_login,
+        "user_name": user_name,
+        "avatar_url": avatar_url,
+        "linked_repos": linked_repos or [],
+    }
+
+    if conn:
+        conn.access_token = access_token
+        conn.config = {**(conn.config or {}), **config}
+    else:
+        conn = ToolConnection(
+            id=generate_cuid(),
+            organization_id=org_id,
+            source_tool="GITHUB",
+            access_token=access_token,
+            config=config,
+        )
+        db.add(conn)
+
+    await db.commit()
+    return conn
 
 # ---------------------------------------------------------------------------
 # Mock data (matches integration-data.ts)
@@ -71,6 +124,35 @@ def _gh_auth_headers(access_token: str) -> dict:
         **_GH_HEADERS,
         "Authorization": f"Bearer {access_token}",
     }
+
+
+# ===================================================================
+# STATUS — used by IntegrationProvider to mark GitHub as "connected"
+# ===================================================================
+
+@router.get("/status")
+async def github_status(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    GET /status
+    Returns whether a GitHub ToolConnection exists for this org.
+    The PO's integration context uses this to decide if the GitHub
+    page should show the connected view.
+    """
+    org_id = current_user.get("organization_id", "")
+    conn = await _get_github_connection(db, org_id)
+    if conn and conn.access_token:
+        cfg = conn.config or {}
+        return {
+            "connected": True,
+            "user_login": cfg.get("user_login", ""),
+            "user_name": cfg.get("user_name", ""),
+            "avatar_url": cfg.get("avatar_url", ""),
+            "connected_at": conn.created_at.isoformat() if conn.created_at else None,
+        }
+    return {"connected": False}
 
 
 # ===================================================================
@@ -264,6 +346,57 @@ async def oauth_callback(
 
 
 # ===================================================================
+# TOKEN PERSISTENCE
+# ===================================================================
+
+@router.post("/save-token")
+async def save_github_token(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /save-token — persist GitHub access token + linked repos to DB.
+
+    Called by the developer frontend after GitHub OAuth to store the token
+    so the PO's GitHub monitoring can fetch live data.
+    """
+    access_token = body.get("accessToken", "")
+    user_login = body.get("userLogin", "")
+    user_name = body.get("userName", "")
+    avatar_url = body.get("avatarUrl", "")
+    linked_repos = body.get("linkedRepos", [])
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail="accessToken is required")
+
+    org_id = current_user.get("organization_id", "demo-org")
+    await _save_github_connection(
+        db, org_id, access_token,
+        user_login=user_login, user_name=user_name,
+        avatar_url=avatar_url, linked_repos=linked_repos,
+    )
+    return {"ok": True}
+
+
+@router.post("/update-linked-repos")
+async def update_linked_repos(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /update-linked-repos — update the list of repos tracked for PO monitoring."""
+    linked_repos = body.get("linkedRepos", [])
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_github_connection(db, org_id)
+    if conn:
+        config = conn.config or {}
+        config["linked_repos"] = linked_repos
+        conn.config = config
+        await db.commit()
+    return {"ok": True}
+
+
+# ===================================================================
 # REPOS
 # ===================================================================
 
@@ -343,6 +476,89 @@ async def fetch_repos(
         for r in repos
     ]
     return {"repos": mapped}
+
+
+@router.post("/repos/create")
+async def create_repo(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """POST /repos/create -- create a new GitHub repository."""
+    access_token = body.get("accessToken")
+    name = (body.get("name") or "").strip()
+    description = (body.get("description") or "").strip()
+    is_private = body.get("isPrivate", True)
+    auto_init = body.get("autoInit", True)
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Missing access token")
+    if not name:
+        raise HTTPException(status_code=400, detail="Repository name is required")
+
+    # Demo mode: return a mock created repo
+    if settings.is_demo_mode:
+        return {
+            "success": True,
+            "repo": {
+                "id": f"gr-demo-{name}",
+                "name": name,
+                "fullName": f"demo-user/{name}",
+                "defaultBranch": "main",
+                "url": f"https://github.com/demo-user/{name}",
+                "isPrivate": is_private,
+                "language": None,
+                "description": description,
+                "owner": "demo-user",
+            },
+        }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            res = await client.post(
+                "https://api.github.com/user/repos",
+                json={
+                    "name": name,
+                    "description": description,
+                    "private": is_private,
+                    "auto_init": auto_init,
+                },
+                headers=_gh_auth_headers(access_token),
+            )
+            if res.is_error:
+                err_data = {}
+                try:
+                    err_data = res.json()
+                except Exception:
+                    pass
+                raise HTTPException(
+                    status_code=res.status_code,
+                    detail=err_data.get(
+                        "message",
+                        f"GitHub API error: {res.status_code}",
+                    ),
+                )
+            data = res.json()
+        except httpx.RequestError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create repo: {str(e)}",
+            )
+
+    return {
+        "success": True,
+        "repo": {
+            "id": str(data.get("id")),
+            "name": data.get("name"),
+            "fullName": data.get("full_name"),
+            "defaultBranch": data.get("default_branch", "main"),
+            "url": data.get("html_url"),
+            "isPrivate": data.get("private", False),
+            "language": data.get("language"),
+            "description": data.get("description"),
+            "updatedAt": data.get("updated_at"),
+            "owner": (data.get("owner") or {}).get("login"),
+        },
+    }
 
 
 # ===================================================================
@@ -726,47 +942,157 @@ async def fetch_events(
 # ===================================================================
 
 @router.post("/webhooks")
-async def receive_webhook(request: Request):
+async def receive_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """
     POST /webhooks
-    Receive GitHub webhook events.
-    Verifies HMAC-SHA256 signature using webhook secret.
+    Receive GitHub webhook events and auto-track sprint progress.
+
+    This is the CORE of Plan2Sprint's real-time tracking:
+      - push events: commits → link to work items → auto-move to IN_PROGRESS
+      - pull_request events: PR merge → link to work items → auto-move to DONE
+      - check_run events: CI status → update PR records
+
+    After any work-item status change, checks if the sprint is now 100% done
+    and auto-completes it if so.
     """
+    import logging
+    _logger = logging.getLogger(__name__)
+
     try:
         signature = request.headers.get("x-hub-signature-256")
         event = request.headers.get("x-github-event")
         body_bytes = await request.body()
         body_text = body_bytes.decode("utf-8")
 
-        # TODO: Verify webhook signature
-        # webhook_secret = settings.github_webhook_secret
-        # if not verify_github_signature(body_text, signature, webhook_secret):
+        # TODO: Verify webhook HMAC-SHA256 signature when webhook_secret is configured
+        # webhook_secret = getattr(settings, "github_webhook_secret", None)
+        # if webhook_secret and not verify_github_signature(body_text, signature, webhook_secret):
         #     raise HTTPException(status_code=401, detail="Invalid signature")
 
         payload = json.loads(body_text)
 
-        # Process webhook event
-        if event == "pull_request":
-            # TODO: Update local PullRequest record
-            pass
-        elif event == "push":
-            # TODO: Update local Commit records
-            pass
-        elif event in ("check_run", "check_suite"):
-            # TODO: Update CI status on linked PullRequest
-            pass
-        else:
-            # Log unhandled event type
-            pass
+        # Determine org_id from the repository's linked connection
+        repo_full_name = payload.get("repository", {}).get("full_name", "")
+        org_id = await _resolve_org_from_repo(db, repo_full_name)
 
-        # TODO: Append to audit log
+        if not org_id:
+            _logger.warning(
+                f"GitHub webhook for unknown repo '{repo_full_name}' — no org match"
+            )
+            return {"received": True, "event": event, "skipped": True}
+
+        from ...services.github_tracker import (
+            process_push_event,
+            process_pull_request_event,
+            process_check_event,
+        )
+
+        tracker_result: dict = {}
+        items_changed = False
+
+        # ── Process webhook events via GitHub Tracker service ──
+        if event == "push":
+            tracker_result = await process_push_event(db, org_id, payload)
+            items_changed = tracker_result.get("itemsUpdated", 0) > 0
+
+        elif event == "pull_request":
+            tracker_result = await process_pull_request_event(db, org_id, payload)
+            items_changed = tracker_result.get("itemsUpdated", 0) > 0
+
+        elif event == "pull_request_review":
+            # Review events also go through PR handler (action="submitted")
+            tracker_result = await process_pull_request_event(db, org_id, payload)
+            items_changed = tracker_result.get("itemsUpdated", 0) > 0
+
+        elif event in ("check_run", "check_suite"):
+            tracker_result = await process_check_event(db, org_id, payload)
+
+        else:
+            _logger.debug(f"Unhandled GitHub event type: {event}")
+
+        # ── If any work items changed status, check for sprint completion ──
+        if items_changed:
+            try:
+                from ...services.sprint_completion import check_and_complete_sprints
+                completed = await check_and_complete_sprints(db, org_id)
+                if completed:
+                    tracker_result["sprintsCompleted"] = [
+                        c["iterationName"] for c in completed
+                    ]
+                    _logger.info(
+                        f"[GitHub Webhook] Sprint auto-completed after "
+                        f"GitHub activity: {tracker_result['sprintsCompleted']}"
+                    )
+            except Exception as e:
+                _logger.warning(f"Sprint completion check after webhook failed: {e}")
+
+        # ── Broadcast real-time update to connected dashboards ──
+        if items_changed:
+            try:
+                from ...services.ws_manager import ws_manager
+                await ws_manager.broadcast(org_id, {
+                    "type": "github_activity",
+                    "data": {
+                        "event": event,
+                        "repo": repo_full_name,
+                        "itemsUpdated": tracker_result.get("itemsUpdated", 0),
+                        "transitions": tracker_result.get("transitions", []),
+                    },
+                })
+            except Exception as e:
+                _logger.warning(f"WebSocket broadcast after webhook failed: {e}")
+
+        await db.commit()
+
         return {
             "received": True,
             "event": event,
             "action": payload.get("action"),
+            "processed": tracker_result,
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
-    except Exception:
+    except Exception as e:
+        import logging as _log
+        _log.getLogger(__name__).exception("Webhook processing failed")
         raise HTTPException(
-            status_code=500, detail="Webhook processing failed"
+            status_code=500, detail=f"Webhook processing failed: {str(e)}"
         )
+
+
+async def _resolve_org_from_repo(
+    db: AsyncSession, repo_full_name: str
+) -> str | None:
+    """
+    Find the organization_id that owns a given GitHub repo.
+    Checks ToolConnection config for linked_repos containing this repo name.
+    """
+    if not repo_full_name:
+        return None
+
+    from ...models.tool_connection import ToolConnection
+
+    result = await db.execute(
+        sa_select(ToolConnection).where(
+            ToolConnection.source_tool == "GITHUB",
+        )
+    )
+    connections = result.scalars().all()
+
+    for conn in connections:
+        config = conn.config_ or {}
+        linked_repos = config.get("linked_repos", [])
+        if repo_full_name in linked_repos:
+            return conn.organization_id
+
+    # Fallback: check repositories table
+    from ...models.repository import Repository
+    result = await db.execute(
+        sa_select(Repository).where(
+            Repository.full_name == repo_full_name,
+        ).limit(1)
+    )
+    repo = result.scalar_one_or_none()
+    return repo.organization_id if repo else None

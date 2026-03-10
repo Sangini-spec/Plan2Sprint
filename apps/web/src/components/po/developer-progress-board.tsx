@@ -40,7 +40,7 @@ export function DeveloperProgressBoard() {
   const { selectedProject } = useSelectedProject();
   const [team, setTeam] = useState<TeamMemberData[]>([]);
   const [loading, setLoading] = useState(true);
-  const refreshKey = useAutoRefresh(["sync_complete", "writeback_success"]);
+  const refreshKey = useAutoRefresh(["sync_complete", "writeback_success", "github_activity"]);
 
   const projectId = selectedProject?.internalId;
 

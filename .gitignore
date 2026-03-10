@@ -29,6 +29,11 @@ apps/web/src/generated/
 .DS_Store
 Thumbs.db
 nul
+NUL
+
+# TypeScript build info
+tsconfig.tsbuildinfo
+*.tsbuildinfo
 
 # Debug logs
 npm-debug.log*

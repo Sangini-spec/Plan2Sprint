@@ -307,7 +307,9 @@ async def fetch_sprint_context(
                     f"&fields=System.Id,System.Title,System.AssignedTo,System.State,"
                     f"System.WorkItemType,Microsoft.VSTS.Scheduling.StoryPoints,"
                     f"System.IterationPath,System.Description,System.Tags,"
-                    f"Microsoft.VSTS.Common.Priority,Microsoft.VSTS.Common.AcceptanceCriteria"
+                    f"Microsoft.VSTS.Common.Priority,Microsoft.VSTS.Common.AcceptanceCriteria,"
+                    f"System.Parent,Microsoft.VSTS.Scheduling.StartDate,"
+                    f"Microsoft.VSTS.Scheduling.TargetDate"
                     f"&api-version=7.1",
                     access_token,
                     auth_header,
@@ -342,7 +344,9 @@ async def fetch_sprint_context(
                 f"&fields=System.Id,System.Title,System.AssignedTo,System.State,"
                 f"System.WorkItemType,Microsoft.VSTS.Scheduling.StoryPoints,"
                 f"System.IterationPath,System.Description,System.Tags,"
-                f"Microsoft.VSTS.Common.Priority,Microsoft.VSTS.Common.AcceptanceCriteria"
+                f"Microsoft.VSTS.Common.Priority,Microsoft.VSTS.Common.AcceptanceCriteria,"
+                f"System.Parent,Microsoft.VSTS.Scheduling.StartDate,"
+                f"Microsoft.VSTS.Scheduling.TargetDate"
                 f"&api-version=7.1",
                 access_token,
                 auth_header,

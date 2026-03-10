@@ -169,3 +169,130 @@ async def calculate_velocity_profiles(
     )
 
     return velocity_map
+
+
+async def record_sprint_velocity(
+    db: AsyncSession,
+    org_id: str,
+    iteration_id: str,
+) -> dict[str, dict]:
+    """
+    Record per-sprint VelocityProfile entries for all team members.
+
+    Called when a sprint is completed. Creates one VelocityProfile row per
+    team member WITH iteration_id set, so the analytics trend chart can
+    show per-sprint planned vs completed SP.
+
+    Returns: { member_id: { planned_sp, completed_sp, rolling_average } }
+    """
+    # Load the iteration
+    iter_result = await db.execute(
+        select(Iteration).where(Iteration.id == iteration_id)
+    )
+    iteration = iter_result.scalar_one_or_none()
+    if not iteration:
+        logger.warning(f"Iteration {iteration_id} not found for velocity recording")
+        return {}
+
+    # Check if we already recorded velocity for this iteration (idempotent)
+    existing_check = await db.execute(
+        select(func.count())
+        .select_from(VelocityProfile)
+        .where(VelocityProfile.iteration_id == iteration_id)
+    )
+    if (existing_check.scalar() or 0) > 0:
+        logger.info(f"Velocity already recorded for iteration {iteration_id}")
+        return {}
+
+    # Load team members
+    members_result = await db.execute(
+        select(TeamMember).where(TeamMember.organization_id == org_id)
+    )
+    members = list(members_result.scalars().all())
+    if not members:
+        return {}
+
+    velocity_records: dict[str, dict] = {}
+
+    for member in members:
+        # Planned SP: all work items assigned to this member in this iteration
+        planned_result = await db.execute(
+            select(func.coalesce(func.sum(WorkItem.story_points), 0))
+            .where(
+                WorkItem.assignee_id == member.id,
+                WorkItem.iteration_id == iteration_id,
+            )
+        )
+        planned_sp = float(planned_result.scalar() or 0)
+
+        # Completed SP: only items with DONE/Closed status
+        completed_result = await db.execute(
+            select(func.coalesce(func.sum(WorkItem.story_points), 0))
+            .where(
+                WorkItem.assignee_id == member.id,
+                WorkItem.iteration_id == iteration_id,
+                WorkItem.status.in_(["DONE", "Closed", "CLOSED", "Done"]),
+            )
+        )
+        completed_sp = float(completed_result.scalar() or 0)
+
+        # Skip members with no assignment in this sprint
+        if planned_sp == 0 and completed_sp == 0:
+            continue
+
+        # Calculate rolling average from historical per-sprint records
+        hist_result = await db.execute(
+            select(VelocityProfile.completed_sp)
+            .where(
+                VelocityProfile.team_member_id == member.id,
+                VelocityProfile.iteration_id.isnot(None),
+            )
+            .order_by(VelocityProfile.recorded_at.desc())
+            .limit(10)
+        )
+        past_completions = [float(r[0]) for r in hist_result.all()]
+        all_completions = [completed_sp] + past_completions
+        rolling_avg = round(sum(all_completions) / len(all_completions), 1)
+
+        # By ticket type breakdown
+        type_result = await db.execute(
+            select(WorkItem.type, func.sum(WorkItem.story_points))
+            .where(
+                WorkItem.assignee_id == member.id,
+                WorkItem.iteration_id == iteration_id,
+                WorkItem.status.in_(["DONE", "Closed", "CLOSED", "Done"]),
+            )
+            .group_by(WorkItem.type)
+        )
+        by_type = {
+            (r[0] or "story").lower(): float(r[1] or 0)
+            for r in type_result.all()
+        }
+
+        profile = VelocityProfile(
+            id=generate_cuid(),
+            team_member_id=member.id,
+            iteration_id=iteration_id,
+            planned_sp=planned_sp,
+            completed_sp=completed_sp,
+            rolling_average=rolling_avg,
+            by_ticket_type=by_type,
+            is_cold_start=len(all_completions) < 3,
+        )
+        db.add(profile)
+
+        velocity_records[member.id] = {
+            "planned_sp": planned_sp,
+            "completed_sp": completed_sp,
+            "rolling_average": rolling_avg,
+            "by_type": by_type,
+        }
+
+    await db.flush()
+
+    logger.info(
+        f"Per-sprint velocity recorded for iteration {iteration_id}: "
+        f"{len(velocity_records)} members"
+    )
+
+    return velocity_records

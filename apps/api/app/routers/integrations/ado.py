@@ -54,6 +54,8 @@ ADO_WRITEBACK_ALLOWLIST: frozenset[str] = frozenset([
     "System.AssignedTo",
     "System.IterationPath",
     "Microsoft.VSTS.Scheduling.StoryPoints",
+    "Microsoft.VSTS.Scheduling.StartDate",
+    "Microsoft.VSTS.Scheduling.TargetDate",
 ])
 
 # ---------------------------------------------------------------------------
@@ -808,6 +810,9 @@ async def fetch_or_writeback_work_items(
                 "createdDate": (wi.get("fields") or {}).get("System.CreatedDate"),
                 "changedDate": (wi.get("fields") or {}).get("System.ChangedDate"),
                 "description": (wi.get("fields") or {}).get("System.Description"),
+                "parentId": (wi.get("fields") or {}).get("System.Parent"),
+                "startDate": (wi.get("fields") or {}).get("Microsoft.VSTS.Scheduling.StartDate"),
+                "targetDate": (wi.get("fields") or {}).get("Microsoft.VSTS.Scheduling.TargetDate"),
             }
             for wi in details_data.get("value", [])
         ]
@@ -940,6 +945,473 @@ async def fetch_team_members(
             continue
 
     return {"members": all_members}
+
+
+# ===================================================================
+# BOARD COLUMNS
+# ===================================================================
+
+@router.post("/board-columns")
+async def fetch_board_columns(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /board-columns — fetch actual board column configuration from ADO.
+
+    Uses the ADO Boards API (not states/boardcolumns) to get the real board
+    columns including stateMappings so items can be slotted correctly.
+    """
+    project_name = body.get("projectName")
+    team_name = body.get("teamName")  # optional
+
+    _SIX_COL_FALLBACK = [
+        {"id": "new", "name": "New", "order": 0, "category": "Proposed"},
+        {"id": "ready", "name": "Ready", "order": 1, "category": "Proposed"},
+        {"id": "in_progress", "name": "In Progress", "order": 2, "category": "InProgress"},
+        {"id": "testing", "name": "Testing", "order": 3, "category": "InProgress"},
+        {"id": "migrate", "name": "Migrate", "order": 4, "category": "InProgress"},
+        {"id": "closed", "name": "Closed", "order": 5, "category": "Completed"},
+    ]
+
+    if settings.is_demo_mode:
+        return {"columns": _SIX_COL_FALLBACK}
+
+    if not project_name:
+        raise HTTPException(status_code=400, detail="projectName is required")
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="ADO not connected")
+
+    org_url, auth_header = _get_ado_auth_info(conn)
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+
+    if auth_method == "oauth2":
+        access_token = await _get_valid_access_token(db, conn)
+    else:
+        access_token = ""
+
+    team_path = team_name or f"{project_name} Team"
+
+    # ------------------------------------------------------------------
+    # Strategy 1: List boards, pick the first, get its columns
+    # ADO API: GET /{project}/{team}/_apis/work/boards?api-version=7.0
+    #          GET /{project}/{team}/_apis/work/boards/{boardId}/columns?api-version=7.0
+    # ------------------------------------------------------------------
+    try:
+        boards_data = await _ado_api(
+            "GET",
+            f"{org_url}/{project_name}/{team_path}/_apis/work/boards?api-version=7.0",
+            access_token,
+            auth_header=auth_header,
+        )
+        boards = boards_data.get("value", [])
+
+        # Pick the primary board (usually "Stories" or first board)
+        board_name = None
+        for b in boards:
+            name = b.get("name", "")
+            if name.lower() in ("stories", "backlog items", "epics"):
+                board_name = name
+                break
+        if not board_name and boards:
+            board_name = boards[0].get("name", "Stories")
+
+        if board_name:
+            col_data = await _ado_api(
+                "GET",
+                f"{org_url}/{project_name}/{team_path}/_apis/work/boards/{board_name}/columns?api-version=7.0",
+                access_token,
+                auth_header=auth_header,
+            )
+            raw_columns = col_data.get("value", col_data.get("columns", []))
+            if raw_columns:
+                columns = [
+                    {
+                        "id": col.get("id", col.get("name", "").lower().replace(" ", "_")),
+                        "name": col.get("name", ""),
+                        "order": idx,
+                        "category": col.get("columnType", "inProgress"),
+                        "stateMappings": col.get("stateMappings", {}),
+                    }
+                    for idx, col in enumerate(raw_columns)
+                ]
+                return {"columns": columns}
+
+    except Exception:
+        pass  # Fall through to strategy 2
+
+    # ------------------------------------------------------------------
+    # Strategy 2: Try the team-default board path directly
+    # ------------------------------------------------------------------
+    for board_guess in ["Stories", "Backlog items", "Backlog%20items"]:
+        try:
+            col_data = await _ado_api(
+                "GET",
+                f"{org_url}/{project_name}/{team_path}/_apis/work/boards/{board_guess}/columns?api-version=7.0",
+                access_token,
+                auth_header=auth_header,
+            )
+            raw_columns = col_data.get("value", col_data.get("columns", []))
+            if raw_columns:
+                columns = [
+                    {
+                        "id": col.get("id", col.get("name", "").lower().replace(" ", "_")),
+                        "name": col.get("name", ""),
+                        "order": idx,
+                        "category": col.get("columnType", "inProgress"),
+                        "stateMappings": col.get("stateMappings", {}),
+                    }
+                    for idx, col in enumerate(raw_columns)
+                ]
+                return {"columns": columns}
+        except Exception:
+            continue
+
+    # ------------------------------------------------------------------
+    # Strategy 3: Try with project name as team (ADO default team = project name)
+    # ------------------------------------------------------------------
+    if team_path != project_name:
+        try:
+            boards_data = await _ado_api(
+                "GET",
+                f"{org_url}/{project_name}/{project_name}/_apis/work/boards?api-version=7.0",
+                access_token,
+                auth_header=auth_header,
+            )
+            boards = boards_data.get("value", [])
+            if boards:
+                board_name = boards[0].get("name", "Stories")
+                col_data = await _ado_api(
+                    "GET",
+                    f"{org_url}/{project_name}/{project_name}/_apis/work/boards/{board_name}/columns?api-version=7.0",
+                    access_token,
+                    auth_header=auth_header,
+                )
+                raw_columns = col_data.get("value", col_data.get("columns", []))
+                if raw_columns:
+                    columns = [
+                        {
+                            "id": col.get("id", col.get("name", "").lower().replace(" ", "_")),
+                            "name": col.get("name", ""),
+                            "order": idx,
+                            "category": col.get("columnType", "inProgress"),
+                            "stateMappings": col.get("stateMappings", {}),
+                        }
+                        for idx, col in enumerate(raw_columns)
+                    ]
+                    return {"columns": columns}
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Final fallback: 6-column standard board
+    # ------------------------------------------------------------------
+    return {"columns": _SIX_COL_FALLBACK}
+
+
+# ===================================================================
+# REFRESH BOARD ITEMS — re-fetch titles + states from ADO for all
+# work items in a project and update existing DB records
+# ===================================================================
+
+@router.post("/refresh-board-items")
+async def refresh_board_items(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /refresh-board-items — fetch CURRENT SPRINT items from ADO board.
+
+    Uses @CurrentIteration WIQL macro so the result matches exactly what the
+    ADO board shows.  Returns parsed items directly so the frontend can
+    render them without a second DB query.
+    """
+    from ...models.work_item import WorkItem
+    from ...models.team_member import TeamMember
+    from ...models.imported_project import ImportedProject
+    from ...models.base import generate_cuid
+    from sqlalchemy import select as sa_select
+
+    project_name = body.get("projectName")
+    if not project_name:
+        raise HTTPException(status_code=400, detail="projectName is required")
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="ADO not connected")
+
+    org_url, auth_header = _get_ado_auth_info(conn)
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+
+    if auth_method == "oauth2":
+        access_token = await _get_valid_access_token(db, conn)
+    else:
+        access_token = ""
+
+    # 0. Resolve project_id from ImportedProject table
+    proj_result = await db.execute(
+        sa_select(ImportedProject).where(
+            ImportedProject.organization_id == org_id,
+            ImportedProject.name == project_name,
+        )
+    )
+    imported_project = proj_result.scalar_one_or_none()
+    project_id = imported_project.id if imported_project else None
+
+    # 1. Detect team name (needed for @CurrentIteration macro)
+    team_name = f"{project_name} Team"
+    try:
+        teams_data = await _ado_api(
+            "GET",
+            f"{org_url}/_apis/projects/{project_name}/teams?api-version=7.1",
+            access_token,
+            auth_header=auth_header,
+        )
+        teams_list = teams_data.get("value", [])
+        if teams_list:
+            team_name = teams_list[0].get("name", team_name)
+    except Exception:
+        pass  # Fall back to default team name
+
+    # 2. WIQL — @CurrentIteration scopes to what the ADO board shows
+    #    We use the team-scoped WIQL endpoint so the macro resolves correctly
+    wiql_current = {
+        "query": (
+            f"SELECT [System.Id] FROM WorkItems "
+            f"WHERE [System.TeamProject] = '{project_name}' "
+            f"AND [System.IterationPath] = @CurrentIteration "
+            f"AND [System.WorkItemType] IN ('User Story','Bug','Task','Feature') "
+            f"AND [System.State] <> 'Removed' "
+            f"ORDER BY [System.ChangedDate] DESC"
+        )
+    }
+
+    wi_ids: list[int] = []
+    wiql_mode = "current_iteration"
+
+    try:
+        # Team-scoped endpoint resolves @CurrentIteration
+        wiql_url = (
+            f"{org_url}/{project_name}/{team_name}/_apis/wit/wiql?api-version=7.1"
+        )
+        wiql_data = await _ado_api(
+            "POST", wiql_url, access_token,
+            json_body=wiql_current, auth_header=auth_header,
+        )
+        wi_ids = [wi["id"] for wi in wiql_data.get("workItems", [])][:500]
+    except Exception:
+        # Fallback: @CurrentIteration not supported or team mismatch
+        # Try without the team scope
+        try:
+            wiql_url_fallback = (
+                f"{org_url}/{project_name}/_apis/wit/wiql?api-version=7.1"
+            )
+            wiql_data = await _ado_api(
+                "POST", wiql_url_fallback, access_token,
+                json_body=wiql_current, auth_header=auth_header,
+            )
+            wi_ids = [wi["id"] for wi in wiql_data.get("workItems", [])][:500]
+        except Exception:
+            pass
+
+    # If @CurrentIteration returned nothing, fall back to ALL non-Removed items
+    if not wi_ids:
+        wiql_mode = "all_items"
+        wiql_all = {
+            "query": (
+                f"SELECT [System.Id] FROM WorkItems "
+                f"WHERE [System.TeamProject] = '{project_name}' "
+                f"AND [System.WorkItemType] IN ('User Story','Bug','Task','Feature') "
+                f"AND [System.State] <> 'Removed' "
+                f"ORDER BY [System.ChangedDate] DESC"
+            )
+        }
+        try:
+            wiql_data = await _ado_api(
+                "POST",
+                f"{org_url}/{project_name}/_apis/wit/wiql?api-version=7.1",
+                access_token,
+                json_body=wiql_all,
+                auth_header=auth_header,
+            )
+            wi_ids = [wi["id"] for wi in wiql_data.get("workItems", [])][:500]
+        except HTTPException:
+            return {"items": [], "updated": 0, "created": 0, "error": "WIQL failed"}
+
+    if not wi_ids:
+        return {"items": [], "updated": 0, "created": 0}
+
+    # 3. Batch fetch details with BoardColumn + AreaPath
+    all_raw_items: list[dict] = []
+    for i in range(0, len(wi_ids), 200):
+        chunk = wi_ids[i : i + 200]
+        ids_str = ",".join(str(x) for x in chunk)
+        try:
+            detail_data = await _ado_api(
+                "GET",
+                f"{org_url}/_apis/wit/workitems?ids={ids_str}"
+                f"&fields=System.Id,System.Title,System.State,"
+                f"System.AssignedTo,System.WorkItemType,"
+                f"Microsoft.VSTS.Scheduling.StoryPoints,"
+                f"Microsoft.VSTS.Scheduling.Effort,"
+                f"Microsoft.VSTS.Common.Priority,System.Tags,"
+                f"System.BoardColumn,System.AreaPath,"
+                f"System.IterationPath,System.Description,"
+                f"Microsoft.VSTS.Common.AcceptanceCriteria,"
+                f"System.Parent,Microsoft.VSTS.Scheduling.StartDate,"
+                f"Microsoft.VSTS.Scheduling.TargetDate"
+                f"&api-version=7.1",
+                access_token,
+                auth_header=auth_header,
+            )
+            all_raw_items.extend(detail_data.get("value", []))
+        except HTTPException:
+            continue
+
+    # 4. Build name→id lookup for assignee resolution
+    tm_result = await db.execute(
+        sa_select(TeamMember.display_name, TeamMember.id).where(
+            TeamMember.organization_id == org_id,
+        )
+    )
+    name_to_id: dict[str, str] = {}
+    for row in tm_result.all():
+        name_to_id[row[0].lower()] = row[1]
+
+    # 5. Upsert DB + build response items list
+    from ...adapters.status_maps import map_ado_status, map_ado_type, map_ado_priority
+
+    updated = 0
+    created = 0
+    response_items: list[dict] = []
+
+    for raw_item in all_raw_items:
+        fields = raw_item.get("fields") or {}
+        ext_id = str(raw_item.get("id", ""))
+        if not ext_id:
+            continue
+
+        # Parse fields
+        title = fields.get("System.Title", "") or "Untitled"
+        state = fields.get("System.State", "New")
+        board_column = fields.get("System.BoardColumn", "")
+        area_path = fields.get("System.AreaPath", "")
+        wi_type = fields.get("System.WorkItemType", "User Story")
+        sp = fields.get("Microsoft.VSTS.Scheduling.StoryPoints") or fields.get(
+            "Microsoft.VSTS.Scheduling.Effort"
+        )
+        priority = fields.get("Microsoft.VSTS.Common.Priority")
+        tags_str = fields.get("System.Tags", "") or ""
+        assigned_to = fields.get("System.AssignedTo") or {}
+        assigned_name = (
+            assigned_to.get("displayName")
+            if isinstance(assigned_to, dict)
+            else assigned_to
+        )
+
+        # Build labels — tags + area-path category (e.g. "Frontend" / "Backend")
+        labels: list[str] = [t.strip() for t in tags_str.split(";") if t.strip()]
+        if area_path:
+            segments = area_path.replace("\\", "/").split("/")
+            if len(segments) > 1:
+                area_cat = segments[-1].strip()
+                if area_cat and area_cat.lower() != project_name.lower():
+                    if area_cat not in labels:
+                        labels.insert(0, area_cat)
+
+        # Determine source_status: prefer BoardColumn (= actual column name)
+        source_status = board_column if board_column else state
+
+        # Resolve assignee FK
+        assignee_id = None
+        if assigned_name and isinstance(assigned_name, str):
+            assignee_id = name_to_id.get(assigned_name.lower())
+
+        # Story points
+        story_points = None
+        if sp is not None:
+            try:
+                story_points = float(sp)
+            except (ValueError, TypeError):
+                pass
+
+        # Build response item (returned to frontend directly)
+        response_items.append({
+            "id": ext_id,
+            "externalId": ext_id,
+            "title": title,
+            "status": map_ado_status(state),
+            "sourceStatus": source_status,
+            "type": map_ado_type(wi_type),
+            "priority": map_ado_priority(priority) if priority else 2,
+            "storyPoints": story_points,
+            "assignee": assigned_name if isinstance(assigned_name, str) else None,
+            "assigneeId": assignee_id,
+            "sourceTool": "ADO",
+            "labels": labels,
+        })
+
+        # DB upsert (keep DB in sync too)
+        result = await db.execute(
+            sa_select(WorkItem).where(
+                WorkItem.organization_id == org_id,
+                WorkItem.external_id == ext_id,
+                WorkItem.source_tool == "ADO",
+            )
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            existing.title = title
+            existing.source_status = source_status
+            existing.status = map_ado_status(state)
+            existing.type = map_ado_type(wi_type)
+            existing.labels = labels
+            existing.story_points = story_points
+            if priority is not None:
+                existing.priority = map_ado_priority(priority)
+            if assignee_id:
+                existing.assignee_id = assignee_id
+            if project_id:
+                existing.imported_project_id = project_id
+            updated += 1
+        else:
+            new_item = WorkItem(
+                id=generate_cuid(),
+                organization_id=org_id,
+                external_id=ext_id,
+                source_tool="ADO",
+                title=title,
+                description=fields.get("System.Description"),
+                status=map_ado_status(state),
+                source_status=source_status,
+                story_points=story_points,
+                priority=map_ado_priority(priority) if priority else 2,
+                type=map_ado_type(wi_type),
+                labels=labels,
+                acceptance_criteria=fields.get(
+                    "Microsoft.VSTS.Common.AcceptanceCriteria"
+                ),
+                assignee_id=assignee_id,
+                imported_project_id=project_id,
+            )
+            db.add(new_item)
+            created += 1
+
+    await db.commit()
+    return {
+        "items": response_items,
+        "updated": updated,
+        "created": created,
+        "total": len(all_raw_items),
+        "wiqlMode": wiql_mode,
+    }
 
 
 # ===================================================================

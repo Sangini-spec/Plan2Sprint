@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -290,6 +290,78 @@ async def send_notification(
         "notification_type": notification_type,
         "recipient": recipient_email,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/notifications — list recent in-app notifications for current user
+# ---------------------------------------------------------------------------
+
+@router.get("/notifications")
+async def list_notifications(
+    limit: int = Query(20, le=50),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return recent in-app notifications for the current user."""
+    from ..models.in_app_notification import InAppNotification
+
+    user_email = current_user.get("email", "")
+    org_id = current_user.get("organization_id", "demo-org")
+
+    result = await db.execute(
+        select(InAppNotification)
+        .where(
+            InAppNotification.organization_id == org_id,
+            InAppNotification.recipient_email == user_email,
+        )
+        .order_by(InAppNotification.created_at.desc())
+        .limit(limit)
+    )
+    rows = result.scalars().all()
+
+    return {
+        "notifications": [
+            {
+                "id": n.id,
+                "type": n.notification_type,
+                "title": n.title,
+                "message": n.body,
+                "time": n.created_at.isoformat() if n.created_at else "",
+                "read": n.read,
+            }
+            for n in rows
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/notifications/:id/read — mark as read
+# ---------------------------------------------------------------------------
+
+@router.patch("/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark a single in-app notification as read."""
+    from ..models.in_app_notification import InAppNotification
+
+    org_id = current_user.get("organization_id", "demo-org")
+
+    result = await db.execute(
+        select(InAppNotification).where(
+            InAppNotification.id == notification_id,
+            InAppNotification.organization_id == org_id,
+        )
+    )
+    notif = result.scalar_one_or_none()
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    notif.read = True
+    await db.commit()
+    return {"success": True}
 
 
 # ---------------------------------------------------------------------------

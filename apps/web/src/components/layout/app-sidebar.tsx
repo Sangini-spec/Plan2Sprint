@@ -39,36 +39,38 @@ interface NavItem {
   label: string;
   href: string;
   icon: LucideIcon;
+  /** Accent colour shown on the icon when the sidebar is collapsed (CSS colour) */
+  iconColor?: string;
 }
 
 const PO_NAV: NavItem[] = [
-  { label: "Dashboard", href: "/po", icon: LayoutDashboard },
-  { label: "Projects", href: "/po/projects", icon: FolderKanban },
-  { label: "Sprint Planning", href: "/po/planning", icon: Zap },
-  { label: "Standups", href: "/po/standups", icon: MessageSquareText },
-  { label: "GitHub", href: "/po/github", icon: Github },
-  { label: "Team Health", href: "/po/health", icon: HeartPulse },
-  { label: "Retrospectives", href: "/po/retro", icon: RotateCcw },
-  { label: "Channels", href: "/po/notifications", icon: Inbox },
+  { label: "Dashboard", href: "/po", icon: LayoutDashboard, iconColor: "#06b6d4" },
+  { label: "Projects", href: "/po/projects", icon: FolderKanban, iconColor: "#a78bfa" },
+  { label: "Sprint Planning", href: "/po/planning", icon: Zap, iconColor: "#f59e0b" },
+  { label: "Standups", href: "/po/standups", icon: MessageSquareText, iconColor: "#34d399" },
+  { label: "GitHub", href: "/po/github", icon: Github, iconColor: "#e879f9" },
+  { label: "Team Health", href: "/po/health", icon: HeartPulse, iconColor: "#f87171" },
+  { label: "Retrospectives", href: "/po/retro", icon: RotateCcw, iconColor: "#60a5fa" },
+  { label: "Channels", href: "/po/notifications", icon: Inbox, iconColor: "#fbbf24" },
 ];
 
 const DEV_NAV: NavItem[] = [
-  { label: "My Dashboard", href: "/dev", icon: LayoutDashboard },
-  { label: "My Standup", href: "/dev/standup", icon: MessageSquareText },
-  { label: "My Sprint", href: "/dev/sprint", icon: KanbanSquare },
-  { label: "My GitHub", href: "/dev/github", icon: GitPullRequest },
-  { label: "My Projects", href: "/dev/projects", icon: FolderKanban },
-  { label: "My Velocity", href: "/dev/velocity", icon: TrendingUp },
-  { label: "Channels", href: "/dev/notifications", icon: Inbox },
+  { label: "Dashboard", href: "/dev", icon: LayoutDashboard, iconColor: "#06b6d4" },
+  { label: "Standup", href: "/dev/standup", icon: MessageSquareText, iconColor: "#34d399" },
+  { label: "Sprint", href: "/dev/sprint", icon: KanbanSquare, iconColor: "#f59e0b" },
+  { label: "GitHub", href: "/dev/github", icon: GitPullRequest, iconColor: "#e879f9" },
+  { label: "Projects", href: "/dev/projects", icon: FolderKanban, iconColor: "#a78bfa" },
+  { label: "Velocity", href: "/dev/velocity", icon: TrendingUp, iconColor: "#fb923c" },
+  { label: "Channels", href: "/dev/notifications", icon: Inbox, iconColor: "#fbbf24" },
 ];
 
 const STAKEHOLDER_NAV: NavItem[] = [
-  { label: "Portfolio", href: "/stakeholder", icon: Briefcase },
-  { label: "Team Health", href: "/stakeholder/health", icon: HeartPulse },
-  { label: "Delivery", href: "/stakeholder/delivery", icon: BarChart3 },
-  { label: "Epics", href: "/stakeholder/epics", icon: Milestone },
-  { label: "Standup Status", href: "/stakeholder/standups", icon: MessageSquareText },
-  { label: "Export", href: "/stakeholder/export", icon: FileDown },
+  { label: "Portfolio", href: "/stakeholder", icon: Briefcase, iconColor: "#06b6d4" },
+  { label: "Team Health", href: "/stakeholder/health", icon: HeartPulse, iconColor: "#f87171" },
+  { label: "Delivery", href: "/stakeholder/delivery", icon: BarChart3, iconColor: "#34d399" },
+  { label: "Epics", href: "/stakeholder/epics", icon: Milestone, iconColor: "#a78bfa" },
+  { label: "Standup Status", href: "/stakeholder/standups", icon: MessageSquareText, iconColor: "#60a5fa" },
+  { label: "Export", href: "/stakeholder/export", icon: FileDown, iconColor: "#fbbf24" },
 ];
 
 function getNavForRole(role: UserRole): NavItem[] {
@@ -107,7 +109,7 @@ function SidebarThemeToggle({ collapsed }: { collapsed: boolean }) {
     <button
       onClick={() => setTheme(isDark ? "light" : "dark")}
       className={cn(
-        "flex items-center gap-3 rounded-xl px-3 py-2.5 w-full",
+        "flex items-center gap-2.5 rounded-lg px-3 py-2 w-full",
         "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
         "hover:bg-[var(--bg-surface-raised)]",
         "transition-all duration-200",
@@ -122,13 +124,13 @@ function SidebarThemeToggle({ collapsed }: { collapsed: boolean }) {
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 6, opacity: 0 }}
           transition={{ duration: 0.15 }}
-          className="flex h-5 w-5 items-center justify-center shrink-0"
+          className="flex h-4.5 w-4.5 items-center justify-center shrink-0"
         >
-          {isDark ? <Moon size={18} /> : <Sun size={18} />}
+          {isDark ? <Moon size={16} /> : <Sun size={16} />}
         </motion.span>
       </AnimatePresence>
       {!collapsed && (
-        <span className="text-sm font-medium">
+        <span className="text-[13px] font-medium">
           {isDark ? "Dark Mode" : "Light Mode"}
         </span>
       )}
@@ -190,7 +192,7 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
       )}
     >
       {/* Logo + collapse toggle */}
-      <div className="flex items-center justify-between px-4 py-4 border-b border-[var(--border-subtle)]">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
         <Link href="/" className="flex items-center gap-2 overflow-hidden">
           {collapsed ? (
             <Logo size="sm" iconOnly />
@@ -204,7 +206,7 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
             onMobileClose?.();
           }}
           className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-lg shrink-0",
+            "flex h-6 w-6 items-center justify-center rounded-lg shrink-0",
             "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
             "hover:bg-[var(--bg-surface-raised)]",
             "transition-colors duration-200",
@@ -219,19 +221,19 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4">
-        <ul className="space-y-1">
+      <nav className="flex-1 overflow-y-auto px-3 py-2">
+        <ul className="space-y-0.5">
           {navItems.map((item) => {
             const active = isActive(item.href);
-            const isNotifications = item.label === "Notifications";
+            const isNotifications = item.label === "Channels";
             return (
               <li key={item.href}>
                 <Link
                   href={item.href}
                   onClick={onMobileClose}
                   className={cn(
-                    "flex items-center gap-3 rounded-xl px-3 py-2.5",
-                    "text-sm font-medium transition-all duration-200",
+                    "flex items-center gap-2.5 rounded-lg px-3 py-2",
+                    "text-[13px] font-medium transition-all duration-200",
                     active
                       ? "bg-[var(--color-brand-secondary)]/10 text-[var(--color-brand-secondary)]"
                       : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-raised)]",
@@ -241,7 +243,8 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
                 >
                   <span className="relative shrink-0">
                     <item.icon
-                      size={20}
+                      size={18}
+                      style={!active && collapsed && item.iconColor ? { color: item.iconColor } : undefined}
                       className={cn(
                         active && "text-[var(--color-brand-secondary)]"
                       )}
@@ -266,27 +269,27 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
       </nav>
 
       {/* Bottom section */}
-      <div className="border-t border-[var(--border-subtle)] px-3 py-3 space-y-2">
+      <div className="border-t border-[var(--border-subtle)] px-3 py-2 space-y-1">
         {/* Theme toggle */}
         <SidebarThemeToggle collapsed={collapsed} />
 
         {/* User info */}
         <div
           className={cn(
-            "flex items-center gap-3 rounded-xl px-3 py-2.5",
+            "flex items-center gap-2.5 rounded-lg px-3 py-1.5",
             collapsed && "justify-center px-0"
           )}
         >
           {/* Avatar */}
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-secondary)]/20 text-sm font-semibold text-[var(--color-brand-secondary)]">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-secondary)]/20 text-xs font-semibold text-[var(--color-brand-secondary)]">
             {appUser?.full_name?.charAt(0)?.toUpperCase() ?? "U"}
           </div>
           {!collapsed && (
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-[var(--text-primary)] truncate">
+              <p className="text-[13px] font-medium text-[var(--text-primary)] truncate">
                 {appUser?.full_name ?? "User"}
               </p>
-              <p className="text-xs text-[var(--text-secondary)] truncate">
+              <p className="text-[11px] text-[var(--text-secondary)] truncate">
                 {ROLE_LABELS[role]}
               </p>
             </div>

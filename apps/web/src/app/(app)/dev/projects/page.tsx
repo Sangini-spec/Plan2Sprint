@@ -576,7 +576,7 @@ export default function DevProjectsPage() {
                     <>
                       <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search features & epics..." />
                       <SectionCard title="Features & Epics" icon={Layers} count={filterItems(categorized.features).length} emptyMessage="No features or epics found in this project.">
-                        {filterItems(categorized.features).map((item, i) => <WorkItemRow key={i} item={item} />)}
+                        {filterItems(categorized.features).map((item, i) => <WorkItemRow key={item.id} item={item} />)}
                       </SectionCard>
                     </>
                   )}
@@ -586,7 +586,7 @@ export default function DevProjectsPage() {
                     <>
                       <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search user stories..." />
                       <SectionCard title="User Stories" icon={BookOpen} count={filterItems(categorized.stories).length} emptyMessage="No user stories found in this project.">
-                        {filterItems(categorized.stories).map((item, i) => <WorkItemRow key={i} item={item} />)}
+                        {filterItems(categorized.stories).map((item, i) => <WorkItemRow key={item.id} item={item} />)}
                       </SectionCard>
                     </>
                   )}
@@ -617,7 +617,7 @@ export default function DevProjectsPage() {
                                 {items.length === 0 ? (
                                   <div className="py-6 text-center text-xs text-[var(--text-tertiary)]">No items assigned to this sprint.</div>
                                 ) : (
-                                  <div className="divide-y divide-[var(--border-subtle)]">{items.map((item, i) => <WorkItemRow key={i} item={item} />)}</div>
+                                  <div className="divide-y divide-[var(--border-subtle)]">{items.map((item, i) => <WorkItemRow key={item.id} item={item} />)}</div>
                                 )}
                               </div>
                             );
@@ -632,7 +632,7 @@ export default function DevProjectsPage() {
                     <>
                       <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search backlog (bugs, tasks...)..." />
                       <SectionCard title="Backlog" icon={ClipboardList} count={filterItems(categorized.backlog).length} emptyMessage="No bugs, tasks, or other items in backlog.">
-                        {filterItems(categorized.backlog).map((item, i) => <WorkItemRow key={i} item={item} />)}
+                        {filterItems(categorized.backlog).map((item, i) => <WorkItemRow key={item.id} item={item} />)}
                       </SectionCard>
                     </>
                   )}

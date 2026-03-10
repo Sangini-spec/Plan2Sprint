@@ -2,8 +2,10 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -31,6 +33,13 @@ const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
+// Singleton Supabase client — created once, reused across renders
+let _supabaseClient: ReturnType<typeof createClient> | null = null;
+function getSupabase() {
+  if (!_supabaseClient) _supabaseClient = createClient();
+  return _supabaseClient;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [appUser, setAppUser] = useState<AppUser | null>(null);
@@ -55,7 +64,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             created_at: demoUser.created_at ?? new Date().toISOString(),
           });
         } else {
-          // Default demo user if nothing in localStorage
           setAppUser({
             id: "demo-user-1",
             email: "demo@plan2sprint.app",
@@ -69,7 +77,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
         }
       } catch {
-        // Fallback
         setAppUser({
           id: "demo-user-1",
           email: "demo@plan2sprint.app",
@@ -86,8 +93,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Real Supabase auth
-    const supabase = createClient();
+    // Real Supabase auth — use singleton client
+    const supabase = getSupabase();
 
     const getSession = async () => {
       const {
@@ -128,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     if (isDemoMode) {
       localStorage.removeItem("plan2sprint_demo_user");
       setAppUser(null);
@@ -137,16 +144,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const supabase = createClient();
+    const supabase = getSupabase();
     await supabase.auth.signOut();
     setUser(null);
     setAppUser(null);
-  };
+  }, []);
 
   const role: UserRole = appUser?.role ?? "developer";
 
+  // Memoize context value to prevent unnecessary child re-renders
+  const value = useMemo(
+    () => ({ user, appUser, role, loading, signOut }),
+    [user, appUser, role, loading, signOut]
+  );
+
   return (
-    <AuthContext.Provider value={{ user, appUser, role, loading, signOut }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

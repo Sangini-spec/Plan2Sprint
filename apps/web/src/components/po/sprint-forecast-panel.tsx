@@ -7,10 +7,17 @@ import {
   RefreshCw,
   Loader2,
   ShieldAlert,
-  Clock,
   User,
   XCircle,
+  CheckCircle2,
+  Clock,
+  GitPullRequest,
+  ArrowRight,
+  Activity,
+  Target,
+  Zap,
 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge, Button, Progress } from "@/components/ui";
@@ -63,19 +70,212 @@ function timeAgo(iso: string | null): string {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "Just now";
-  if (mins < 60) return `${mins} min${mins > 1 ? "s" : ""} ago`;
+  if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
-  return `${hours} hour${hours > 1 ? "s" : ""} ago`;
+  return `${hours}h ago`;
 }
 
-const riskBadge: Record<string, { label: string; variant: "rag-red" | "rag-amber" | "brand" }> = {
-  critical: { label: "Critical", variant: "rag-red" },
-  high: { label: "High", variant: "rag-red" },
-  medium: { label: "Medium", variant: "rag-amber" },
+type Severity = "GREEN" | "AMBER" | "RED";
+
+function getSeverity(prob: number): Severity {
+  return prob >= 75 ? "GREEN" : prob >= 50 ? "AMBER" : "RED";
+}
+
+function getVerdict(prob: number): string {
+  if (prob >= 80) return "On Track";
+  if (prob >= 60) return "At Risk";
+  if (prob >= 40) return "Likely to Slip";
+  return "Will Fail";
+}
+
+function getVerdictIcon(prob: number) {
+  if (prob >= 80) return CheckCircle2;
+  if (prob >= 60) return Clock;
+  if (prob >= 40) return AlertTriangle;
+  return XCircle;
+}
+
+const severityColor: Record<Severity, string> = {
+  GREEN: "var(--color-rag-green)",
+  AMBER: "var(--color-rag-amber)",
+  RED: "var(--color-rag-red)",
+};
+
+const severityBg: Record<Severity, string> = {
+  GREEN: "bg-[var(--color-rag-green)]",
+  AMBER: "bg-[var(--color-rag-amber)]",
+  RED: "bg-[var(--color-rag-red)]",
+};
+
+const severityBgLight: Record<Severity, string> = {
+  GREEN: "bg-[var(--color-rag-green)]/10",
+  AMBER: "bg-[var(--color-rag-amber)]/10",
+  RED: "bg-[var(--color-rag-red)]/10",
+};
+
+const severityText: Record<Severity, string> = {
+  GREEN: "text-[var(--color-rag-green)]",
+  AMBER: "text-[var(--color-rag-amber)]",
+  RED: "text-[var(--color-rag-red)]",
+};
+
+const severityBorder: Record<Severity, string> = {
+  GREEN: "border-[var(--color-rag-green)]/30",
+  AMBER: "border-[var(--color-rag-amber)]/30",
+  RED: "border-[var(--color-rag-red)]/30",
+};
+
+const riskOrder: Record<string, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+const riskSeverity: Record<string, Severity> = {
+  critical: "RED",
+  high: "RED",
+  medium: "AMBER",
+  low: "GREEN",
 };
 
 // ---------------------------------------------------------------------------
-// Component
+// Sub-components
+// ---------------------------------------------------------------------------
+
+/** Radial gauge SVG for the main probability score */
+function RadialGauge({
+  value,
+  severity,
+  size = 160,
+}: {
+  value: number;
+  severity: Severity;
+  size?: number;
+}) {
+  const strokeWidth = 10;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = Math.PI * radius; // semi-circle
+  const offset = circumference - (value / 100) * circumference;
+
+  return (
+    <div className="relative" style={{ width: size, height: size / 2 + 24 }}>
+      <svg
+        width={size}
+        height={size / 2 + strokeWidth}
+        viewBox={`0 0 ${size} ${size / 2 + strokeWidth}`}
+        className="overflow-visible"
+      >
+        {/* Track */}
+        <path
+          d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
+          fill="none"
+          stroke="var(--bg-surface-raised)"
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+        />
+        {/* Value arc */}
+        <motion.path
+          d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
+          fill="none"
+          stroke={severityColor[severity]}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: offset }}
+          transition={{ duration: 1.2, ease: "easeOut" }}
+        />
+      </svg>
+      {/* Center label */}
+      <div className="absolute inset-x-0 bottom-0 flex flex-col items-center">
+        <motion.span
+          className="text-3xl font-bold tabular-nums text-[var(--text-primary)]"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.6 }}
+        >
+          {value}%
+        </motion.span>
+      </div>
+    </div>
+  );
+}
+
+/** Compact signal bar for a single metric */
+function SignalMetric({
+  icon: Icon,
+  label,
+  value,
+  severity,
+  subtext,
+}: {
+  icon: React.ComponentType<{ className?: string; size?: number }>;
+  label: string;
+  value: string | number;
+  severity: Severity;
+  subtext?: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 min-w-0">
+      <div
+        className={cn(
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+          severityBgLight[severity]
+        )}
+      >
+        <Icon size={16} className={severityText[severity]} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-[var(--text-secondary)] truncate">
+            {label}
+          </span>
+          <span
+            className={cn(
+              "text-sm font-bold tabular-nums shrink-0",
+              severityText[severity]
+            )}
+          >
+            {value}
+          </span>
+        </div>
+        {subtext && (
+          <span className="text-[10px] text-[var(--text-tertiary)] truncate block">
+            {subtext}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Visual risk bar for a spillover item */
+function RiskBar({ risk }: { risk: string }) {
+  const sev = riskSeverity[risk] ?? "GREEN";
+  const widthPct =
+    risk === "critical" ? 100 : risk === "high" ? 75 : risk === "medium" ? 50 : 25;
+  return (
+    <div className="flex items-center gap-2 min-w-[80px]">
+      <div className="flex-1 h-1.5 rounded-full bg-[var(--bg-surface-raised)] overflow-hidden">
+        <motion.div
+          className={cn("h-full rounded-full", severityBg[sev])}
+          initial={{ width: 0 }}
+          animate={{ width: `${widthPct}%` }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+        />
+      </div>
+      <span
+        className={cn("text-[10px] font-semibold uppercase", severityText[sev])}
+      >
+        {risk}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Component
 // ---------------------------------------------------------------------------
 
 export function SprintForecastPanel({ onRebalance }: SprintForecastPanelProps) {
@@ -87,6 +287,8 @@ export function SprintForecastPanel({ onRebalance }: SprintForecastPanelProps) {
     "sync_complete",
     "sprint_plan_generated",
     "sprint_plan_updated",
+    "sprint_completed",
+    "github_activity",
   ]);
 
   const projectId = selectedProject?.internalId;
@@ -95,7 +297,9 @@ export function SprintForecastPanel({ onRebalance }: SprintForecastPanelProps) {
     if (!projectId) return;
     try {
       const params = `?projectId=${projectId}`;
-      const res = await cachedFetch<ForecastData>(`/api/sprints/forecast${params}`);
+      const res = await cachedFetch<ForecastData>(
+        `/api/sprints/forecast${params}`
+      );
       if (res.ok && res.data) {
         setData(res.data);
       }
@@ -127,52 +331,63 @@ export function SprintForecastPanel({ onRebalance }: SprintForecastPanelProps) {
     setRefreshing(false);
   };
 
+  // Loading
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-5 w-5 animate-spin text-[var(--text-secondary)]" />
-      </div>
+      <DashboardPanel title="Sprint Forecast" icon={Activity}>
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="h-5 w-5 animate-spin text-[var(--text-secondary)]" />
+        </div>
+      </DashboardPanel>
     );
   }
 
+  // Empty state
   if (!data || data.successProbability === null) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 gap-2">
-        <TrendingUp size={24} className="text-[var(--text-tertiary)]" />
-        <p className="text-sm text-[var(--text-secondary)]">
-          No forecast data available
-        </p>
-        <p className="text-xs text-[var(--text-tertiary)]">
-          Generate a sprint plan first, then forecast data will appear here.
-        </p>
-      </div>
+      <DashboardPanel title="Sprint Forecast" icon={Activity}>
+        <div className="flex flex-col items-center justify-center py-16 gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--bg-surface-raised)]">
+            <Activity size={22} className="text-[var(--text-tertiary)]" />
+          </div>
+          <p className="text-sm font-medium text-[var(--text-secondary)]">
+            No forecast available
+          </p>
+          <p className="text-xs text-[var(--text-tertiary)] text-center max-w-xs">
+            Generate a sprint plan first to see AI-powered predictions.
+          </p>
+        </div>
+      </DashboardPanel>
     );
   }
 
   const prob = data.successProbability;
-  const probSeverity =
-    prob >= 75 ? "GREEN" : prob >= 50 ? "AMBER" : "RED";
-  const probLabel =
-    prob >= 75 ? "On Track" : prob >= 50 ? "At Risk" : "Critical";
+  const severity = getSeverity(prob);
+  const verdict = getVerdict(prob);
+  const VerdictIcon = getVerdictIcon(prob);
 
-  const spilloverItems = data.spilloverItems || [];
-  const criticalCount = spilloverItems.filter(
-    (i) => i.spilloverRisk === "critical"
+  const spilloverItems = (data.spilloverItems || []).sort(
+    (a, b) => (riskOrder[a.spilloverRisk] ?? 4) - (riskOrder[b.spilloverRisk] ?? 4)
+  );
+  const criticalOrHigh = spilloverItems.filter(
+    (i) => i.spilloverRisk === "critical" || i.spilloverRisk === "high"
   ).length;
-  const highCount = spilloverItems.filter(
-    (i) => i.spilloverRisk === "high"
-  ).length;
+
+  // Pacing analysis
+  const pacingDelta = data.completionPct - data.elapsedPct;
+  const pacingSeverity: Severity =
+    pacingDelta >= 0 ? "GREEN" : pacingDelta >= -15 ? "AMBER" : "RED";
 
   return (
-    <div className="space-y-6">
-      {/* ── Card 1: Success Probability ── */}
+    <div className="space-y-4">
+      {/* ─── Primary Forecast Card ─── */}
       <DashboardPanel
-        title="Sprint Success Probability"
-        icon={TrendingUp}
+        title="Sprint Forecast"
+        icon={Activity}
         actions={
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--text-tertiary)]">
-              Updated {timeAgo(data.forecastUpdatedAt)}
+            <span className="text-[10px] text-[var(--text-tertiary)]">
+              {timeAgo(data.forecastUpdatedAt)}
             </span>
             <Button
               variant="ghost"
@@ -182,209 +397,226 @@ export function SprintForecastPanel({ onRebalance }: SprintForecastPanelProps) {
               className="h-7 w-7 p-0"
             >
               <RefreshCw
-                className={cn(
-                  "h-3.5 w-3.5",
-                  refreshing && "animate-spin"
-                )}
+                className={cn("h-3.5 w-3.5", refreshing && "animate-spin")}
               />
             </Button>
           </div>
         }
       >
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-[var(--text-secondary)]">
-              Sprint Success Probability
-            </span>
-            <div className="flex items-center gap-2">
-              <span className="text-2xl font-bold tabular-nums text-[var(--text-primary)]">
-                {prob}%
-              </span>
-              <Badge
-                variant={
-                  probSeverity === "GREEN"
-                    ? "rag-green"
-                    : probSeverity === "AMBER"
-                      ? "rag-amber"
-                      : "rag-red"
-                }
+        <div className="space-y-5">
+          {/* Top section: Gauge + Verdict + Signal metrics */}
+          <div className="flex flex-col sm:flex-row items-center gap-6">
+            {/* Radial gauge */}
+            <div className="flex flex-col items-center shrink-0">
+              <RadialGauge value={prob} severity={severity} size={150} />
+              <motion.div
+                className="flex items-center gap-1.5 mt-1"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.8 }}
               >
-                {probLabel}
-              </Badge>
+                <VerdictIcon size={14} className={severityText[severity]} />
+                <span
+                  className={cn(
+                    "text-sm font-bold uppercase tracking-wide",
+                    severityText[severity]
+                  )}
+                >
+                  {verdict}
+                </span>
+              </motion.div>
+            </div>
+
+            {/* Signal metrics grid */}
+            <div className="flex-1 w-full grid grid-cols-1 gap-3">
+              <SignalMetric
+                icon={Target}
+                label="Completion"
+                value={`${data.completionPct}%`}
+                severity={getSeverity(data.completionPct)}
+                subtext={`${data.doneSP} / ${data.totalSP} SP done`}
+              />
+              <SignalMetric
+                icon={Zap}
+                label="Pacing"
+                value={`${pacingDelta >= 0 ? "+" : ""}${pacingDelta.toFixed(0)}%`}
+                severity={pacingSeverity}
+                subtext={`${data.elapsedPct}% sprint elapsed`}
+              />
+              <SignalMetric
+                icon={AlertTriangle}
+                label="Blockers"
+                value={data.activeBlockers}
+                severity={
+                  data.activeBlockers === 0
+                    ? "GREEN"
+                    : data.activeBlockers <= 2
+                      ? "AMBER"
+                      : "RED"
+                }
+              />
+              <SignalMetric
+                icon={GitPullRequest}
+                label="Stalled PRs"
+                value={data.stalledPRs}
+                severity={
+                  data.stalledPRs === 0
+                    ? "GREEN"
+                    : data.stalledPRs <= 2
+                      ? "AMBER"
+                      : "RED"
+                }
+              />
             </div>
           </div>
 
-          <Progress
-            value={prob}
-            severity={probSeverity as "GREEN" | "AMBER" | "RED"}
-            size="md"
-          />
-
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/40 p-3 text-center">
-              <p className="text-xs text-[var(--text-secondary)] mb-1">
-                Spillover Risk
-              </p>
-              <p className="text-lg font-bold tabular-nums text-[var(--text-primary)]">
-                {data.totalSpilloverSP} SP
-              </p>
+          {/* Spillover risk summary strip */}
+          {data.totalSpilloverSP > 0 && (
+            <div
+              className={cn(
+                "flex items-center justify-between rounded-lg border px-4 py-2.5",
+                severityBorder[
+                  criticalOrHigh > 0 ? "RED" : "AMBER"
+                ],
+                severityBgLight[
+                  criticalOrHigh > 0 ? "RED" : "AMBER"
+                ]
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <AlertTriangle
+                  size={14}
+                  className={
+                    severityText[criticalOrHigh > 0 ? "RED" : "AMBER"]
+                  }
+                />
+                <span className="text-xs font-medium text-[var(--text-primary)]">
+                  {data.totalSpilloverSP} SP at spillover risk
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                {criticalOrHigh > 0 && (
+                  <Badge variant="rag-red" className="text-[10px]">
+                    {criticalOrHigh} critical/high
+                  </Badge>
+                )}
+                <span className="text-[10px] text-[var(--text-tertiary)]">
+                  {spilloverItems.length} item{spilloverItems.length !== 1 ? "s" : ""}
+                </span>
+              </div>
             </div>
-            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/40 p-3 text-center">
-              <p className="text-xs text-[var(--text-secondary)] mb-1">
-                Active Blockers
-              </p>
-              <p className="text-lg font-bold tabular-nums text-[var(--text-primary)]">
-                {data.activeBlockers}
-              </p>
-            </div>
-            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/40 p-3 text-center">
-              <p className="text-xs text-[var(--text-secondary)] mb-1">
-                Stalled PRs
-              </p>
-              <p className="text-lg font-bold tabular-nums text-[var(--text-primary)]">
-                {data.stalledPRs}
-              </p>
-            </div>
-            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/40 p-3 text-center">
-              <p className="text-xs text-[var(--text-secondary)] mb-1">
-                Completion
-              </p>
-              <p className="text-lg font-bold tabular-nums text-[var(--text-primary)]">
-                {data.completionPct}%
-              </p>
-            </div>
-          </div>
+          )}
         </div>
       </DashboardPanel>
 
-      {/* ── Card 2: Per-Ticket Spillover Prediction ── */}
-      {spilloverItems.length > 0 && (
-        <DashboardPanel
-          title="Spillover Prediction"
-          icon={AlertTriangle}
-          actions={
-            <div className="flex items-center gap-2">
-              {criticalCount > 0 && (
-                <Badge variant="rag-red">{criticalCount} Critical</Badge>
-              )}
-              {highCount > 0 && (
-                <Badge variant="rag-red">{highCount} High</Badge>
-              )}
-            </div>
-          }
-        >
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--border-subtle)]">
-                  <th className="text-left py-2 px-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                    Ticket
-                  </th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                    Assignee
-                  </th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                    Risk
-                  </th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                    Reason
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {spilloverItems.map((item) => {
-                  const badge = riskBadge[item.spilloverRisk];
-                  return (
-                    <tr
-                      key={item.workItemId}
-                      className="border-b border-[var(--border-subtle)] last:border-b-0"
-                    >
-                      <td className="py-2.5 px-3">
-                        <div className="flex flex-col">
-                          <span className="font-mono text-xs text-[var(--color-brand-secondary)]">
-                            {item.externalId}
-                          </span>
-                          <span className="text-xs text-[var(--text-secondary)] truncate max-w-[200px]">
-                            {item.title}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <span className="flex items-center gap-1.5 text-xs text-[var(--text-primary)]">
-                          <User className="h-3 w-3 text-[var(--text-tertiary)]" />
+      {/* ─── Spillover Detail Table ─── */}
+      <AnimatePresence>
+        {spilloverItems.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.3 }}
+          >
+            <DashboardPanel
+              title="Spillover Risk Items"
+              icon={AlertTriangle}
+              collapsible
+              actions={
+                <span className="text-xs tabular-nums text-[var(--text-tertiary)]">
+                  {spilloverItems.length} item{spilloverItems.length !== 1 ? "s" : ""}
+                </span>
+              }
+            >
+              <div className="space-y-2">
+                {spilloverItems.map((item) => (
+                  <div
+                    key={item.workItemId}
+                    className="flex items-center gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/40 px-3 py-2.5"
+                  >
+                    {/* Ticket info */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-[var(--color-brand-secondary)] shrink-0">
+                          {item.externalId}
+                        </span>
+                        <span className="text-xs text-[var(--text-primary)] truncate">
+                          {item.title}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1">
+                        <span className="flex items-center gap-1 text-[10px] text-[var(--text-tertiary)]">
+                          <User size={10} />
                           {item.assigneeName ?? "Unassigned"}
                         </span>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        {badge && (
-                          <Badge variant={badge.variant} className="text-[10px]">
-                            {badge.label}
-                          </Badge>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <span className="text-xs text-[var(--text-secondary)]">
-                          {item.spilloverReason}
+                        <span className="text-[10px] text-[var(--text-tertiary)]">
+                          {item.storyPoints} SP
                         </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </DashboardPanel>
-      )}
+                      </div>
+                    </div>
+                    {/* Risk bar */}
+                    <div className="shrink-0 w-[110px]">
+                      <RiskBar risk={item.spilloverRisk} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </DashboardPanel>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* ── Card 3: Rebalancing Recommendation (conditional) ── */}
-      {data.rebalancingRecommended && (
-        <DashboardPanel
-          title="Rebalancing Recommended"
-          icon={ShieldAlert}
-          collapsible
-        >
-          <div className="space-y-4">
-            <div className="rounded-lg border border-[var(--color-rag-amber)]/30 bg-[var(--color-rag-amber)]/5 p-4">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--color-rag-amber)] mt-0.5" />
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-[var(--text-primary)]">
-                    AI has identified {spilloverItems.length} ticket
-                    {spilloverItems.length !== 1 ? "s" : ""} at spillover risk.
-                  </p>
-                  <ul className="space-y-1">
-                    {data.rebalancingReasons.map((reason, idx) => (
-                      <li
-                        key={idx}
-                        className="text-xs text-[var(--text-secondary)] flex items-center gap-1.5"
-                      >
-                        <span className="h-1 w-1 rounded-full bg-[var(--color-rag-amber)] shrink-0" />
+      {/* ─── Rebalancing Recommendation ─── */}
+      <AnimatePresence>
+        {data.rebalancingRecommended && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            <DashboardPanel
+              title="Rebalancing Recommended"
+              icon={ShieldAlert}
+              collapsible
+            >
+              <div className="space-y-4">
+                {/* Reason chips */}
+                <div className="flex flex-wrap gap-2">
+                  {data.rebalancingReasons.map((reason, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-1.5 rounded-full border border-[var(--color-rag-amber)]/30 bg-[var(--color-rag-amber)]/5 px-3 py-1"
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-rag-amber)]" />
+                      <span className="text-xs text-[var(--text-primary)]">
                         {reason}
-                      </li>
-                    ))}
-                  </ul>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="flex-1"
+                    onClick={onRebalance}
+                  >
+                    <ArrowRight className="h-3.5 w-3.5" />
+                    View Rebalancing Plan
+                  </Button>
+                  <Button variant="ghost" size="sm" className="flex-1">
+                    <XCircle className="h-3.5 w-3.5" />
+                    Dismiss
+                  </Button>
                 </div>
               </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <Button
-                variant="primary"
-                size="sm"
-                className="flex-1"
-                onClick={onRebalance}
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                View Rebalancing Plan
-              </Button>
-              <Button variant="ghost" size="sm" className="flex-1">
-                <XCircle className="h-3.5 w-3.5" />
-                Dismiss for this sprint
-              </Button>
-            </div>
-          </div>
-        </DashboardPanel>
-      )}
+            </DashboardPanel>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -19,6 +19,7 @@ Endpoints (all prefixed with /api/integrations/jira by main.py):
 from __future__ import annotations
 
 import base64
+import logging
 import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlencode
@@ -34,6 +35,8 @@ from ...database import get_db
 from ...models.tool_connection import ToolConnection
 from ...services.encryption import encrypt_token, decrypt_token
 import httpx
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -139,29 +142,37 @@ def _get_auth_info(conn: ToolConnection) -> tuple[str, str | None, str]:
         return f"{ATLASSIAN_API_BASE}/ex/jira/{cloud_id}", None, ""
 
 
-async def _get_valid_access_token(db: AsyncSession, conn: ToolConnection) -> str:
+async def _get_valid_access_token(
+    db: AsyncSession, conn: ToolConnection, *, force_refresh: bool = False,
+) -> str:
     """
     Get a valid access token, refreshing if needed.
     Atlassian access tokens expire in 1 hour.
+    When *force_refresh* is True the refresh is attempted regardless of age
+    (used for retry-on-401).
     """
     config = conn.config or {}
     refresh_token = config.get("refresh_token")
 
-    # Try to use existing access token (check if we have expiry info)
+    # Decrypt the currently stored access token
     access_token = decrypt_token(conn.access_token)
 
-    # If we have a refresh token, proactively refresh
-    # (Atlassian tokens expire in 3600s; we refresh if it's been stored > 50 min)
-    token_age = None
+    # Determine token age
+    token_age: float | None = None
     if config.get("token_updated_at"):
         try:
             updated = datetime.fromisoformat(config["token_updated_at"])
             token_age = (datetime.now(timezone.utc) - updated).total_seconds()
         except (ValueError, TypeError):
-            pass
+            logger.warning("Jira: could not parse token_updated_at=%s", config.get("token_updated_at"))
 
-    if token_age and token_age > 3000 and refresh_token:
-        # Refresh the token
+    should_refresh = force_refresh or (token_age is not None and token_age > 3000)
+
+    if should_refresh and refresh_token:
+        logger.info(
+            "Jira token refresh: age=%s force=%s client_id_present=%s",
+            token_age, force_refresh, bool(settings.jira_client_id),
+        )
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.post(
@@ -178,16 +189,26 @@ async def _get_valid_access_token(db: AsyncSession, conn: ToolConnection) -> str
                     new_access = tokens["access_token"]
                     new_refresh = tokens.get("refresh_token", refresh_token)
 
-                    # Update DB
+                    # Update DB — use dict copy so SQLAlchemy detects the mutation
                     conn.access_token = encrypt_token(new_access)
-                    config["refresh_token"] = new_refresh
-                    config["token_updated_at"] = datetime.now(timezone.utc).isoformat()
-                    conn.config = config
+                    conn.config = {
+                        **config,
+                        "refresh_token": new_refresh,
+                        "token_updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
                     await db.commit()
 
+                    logger.info("Jira token refreshed successfully")
                     return new_access
-        except Exception:
-            pass  # Fall through to use existing token
+                else:
+                    logger.warning(
+                        "Jira token refresh failed: status=%s body=%s",
+                        res.status_code, res.text[:300],
+                    )
+        except Exception as exc:
+            logger.warning("Jira token refresh error: %s", exc)
+    elif should_refresh and not refresh_token:
+        logger.warning("Jira token needs refresh but no refresh_token is stored")
 
     return access_token
 
@@ -201,6 +222,9 @@ async def _jira_api(
     auth_header: str | None = None,
 ) -> dict:
     """Make an authenticated Jira Cloud API request."""
+    auth_type = "override" if auth_header else "Bearer"
+    logger.info("Jira API %s %s auth=%s", method, url, auth_type)
+
     headers = {
         "Authorization": auth_header or f"Bearer {access_token}",
         "Accept": "application/json",
@@ -217,16 +241,58 @@ async def _jira_api(
             raise ValueError(f"Unsupported HTTP method: {method}")
 
         if res.status_code == 401:
+            logger.warning("Jira API 401: %s %s — %s", method, url, res.text[:200])
             raise HTTPException(status_code=401, detail="Jira token expired or invalid")
         if res.is_error:
+            logger.warning("Jira API error: %s %s — %s %s", method, url, res.status_code, res.text[:200])
             raise HTTPException(
                 status_code=res.status_code,
                 detail=f"Jira API error: {res.status_code} - {res.text[:200]}",
             )
 
+        logger.info("Jira API %s %s → %s", method, url, res.status_code)
         if res.status_code == 204:
             return {}
         return res.json()
+
+
+async def _jira_request_with_retry(
+    db: AsyncSession,
+    conn: ToolConnection,
+    method: str,
+    url: str,
+    auth_header: str | None = None,
+    json_body: dict | None = None,
+    params: dict | None = None,
+) -> dict:
+    """
+    Make a Jira API request.  For OAuth connections, if the first attempt
+    returns 401 we force-refresh the token and retry exactly once.
+    """
+    config = conn.config or {}
+    auth_method = config.get("auth_method", "oauth2")
+
+    if auth_method == "oauth2":
+        access_token = await _get_valid_access_token(db, conn)
+    else:
+        access_token = ""
+
+    try:
+        return await _jira_api(
+            method, url, access_token,
+            json_body=json_body, params=params, auth_header=auth_header,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 401 and auth_method == "oauth2":
+            logger.info("Jira 401 — retrying with force-refreshed token")
+            access_token = await _get_valid_access_token(
+                db, conn, force_refresh=True,
+            )
+            return await _jira_api(
+                method, url, access_token,
+                json_body=json_body, params=params, auth_header=auth_header,
+            )
+        raise
 
 
 # ===================================================================
@@ -576,18 +642,10 @@ async def list_projects(
         raise HTTPException(status_code=404, detail="Jira not connected")
 
     base_url, auth_header, _ = _get_auth_info(conn)
-    config = conn.config or {}
-    auth_method = config.get("auth_method", "oauth2")
 
-    if auth_method == "oauth2":
-        access_token = await _get_valid_access_token(db, conn)
-    else:
-        access_token = ""
-
-    data = await _jira_api(
-        "GET",
+    data = await _jira_request_with_retry(
+        db, conn, "GET",
         f"{base_url}/rest/api/3/project/search",
-        access_token,
         auth_header=auth_header,
     )
 
@@ -621,18 +679,10 @@ async def fetch_projects(
         raise HTTPException(status_code=404, detail="Jira not connected")
 
     base_url, auth_header, _ = _get_auth_info(conn)
-    config = conn.config or {}
-    auth_method = config.get("auth_method", "oauth2")
 
-    if auth_method == "oauth2":
-        access_token = await _get_valid_access_token(db, conn)
-    else:
-        access_token = ""
-
-    data = await _jira_api(
-        "GET",
+    data = await _jira_request_with_retry(
+        db, conn, "GET",
         f"{base_url}/rest/api/3/project/search",
-        access_token,
         auth_header=auth_header,
     )
 
@@ -675,21 +725,14 @@ async def fetch_issues(
         raise HTTPException(status_code=404, detail="Jira not connected")
 
     base_url, auth_header, _ = _get_auth_info(conn)
-    config = conn.config or {}
-    auth_method = config.get("auth_method", "oauth2")
-
-    if auth_method == "oauth2":
-        access_token = await _get_valid_access_token(db, conn)
-    else:
-        access_token = ""
 
     jql = f'project = "{project_key}" ORDER BY updated DESC'
 
     # Jira deprecated /rest/api/3/search (410 Gone) — use new /search/jql endpoint (POST with JSON body)
-    data = await _jira_api(
-        "POST",
+    data = await _jira_request_with_retry(
+        db, conn, "POST",
         f"{base_url}/rest/api/3/search/jql",
-        access_token,
+        auth_header=auth_header,
         json_body={
             "jql": jql,
             "maxResults": 200,
@@ -699,7 +742,6 @@ async def fetch_issues(
                 "created", "updated", "labels",
             ],
         },
-        auth_header=auth_header,
     )
 
     issues = [
@@ -748,21 +790,13 @@ async def fetch_members(
         raise HTTPException(status_code=404, detail="Jira not connected")
 
     base_url, auth_header, _ = _get_auth_info(conn)
-    config = conn.config or {}
-    auth_method = config.get("auth_method", "oauth2")
-
-    if auth_method == "oauth2":
-        access_token = await _get_valid_access_token(db, conn)
-    else:
-        access_token = ""
 
     try:
-        data = await _jira_api(
-            "GET",
+        data = await _jira_request_with_retry(
+            db, conn, "GET",
             f"{base_url}/rest/api/3/user/assignable/search",
-            access_token,
-            params={"project": project_key, "maxResults": 200},
             auth_header=auth_header,
+            params={"project": project_key, "maxResults": 200},
         )
     except HTTPException:
         return {"members": []}
@@ -857,13 +891,6 @@ async def writeback_work_item(
         raise HTTPException(status_code=404, detail="Jira not connected")
 
     base_url, auth_header, _ = _get_auth_info(conn)
-    config = conn.config or {}
-    auth_method = config.get("auth_method", "oauth2")
-
-    if auth_method == "oauth2":
-        access_token = await _get_valid_access_token(db, conn)
-    else:
-        access_token = ""
 
     # Map our field names to Jira API field names
     jira_fields: dict = {}
@@ -874,15 +901,82 @@ async def writeback_work_item(
     # sprint_id requires Jira Agile API — omit for now
 
     if jira_fields:
-        await _jira_api(
-            "PUT",
+        await _jira_request_with_retry(
+            db, conn, "PUT",
             f"{base_url}/rest/api/3/issue/{item_id}",
-            access_token,
-            json_body={"fields": jira_fields},
             auth_header=auth_header,
+            json_body={"fields": jira_fields},
         )
 
     return {"success": True, "itemId": item_id, "fields": fields}
+
+
+# ===================================================================
+# BOARD COLUMNS
+# ===================================================================
+
+@router.post("/board-columns")
+async def fetch_board_columns(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /board-columns — fetch board column configuration for a Jira board."""
+    board_id = body.get("boardId")
+
+    if settings.is_demo_mode:
+        return {
+            "columns": [
+                {"id": "todo", "name": "TO DO", "order": 0, "category": "new", "statuses": []},
+                {"id": "inprogress", "name": "IN PROGRESS", "order": 1, "category": "indeterminate", "statuses": []},
+                {"id": "done", "name": "DONE", "order": 2, "category": "done", "statuses": []},
+            ]
+        }
+
+    if not board_id:
+        raise HTTPException(status_code=400, detail="boardId is required")
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_jira_connection(db, org_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Jira not connected")
+
+    base_url, auth_header, _ = _get_auth_info(conn)
+
+    try:
+        # Jira Agile API: board configuration
+        data = await _jira_request_with_retry(
+            db, conn, "GET",
+            f"{base_url}/rest/agile/1.0/board/{board_id}/configuration",
+            auth_header=auth_header,
+        )
+
+        column_config = data.get("columnConfig", {})
+        raw_columns = column_config.get("columns", [])
+
+        columns = [
+            {
+                "id": col.get("name", "").lower().replace(" ", "_"),
+                "name": col.get("name", ""),
+                "order": idx,
+                "category": "done" if col.get("name", "").upper() == "DONE" else
+                           "new" if col.get("name", "").upper() in ("TO DO", "TODO", "BACKLOG") else
+                           "indeterminate",
+                "statuses": [s.get("id", "") for s in col.get("statuses", [])],
+            }
+            for idx, col in enumerate(raw_columns)
+        ]
+        return {"columns": columns}
+
+    except Exception:
+        # Fallback to 3-column default
+        return {
+            "columns": [
+                {"id": "todo", "name": "TO DO", "order": 0, "category": "new", "statuses": []},
+                {"id": "inprogress", "name": "IN PROGRESS", "order": 1, "category": "indeterminate", "statuses": []},
+                {"id": "done", "name": "DONE", "order": 2, "category": "done", "statuses": []},
+            ]
+        }
 
 
 # ===================================================================

@@ -434,3 +434,102 @@ async def get_writeback_log(
             for e in entries
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/board/writeback — Write back board status changes to ADO/Jira
+# ---------------------------------------------------------------------------
+
+@router.post("/board/writeback")
+async def board_writeback(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Write back board status changes to the connected external tool (ADO/Jira).
+
+    Body:
+    {
+        "changes": [
+            {
+                "workItemId": "internal-p2s-id",
+                "externalId": "12345" or "PROJ-123",
+                "fromStatus": "TODO",
+                "toStatus": "IN_PROGRESS",
+                "title": "Item title for display"
+            },
+            ...
+        ]
+    }
+
+    Detects the connected tool type and dispatches to the appropriate writeback.
+    Only writes items that actually changed columns (caller filters unchanged items).
+    """
+    org_id = current_user.get("organization_id", "demo-org")
+
+    changes = body.get("changes", [])
+    if not changes:
+        raise HTTPException(status_code=400, detail="No changes provided")
+
+    # Detect which tool is connected
+    conn = await _get_connection(db, org_id, "ado")
+    tool = "ado" if conn else None
+
+    if not tool:
+        conn = await _get_connection(db, org_id, "jira")
+        tool = "jira" if conn else None
+
+    if not tool:
+        raise HTTPException(
+            status_code=404,
+            detail="No ADO or Jira connection found. Connect a project management tool first.",
+        )
+
+    # Demo mode
+    if settings.is_demo_mode:
+        demo_results = [
+            {"externalId": c.get("externalId", ""), "ok": True, "demo": True}
+            for c in changes
+        ]
+        return {
+            "ok": True,
+            "tool": tool,
+            "synced": len(changes),
+            "failed": 0,
+            "results": demo_results,
+        }
+
+    # Dispatch to tool-specific writeback
+    if tool == "ado":
+        from ..services.ado_writeback import writeback_board_statuses as ado_wb
+        result = await ado_wb(db, org_id, changes, approver_id=current_user.get("id", "system"))
+    else:
+        from ..services.jira_writeback import writeback_board_statuses as jira_wb
+        result = await jira_wb(db, org_id, changes, approver_id=current_user.get("id", "system"))
+
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=result["error"])
+
+    # Broadcast success to all connected clients
+    await ws_manager.broadcast(org_id, {
+        "type": "board_writeback_success",
+        "data": {
+            "tool": tool,
+            "synced": result.get("synced", 0),
+            "failed": result.get("failed", 0),
+            "changes": [
+                {"externalId": c.get("externalId"), "from": c.get("fromStatus"), "to": c.get("toStatus")}
+                for c in changes
+            ],
+        },
+    })
+
+    return {
+        "ok": True,
+        "tool": tool,
+        "synced": result.get("synced", 0),
+        "failed": result.get("failed", 0),
+        "errors": result.get("errors", []),
+        "results": result.get("results", []),
+    }

@@ -77,15 +77,52 @@ def _extract_tags(raw_tags: str | None) -> list[str]:
 
 def normalize_ado_work_item(raw: dict, org_id: str) -> dict:
     """
-    Normalize a raw ADO work-item dict (from /_apis/wit/workitems response).
+    Normalize a raw ADO work-item dict.
 
-    The raw dict has a `fields` sub-object with System.* / Microsoft.* keys.
-    Example:
-        { "id": 1001, "fields": { "System.Title": "...", "System.State": "Active", ... } }
+    Supports TWO input formats:
+    1. Raw ADO API format (nested fields):
+       { "id": 1001, "fields": { "System.Title": "...", "System.State": "Active", ... } }
+    2. Flattened format (from our router):
+       { "id": 1001, "title": "...", "state": "Active", "parentId": 999, ... }
     """
     fields: dict = raw.get("fields") or {}
     wi_id = raw.get("id", "")
 
+    # Detect flattened format: if no "fields" sub-object but has "title" at top level
+    is_flat = not raw.get("fields") and raw.get("title") is not None
+
+    if is_flat:
+        # Flattened format from our ado.py router
+        assigned_name = raw.get("assignedTo")
+        parent_raw = raw.get("parentId")
+
+        return {
+            "organization_id": org_id,
+            "external_id": str(wi_id),
+            "source_tool": "ADO",
+            "title": raw.get("title", "Untitled"),
+            "description": raw.get("description"),
+            "status": map_ado_status(raw.get("state", "New")),
+            "source_status": raw.get("state", "New"),
+            "story_points": _safe_float(raw.get("storyPoints")),
+            "priority": map_ado_priority(raw.get("priority")),
+            "type": map_ado_type(raw.get("workItemType", "User Story")),
+            "labels": _extract_tags(raw.get("tags")),
+            "acceptance_criteria": raw.get("acceptanceCriteria"),
+            "epic_id": None,
+            "planned_start": _parse_iso(raw.get("startDate")),
+            "planned_end": _parse_iso(raw.get("targetDate")),
+            "iteration_id": None,
+            "assignee_id": None,
+            "_iteration_path": raw.get("iterationPath"),
+            "_assigned_to_name": assigned_name,
+            "_area_path": raw.get("areaPath"),
+            "_created_date": raw.get("createdDate"),
+            "_changed_date": raw.get("changedDate"),
+            "_parent_id": str(parent_raw) if parent_raw else None,
+        }
+
+    # Raw ADO API format (nested fields)
     assigned_to = fields.get("System.AssignedTo") or {}
     assigned_name = assigned_to.get("displayName") if isinstance(assigned_to, dict) else assigned_to
 
@@ -96,6 +133,7 @@ def normalize_ado_work_item(raw: dict, org_id: str) -> dict:
         "title": fields.get("System.Title", "Untitled"),
         "description": fields.get("System.Description"),
         "status": map_ado_status(fields.get("System.State", "New")),
+        "source_status": fields.get("System.State", "New"),
         "story_points": _safe_float(
             fields.get("Microsoft.VSTS.Scheduling.StoryPoints")
             or fields.get("Microsoft.VSTS.Scheduling.Effort")
@@ -105,6 +143,8 @@ def normalize_ado_work_item(raw: dict, org_id: str) -> dict:
         "labels": _extract_tags(fields.get("System.Tags")),
         "acceptance_criteria": fields.get("Microsoft.VSTS.Common.AcceptanceCriteria"),
         "epic_id": None,  # resolved during upsert via parent link
+        "planned_start": _parse_iso(fields.get("Microsoft.VSTS.Scheduling.StartDate")),
+        "planned_end": _parse_iso(fields.get("Microsoft.VSTS.Scheduling.TargetDate")),
         # FK placeholders — resolved during sync
         "iteration_id": None,
         "assignee_id": None,
@@ -114,6 +154,7 @@ def normalize_ado_work_item(raw: dict, org_id: str) -> dict:
         "_area_path": fields.get("System.AreaPath"),
         "_created_date": fields.get("System.CreatedDate"),
         "_changed_date": fields.get("System.ChangedDate"),
+        "_parent_id": str(fields.get("System.Parent")) if fields.get("System.Parent") else None,
     }
 
 
@@ -208,12 +249,15 @@ def normalize_jira_issue(raw: dict, org_id: str) -> dict:
             status_obj.get("name", ""),
             status_category,
         ),
+        "source_status": status_obj.get("name", ""),
         "story_points": story_points,
         "priority": _safe_int((fields.get("priority") or {}).get("id", 2)),
         "type": map_jira_type(issue_type_obj.get("name", "Story")),
         "labels": labels if isinstance(labels, list) else [],
         "acceptance_criteria": None,  # Jira doesn't have a standard AC field
         "epic_id": None,  # resolved during upsert via epic link
+        "planned_start": _parse_iso(fields.get("startdate") or fields.get("customfield_10015")),
+        "planned_end": _parse_iso(fields.get("duedate")),
         # FK placeholders
         "iteration_id": None,
         "assignee_id": None,

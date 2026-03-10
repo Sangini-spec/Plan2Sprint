@@ -36,6 +36,7 @@
   --bg-base: #F8F8FC;
   --bg-surface: #FFFFFF;
   --bg-surface-raised: #F0F0F8;
+  --bg-surface-sunken: #F4F4FA;
   --text-primary: #0F0F18;
   --text-secondary: #5A5A72;
   --border-subtle: rgba(0, 0, 0, 0.08);
@@ -49,6 +50,7 @@
   --bg-base: #0A0A0F;
   --bg-surface: #13131A;
   --bg-surface-raised: #1C1C26;
+  --bg-surface-sunken: #0E0E15;
   --text-primary: #F0F0F5;
   --text-secondary: #9090A8;
   --border-subtle: rgba(255, 255, 255, 0.08);
@@ -60,6 +62,7 @@
 /* Base Styles */
 html {
   scroll-behavior: smooth;
+  font-size: 15px;
 }
 
 body {

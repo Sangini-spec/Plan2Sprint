@@ -231,7 +231,7 @@ export function WritebackConfirmationPanel() {
               <li
                 key={item.id}
                 className={cn(
-                  "flex items-center justify-between gap-4 rounded-xl px-4 py-3",
+                  "flex items-center justify-between gap-4 rounded-lg px-4 py-2.5",
                   "bg-[var(--bg-surface-raised)]/60 border border-[var(--border-subtle)]"
                 )}
               >

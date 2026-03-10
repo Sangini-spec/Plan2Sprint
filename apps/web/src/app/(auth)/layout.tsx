@@ -18,7 +18,7 @@ export default function AuthLayout({
 
       {/* Auth card */}
       <div className="relative z-10 w-full max-w-md">
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 backdrop-blur-xl p-8 shadow-xl">
+        <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-8">
           {children}
         </div>
       </div>
