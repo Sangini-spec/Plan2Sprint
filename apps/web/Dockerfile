@@ -39,6 +39,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Runtime env vars needed by middleware (server-side token injection)
+ENV NEXT_PUBLIC_SUPABASE_URL=https://obmbpfoormxbbizudrrp.supabase.co
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ibWJwZm9vcm14YmJpenVkcnJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2NTg0NjAsImV4cCI6MjA4NzIzNDQ2MH0.weAMr4zip5JyY49GfJ70nqjie6ka_QkYzRp4Zsev9B8
+
 # Non-root user
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs

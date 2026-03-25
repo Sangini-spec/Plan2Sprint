@@ -67,6 +67,8 @@ export async function cachedFetch<T = unknown>(
           cache.set(url, { data, timestamp: Date.now() });
           return { ok: true, status: res.status, data };
         }
+        // Do NOT cache error responses (401, 500, etc.)
+        // This prevents stale auth failures from blocking real data
         return { ok: false, status: res.status, data: null };
       } catch {
         return { ok: false, status: 0, data: null };

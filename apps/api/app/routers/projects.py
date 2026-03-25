@@ -28,6 +28,7 @@ router = APIRouter()
 # Project CRUD
 # ---------------------------------------------------------------------------
 
+@router.get("")
 @router.get("/")
 async def list_imported_projects(
     current_user: dict = Depends(get_current_user),

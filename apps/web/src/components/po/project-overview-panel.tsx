@@ -218,8 +218,10 @@ export function ProjectOverviewPanel({ hideKpiRow, hideRisks }: { hideKpiRow?: b
   }, [projectId]);
 
   useEffect(() => {
+    // Don't fetch until a project is selected
+    if (!projectId) return;
     fetchData();
-  }, [fetchData, refreshKey]);
+  }, [fetchData, refreshKey, projectId]);
 
   // Don't render if no features
   if (!loading && (!data || data.totalFeatures === 0)) {

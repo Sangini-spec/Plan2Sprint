@@ -423,8 +423,10 @@ export function ProjectHeroBanner() {
   }, [projectId]);
 
   useEffect(() => {
+    // Don't fetch until a project is selected — avoids fetching ALL data
+    if (!projectId) return;
     fetchData();
-  }, [fetchData, refreshKey]);
+  }, [fetchData, refreshKey, projectId]);
 
   // Derived values
   const targetLaunch = deriveTargetLaunch(planData, planSummary);

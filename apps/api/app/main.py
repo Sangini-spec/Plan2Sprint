@@ -138,7 +138,12 @@ app = FastAPI(
     version="1.0.0",
     description="AI-powered sprint planning backend",
     lifespan=lifespan,
+    redirect_slashes=False,
 )
+
+# Trust proxy headers (X-Forwarded-Proto, X-Forwarded-For) so redirects use https
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # CORS
 app.add_middleware(

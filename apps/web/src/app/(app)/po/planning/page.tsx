@@ -199,8 +199,8 @@ export default function PlanningPage() {
   // Actions
   // -----------------------------------------------------------------------
 
-  // Use backend directly for sprint generation (bypasses Next.js proxy timeout)
-  const sprintApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  // Use relative URL to go through Next.js proxy (works both locally and deployed)
+  const sprintApiBase = "";
 
   const handleGenerate = async () => {
     if (!projectId) return;
