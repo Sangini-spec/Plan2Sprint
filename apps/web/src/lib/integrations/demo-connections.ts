@@ -68,6 +68,7 @@ const TOOL_DEFAULTS: Record<ToolType, { displayName: string; siteUrl: string }> 
   ado: { displayName: "Acme Azure DevOps", siteUrl: "https://dev.azure.com/acme" },
   github: { displayName: "acme-org", siteUrl: "https://github.com/acme-org" },
   slack: { displayName: "Acme Workspace", siteUrl: "https://acme.slack.com" },
+  teams: { displayName: "Acme Teams", siteUrl: "https://teams.microsoft.com" },
   linear: { displayName: "Acme Linear", siteUrl: "https://linear.app/acme" },
 };
 

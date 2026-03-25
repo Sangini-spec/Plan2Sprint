@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .iteration import Iteration
     from .team_member import TeamMember
     from .imported_project import ImportedProject
+    from .project_phase import ProjectPhase
     from .sprint_plan import PlanAssignment
     from .repository import PullRequest
 
@@ -102,6 +103,12 @@ class WorkItem(Base):
     source_status: Mapped[Optional[str]] = mapped_column(
         String(100), name="source_status", nullable=True
     )
+    phase_id: Mapped[Optional[str]] = mapped_column(
+        String(25),
+        ForeignKey("project_phases.id", ondelete="SET NULL"),
+        name="phase_id",
+        nullable=True,
+    )
     spillover_risk: Mapped[Optional[str]] = mapped_column(
         String(20), name="spillover_risk", nullable=True
     )
@@ -129,6 +136,7 @@ class WorkItem(Base):
         back_populates="work_items"
     )
     imported_project: Mapped[Optional["ImportedProject"]] = relationship()
+    phase: Mapped[Optional["ProjectPhase"]] = relationship()
     plan_assignments: Mapped[List["PlanAssignment"]] = relationship(
         back_populates="work_item"
     )

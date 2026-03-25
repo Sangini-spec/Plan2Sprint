@@ -1,10 +1,10 @@
 /**
- * Domain model interfaces matching Prisma schema.
- * Used for mock data and component props (independent of Prisma Client).
+ * Domain model interfaces matching the Supabase/PostgreSQL schema.
+ * Used for mock data and component props.
  */
 
 // ============================================================================
-// ENUMS (mirrored from Prisma for client-side use)
+// ENUMS
 // ============================================================================
 
 export type SprintPlanStatus =
@@ -357,10 +357,30 @@ export interface DeliveryPredictabilityScore {
 }
 
 // ============================================================================
-// FEATURE PROGRESS / PROJECT PLAN TYPES
+// PHASES
 // ============================================================================
 
-export type FeaturePhase = "TESTING" | "DEVELOPMENT" | "PLANNING";
+export interface ProjectPhase {
+  id: string;
+  name: string;
+  slug: string;
+  color: string;
+  sortOrder: number;
+  isDefault: boolean;
+  featureCount?: number;
+}
+
+export interface PhaseAssignmentRule {
+  id: string;
+  phaseId: string;
+  ruleType: "keyword" | "board_column" | "iteration_path";
+  pattern: string;
+  priority: number;
+}
+
+// ============================================================================
+// FEATURE PROGRESS / PROJECT PLAN TYPES
+// ============================================================================
 
 export interface FeatureBreakdown {
   done: number;
@@ -374,7 +394,8 @@ export interface FeatureProgressCard {
   externalId: string;
   title: string;
   description: string;
-  phase: FeaturePhase;
+  phaseId: string | null;
+  phaseInfo?: ProjectPhase;
   completePct: number;
   totalStories: number;
   breakdown: FeatureBreakdown;
@@ -398,21 +419,45 @@ export interface ProjectPlanRow {
   id: string;
   externalId: string;
   title: string;
-  phase: FeaturePhase;
+  phaseId: string | null;
+  phaseInfo?: ProjectPhase;
   status: GanttStatus;
   completePct: number;
   totalStories: number;
   doneStories: number;
   plannedStart?: string;
   plannedEnd?: string;
+  actualStart?: string;
+  actualEnd?: string;
   assignees: string[];
 }
 
 export interface ProjectPlanData {
   features: ProjectPlanRow[];
-  phases: { name: string; count: number }[];
+  unassigned: ProjectPlanRow[];
+  phases: ProjectPhase[];
   totalPhases: number;
   complete: number;
   inProgress: number;
   estDurationWeeks?: number;
+  /* Present only in the /project-plan/optimized response */
+  hasPlan?: boolean;
+  planId?: string;
+  planStatus?: SprintPlanStatus;
+}
+
+export interface PlanSummaryData {
+  hasPlan: boolean;
+  planId?: string;
+  status?: SprintPlanStatus;
+  estimatedEndDate?: string;
+  estimatedWeeksTotal?: number;
+  estimatedSprints?: number;
+  confidenceScore?: number;
+  successProbability?: number;
+  totalStoryPoints?: number;
+  riskSummary?: string;
+  projectCompletionSummary?: string;
+  approvedAt?: string;
+  createdAt?: string;
 }

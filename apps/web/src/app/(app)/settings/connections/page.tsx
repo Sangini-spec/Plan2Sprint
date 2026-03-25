@@ -69,6 +69,20 @@ const TOOL_META: Record<
     iconColor: "text-[#4A154B]",
     icon: <span className="text-sm font-bold">S</span>,
   },
+  teams: {
+    name: "Microsoft Teams",
+    description: "Send notifications and standup summaries",
+    iconBg: "bg-[#6264A7]/10",
+    iconColor: "text-[#6264A7]",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M20.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" fill="#6264A7"/>
+        <path d="M22 9h-4a1 1 0 0 0-1 1v5a3 3 0 0 0 6 0v-5a1 1 0 0 0-1-1z" fill="#6264A7" opacity="0.7"/>
+        <path d="M14.5 6.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" fill="#6264A7"/>
+        <path d="M16 8H9a1 1 0 0 0-1 1v6.5a4 4 0 0 0 8 0V9a1 1 0 0 0 0-2z" fill="#6264A7"/>
+      </svg>
+    ),
+  },
   linear: {
     name: "Linear",
     description: "Sync issues and cycles",
@@ -78,7 +92,7 @@ const TOOL_META: Record<
   },
 };
 
-const ALL_TOOLS: ToolType[] = ["jira", "ado", "github", "slack", "linear"];
+const ALL_TOOLS: ToolType[] = ["jira", "ado", "github", "slack", "teams", "linear"];
 
 // ---------------------------------------------------------------------------
 // Tool Card
@@ -100,7 +114,7 @@ function ToolCard({
   const meta = TOOL_META[tool];
   const isConnected = connection?.status === "connected" || connection?.status === "syncing";
   const isSyncing = connection?.status === "syncing";
-  const isPlaceholder = tool === "slack" || tool === "linear";
+  const isPlaceholder = tool === "linear";
 
   return (
     <div
@@ -199,7 +213,20 @@ function ToolCard({
               </button>
             </>
           )}
-          {!isConnected && !isPlaceholder && (
+          {!isConnected && !isPlaceholder && (tool === "slack" || tool === "teams") && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                const sb = JSON.parse(localStorage.getItem(`sb-obmbpfoormxbbizudrrp-auth-token`) || "{}");
+                const token = sb?.access_token || "";
+                window.location.href = `/api/integrations/${tool}/connect${token ? `?token=${token}` : ""}`;
+              }}
+            >
+              Connect
+            </Button>
+          )}
+          {!isConnected && !isPlaceholder && tool !== "slack" && tool !== "teams" && (
             <Button variant="secondary" size="sm" onClick={onConnect}>
               Connect
             </Button>

@@ -37,6 +37,7 @@ async def upsert_team_members(
     db: AsyncSession,
     members: list[dict],
     org_id: str,
+    project_id: str | None = None,
 ) -> dict[str, str]:
     """
     Upsert team members and return a mapping of external_id → internal id.
@@ -64,11 +65,15 @@ async def upsert_team_members(
             existing.email = m.get("email") or existing.email
             if m.get("avatar_url"):
                 existing.avatar_url = m["avatar_url"]
+            # Update project_id if provided and not already set
+            if project_id and not existing.imported_project_id:
+                existing.imported_project_id = project_id
             ext_to_id[external_id] = existing.id
         else:
             member = TeamMember(
                 id=generate_cuid(),
                 organization_id=org_id,
+                imported_project_id=project_id,
                 external_id=external_id,
                 email=m.get("email", ""),
                 display_name=m.get("display_name", ""),
@@ -595,7 +600,7 @@ async def sync_project_data(
             normed = [normalize_ado_team_member(m, org_id) for m in raw_members]
         else:
             normed = [normalize_jira_member(m, org_id) for m in raw_members]
-        member_map = await upsert_team_members(db, normed, org_id)
+        member_map = await upsert_team_members(db, normed, org_id, project_id)
         counts["members"] = len(normed)
 
     # 2. Normalise & upsert iterations (needed for FK resolution)

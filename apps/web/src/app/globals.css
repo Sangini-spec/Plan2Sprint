@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ============================
    PLAN2SPRINT DESIGN SYSTEM
    Colors extracted from logo:
@@ -9,6 +11,16 @@
    ============================ */
 
 :root {
+  /* Aurora background color variables */
+  --white: #fff;
+  --black: #000;
+  --transparent: transparent;
+  --blue-300: #93c5fd;
+  --blue-400: #60a5fa;
+  --blue-500: #3b82f6;
+  --indigo-300: #a5b4fc;
+  --violet-200: #ddd6fe;
+
   /* Brand Colors */
   --color-brand-primary: #0F2A48;
   --color-brand-secondary: #0D96E6;
@@ -199,8 +211,61 @@ body {
   }
 }
 
+/* Aurora background animation */
+@keyframes aurora {
+  from { background-position: 50% 50%, 50% 50%; }
+  to   { background-position: 350% 50%, 350% 50%; }
+}
+
+/* Aurora background — light mode (default) */
+.aurora-bg {
+  background-color: #fafafa;
+}
+.aurora-effect {
+  --aurora-grad: repeating-linear-gradient(
+    100deg, var(--blue-500) 10%, var(--indigo-300) 15%,
+    var(--blue-300) 20%, var(--violet-200) 25%, var(--blue-400) 30%
+  );
+  --overlay-grad: repeating-linear-gradient(
+    100deg, #fff 0%, #fff 7%, transparent 10%, transparent 12%, #fff 16%
+  );
+  background-image: var(--overlay-grad), var(--aurora-grad);
+  background-size: 300% 200%;
+  background-position: 50% 50%;
+  filter: blur(10px) invert;
+}
+.aurora-effect::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--overlay-grad), var(--aurora-grad);
+  background-size: 200% 100%;
+  background-attachment: fixed;
+  mix-blend-mode: difference;
+  animation: aurora 60s linear infinite;
+}
+.aurora-mask {
+  mask-image: radial-gradient(ellipse at 100% 0%, black 10%, transparent 70%);
+}
+
+/* Aurora background — dark mode */
+:root.dark .aurora-bg {
+  background-color: #18181b;
+}
+:root.dark .aurora-effect {
+  --overlay-grad: repeating-linear-gradient(
+    100deg, #000 0%, #000 7%, transparent 10%, transparent 12%, #000 16%
+  );
+  background-image: var(--overlay-grad), var(--aurora-grad);
+  filter: blur(10px);
+}
+:root.dark .aurora-effect::after {
+  background-image: var(--overlay-grad), var(--aurora-grad);
+}
+
 /* Tailwind v4 theme extension */
 @theme {
+  --animate-aurora: aurora 60s linear infinite;
   --color-brand-primary: #0F2A48;
   --color-brand-secondary: #0D96E6;
   --color-brand-accent: #D07D4E;

@@ -34,8 +34,10 @@ from .retrospective import Retrospective, RetroActionItem
 from .audit_log import AuditLogEntry
 from .notification import NotificationPreference
 from .in_app_notification import InAppNotification
-from .imported_project import ImportedProject, UserProjectPreference
+from .imported_project import ImportedProject, UserProjectPreference, StakeholderProjectAssignment
 from .sprint_constraint import SprintConstraint
+from .project_phase import ProjectPhase, PhaseAssignmentRule
+from .invitation import Invitation
 
 __all__ = [
     "Base",
@@ -78,5 +80,9 @@ __all__ = [
     "InAppNotification",
     "ImportedProject",
     "UserProjectPreference",
+    "StakeholderProjectAssignment",
     "SprintConstraint",
+    "ProjectPhase",
+    "PhaseAssignmentRule",
+    "Invitation",
 ]

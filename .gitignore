@@ -16,9 +16,6 @@ out/
 dist/
 build/
 
-# Generated code
-apps/web/src/generated/
-
 # IDE
 .idea/
 .vscode/
@@ -42,3 +39,6 @@ yarn-error.log*
 
 # Claude dev config (local only)
 .claude/
+
+migration-backup/
+create_jira_project.py

@@ -108,10 +108,14 @@ async def get_sprint_overview(
     else:
         health = "RED"
 
-    # Get latest sprint plan for this iteration, scoped to project if provided
+    # Get latest non-rejected sprint plan, scoped to project if provided
+    # Skip REJECTED plans so the previous good plan surfaces after rejection
     plan_query = (
         select(SprintPlan)
-        .where(SprintPlan.organization_id == org_id)
+        .where(
+            SprintPlan.organization_id == org_id,
+            SprintPlan.status != "REJECTED",
+        )
     )
     # Prefer project-scoped plan; fall back to iteration-scoped
     if projectId:
@@ -184,25 +188,29 @@ async def get_plan_details(
     """Return a full plan with all assignments, work items, and team members."""
     org_id = current_user.get("organization_id", "demo-org")
 
-    # Find the plan
+    # Find the plan — skip REJECTED plans so previous good plan surfaces
     if planId:
         plan_q = select(SprintPlan).where(SprintPlan.id == planId)
     elif projectId:
-        # Latest plan for this project
+        # Latest non-rejected plan for this project
         plan_q = (
             select(SprintPlan)
             .where(
                 SprintPlan.organization_id == org_id,
                 SprintPlan.project_id == projectId,
+                SprintPlan.status != "REJECTED",
             )
             .order_by(SprintPlan.created_at.desc())
             .limit(1)
         )
     else:
-        # Default: latest plan for this org
+        # Default: latest non-rejected plan for this org
         plan_q = (
             select(SprintPlan)
-            .where(SprintPlan.organization_id == org_id)
+            .where(
+                SprintPlan.organization_id == org_id,
+                SprintPlan.status != "REJECTED",
+            )
             .order_by(SprintPlan.created_at.desc())
             .limit(1)
         )
@@ -241,6 +249,27 @@ async def get_plan_details(
         select(Iteration).where(Iteration.id == plan.iteration_id)
     )
     iteration = iter_result.scalar_one_or_none()
+
+    # Calculate per-sprint details (date ranges, SP, item counts) — skip empty sprints
+    sprint_details = []
+    if iteration and plan.estimated_sprints:
+        start = iteration.start_date
+        if hasattr(start, 'tzinfo') and start.tzinfo:
+            start = start.replace(tzinfo=None)
+        sprint_days = max(1, (iteration.end_date.replace(tzinfo=None) - start).days) if iteration.end_date else 14
+        for sn in range(1, (plan.estimated_sprints or 1) + 1):
+            sn_assignments = [a for a in assignments if (a.sprint_number or 1) == sn]
+            if not sn_assignments:
+                continue  # Skip empty sprints
+            sn_start = start + timedelta(days=sprint_days * (sn - 1))
+            sn_end = start + timedelta(days=sprint_days * sn)
+            sprint_details.append({
+                "sprintNumber": sn,
+                "startDate": sn_start.isoformat(),
+                "endDate": sn_end.isoformat(),
+                "totalSP": sum(a.story_points or 0 for a in sn_assignments),
+                "itemCount": len(sn_assignments),
+            })
 
     # Normalize confidence scores (old seed data may store as %)
     plan_cs = plan.confidence_score
@@ -323,6 +352,7 @@ async def get_plan_details(
             }
             for tm in team_members
         ],
+        "sprintDetails": sprint_details,
     }
 
 
@@ -358,51 +388,81 @@ async def generate_sprint_plan_endpoint(
     iteration_id = body.get("iterationId")
     feedback = body.get("feedback")
 
+    # Append timestamp to feedback to ensure AI produces a fresh plan on each regeneration
+    if feedback:
+        feedback = f"{feedback}\n[Regeneration requested at {datetime.now(timezone.utc).isoformat()}]"
+    logger.info(f"Sprint generation requested for project={project_id}, has_feedback={bool(feedback)}")
+
     if not project_id:
         raise HTTPException(status_code=400, detail="projectId is required")
 
-    # Step 1: Refresh data from ADO before planning
-    try:
-        from ..services.ado_fetch import fetch_sprint_context
-        logger.info(f"Refreshing ADO data for project {project_id} before plan generation")
-        sprint_ctx = await fetch_sprint_context(db, org_id, project_id)
-        logger.info(
-            f"ADO refresh complete: {len(sprint_ctx.team_members)} members, "
-            f"{len(sprint_ctx.current_sprint_items)} sprint items, "
-            f"{len(sprint_ctx.backlog_items)} backlog items"
-        )
-    except Exception as e:
-        logger.warning(f"ADO data refresh failed (proceeding with DB data): {e}")
+    # Step 1: Refresh data from source tool before planning
+    from ..models.imported_project import ImportedProject as IP
+    proj_result = await db.execute(
+        select(IP).where(IP.id == project_id, IP.organization_id == org_id)
+    )
+    project_record = proj_result.scalar_one_or_none()
+    source_tool = (project_record.source_tool or "ado").lower() if project_record else "ado"
+
+    if source_tool == "ado":
+        try:
+            from ..services.ado_fetch import fetch_sprint_context
+            logger.info(f"Refreshing ADO data for project {project_id} before plan generation")
+            sprint_ctx = await fetch_sprint_context(db, org_id, project_id)
+            logger.info(
+                f"ADO refresh complete: {len(sprint_ctx.team_members)} members, "
+                f"{len(sprint_ctx.current_sprint_items)} sprint items, "
+                f"{len(sprint_ctx.backlog_items)} backlog items"
+            )
+        except Exception as e:
+            logger.warning(f"ADO data refresh failed (proceeding with DB data): {e}")
+    else:
+        logger.info(f"Skipping ADO fetch for {source_tool} project {project_id} — using synced DB data")
 
     # Step 2: Generate plan via AI (falls back to deterministic if no API key)
     from ..services.ai_sprint_generator import generate_sprint_plan_ai
 
-    result = await generate_sprint_plan_ai(
-        db=db,
-        org_id=org_id,
-        project_id=project_id,
-        iteration_id=iteration_id,
-        feedback=feedback,
-    )
+    try:
+        result = await generate_sprint_plan_ai(
+            db=db,
+            org_id=org_id,
+            project_id=project_id,
+            iteration_id=iteration_id,
+            feedback=feedback,
+        )
+    except Exception as e:
+        logger.exception(f"Sprint generation crashed for project {project_id}")
+        raise HTTPException(status_code=500, detail=f"Sprint generation failed: {str(e)[:300]}")
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
 
-    # Broadcast plan generation event
-    await ws_manager.broadcast(org_id, {
-        "type": "sprint_plan_generated",
-        "data": {
-            "planId": result["planId"],
-            "iterationName": result.get("iterationName"),
-            "assignmentCount": result.get("assignmentCount", 0),
-            "totalStoryPoints": result.get("totalStoryPoints", 0),
-            "confidenceScore": result.get("confidenceScore", 0),
-        },
-    })
+    # Broadcast plan generation event (non-fatal)
+    try:
+        await ws_manager.broadcast(org_id, {
+            "type": "sprint_plan_generated",
+            "data": {
+                "planId": result["planId"],
+                "iterationName": result.get("iterationName"),
+                "assignmentCount": result.get("assignmentCount", 0),
+                "totalStoryPoints": result.get("totalStoryPoints", 0),
+                "confidenceScore": result.get("confidenceScore", 0),
+            },
+        })
+    except Exception as e:
+        logger.warning(f"WS broadcast failed (non-fatal): {e}")
+
+    # Ensure all values are JSON-serializable
+    safe_result = {}
+    for k, v in result.items():
+        if hasattr(v, 'isoformat'):
+            safe_result[k] = v.isoformat()
+        else:
+            safe_result[k] = v
 
     return {
         "ok": True,
-        **result,
+        **safe_result,
     }
 
 
@@ -655,3 +715,92 @@ async def complete_sprint(
         raise HTTPException(status_code=400, detail=result["error"])
 
     return {"ok": True, **result}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/sprints/team-member — Exclude/include a developer from planning
+# ---------------------------------------------------------------------------
+
+@router.patch("/sprints/team-member")
+async def update_team_member_role(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Exclude or re-include a team member from sprint planning.
+
+    Body:
+    {
+        "memberId": "cuid",
+        "action": "exclude" | "include"
+    }
+    """
+    org_id = current_user.get("organization_id", "demo-org")
+    member_id = body.get("memberId")
+    action = body.get("action", "exclude")
+
+    if not member_id:
+        raise HTTPException(status_code=400, detail="memberId is required")
+
+    result = await db.execute(
+        select(TeamMember).where(
+            TeamMember.id == member_id,
+            TeamMember.organization_id == org_id,
+        )
+    )
+    member = result.scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=404, detail="Team member not found")
+
+    if action == "exclude":
+        member.role = "excluded"
+    elif action == "include":
+        member.role = "developer"
+    else:
+        raise HTTPException(status_code=400, detail="action must be 'exclude' or 'include'")
+
+    await db.commit()
+
+    return {
+        "ok": True,
+        "memberId": member_id,
+        "displayName": member.display_name,
+        "role": member.role,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/sprints/excluded-members — List excluded team members for a project
+# ---------------------------------------------------------------------------
+
+@router.get("/sprints/excluded-members")
+async def get_excluded_members(
+    projectId: str | None = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return team members with role='excluded' for the given project."""
+    org_id = current_user.get("organization_id", "demo-org")
+
+    filters = [
+        TeamMember.organization_id == org_id,
+        TeamMember.role == "excluded",
+    ]
+    if projectId:
+        filters.append(TeamMember.imported_project_id == projectId)
+
+    result = await db.execute(select(TeamMember).where(*filters))
+    members = result.scalars().all()
+
+    return {
+        "members": [
+            {
+                "id": m.id,
+                "displayName": m.display_name,
+                "email": m.email,
+                "defaultCapacity": m.default_capacity,
+            }
+            for m in members
+        ],
+    }

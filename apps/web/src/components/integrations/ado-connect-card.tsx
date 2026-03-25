@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Unplug, RefreshCw, ExternalLink, Loader2, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIntegrations } from "@/lib/integrations/context";
+import { apiFetch } from "@/lib/api-fetch";
 import { ConnectionStatusBadge } from "./connection-status";
 
 type ConnectMode = "oauth" | "pat";
@@ -45,7 +46,9 @@ export function AdoConnectCard() {
 
   const handleOAuthConnect = () => {
     setIsRedirecting(true);
-    window.location.href = "/api/integrations/ado/connect";
+    const sb = JSON.parse(localStorage.getItem(`sb-obmbpfoormxbbizudrrp-auth-token`) || "{}");
+    const token = sb?.access_token || "";
+    window.location.href = `/api/integrations/ado/connect${token ? `?token=${token}` : ""}`;
   };
 
   const handlePatConnect = async () => {
@@ -62,7 +65,7 @@ export function AdoConnectCard() {
         ? orgUrl
         : `https://dev.azure.com/${orgUrl}`;
 
-      const res = await fetch("/api/integrations/ado/connect-token", {
+      const res = await apiFetch("/api/integrations/ado/connect-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -92,7 +95,7 @@ export function AdoConnectCard() {
 
   const handleDisconnect = async () => {
     try {
-      await fetch("/api/integrations/ado/disconnect", { method: "POST" });
+      await apiFetch("/api/integrations/ado/disconnect", { method: "POST" });
       await disconnect("ado");
     } catch {
       // Silently handle

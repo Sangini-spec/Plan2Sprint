@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { ChartWrapper, chartColors } from "@/components/dashboard/chart-wrapper";
+import { useSelectedProject } from "@/lib/project/context";
 import { useAutoRefresh } from "@/lib/ws/context";
 import { cachedFetch } from "@/lib/fetch-cache";
 
@@ -23,14 +24,18 @@ interface VelocityData {
 }
 
 export function MyVelocityTrend() {
+  const { selectedProject } = useSelectedProject();
   const [chartData, setChartData] = useState<VelocityData[]>([]);
   const [loading, setLoading] = useState(true);
   const refreshKey = useAutoRefresh(["sync_complete", "sprint_completed"]);
 
+  const projectId = selectedProject?.internalId;
+
   const fetchVelocity = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await cachedFetch("/api/analytics");
+      const q = projectId ? `?projectId=${projectId}` : "";
+      const res = await cachedFetch(`/api/analytics${q}`);
       if (res.ok) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data = res.data as any;
@@ -43,7 +48,7 @@ export function MyVelocityTrend() {
       setChartData([]);
     }
     setLoading(false);
-  }, []);
+  }, [projectId]);
 
   useEffect(() => { fetchVelocity(); }, [fetchVelocity, refreshKey]);
 

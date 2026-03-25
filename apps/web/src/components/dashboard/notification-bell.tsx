@@ -11,6 +11,10 @@ import {
   HeartPulse,
   GitPullRequest,
   Info,
+  Bot,
+  ShieldAlert,
+  Activity,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/ws/context";
@@ -42,6 +46,12 @@ const typeConfig: Record<
   sprint_assignment: { icon: CheckCircle2, color: "var(--color-brand-secondary)" },
   ci_failure: { icon: AlertTriangle, color: "var(--color-rag-red)" },
   retro_action: { icon: Info, color: "var(--color-rag-amber)" },
+  sprint_completed: { icon: CheckCircle2, color: "var(--color-brand-secondary)" },
+  // Agent notification types
+  agent_standup: { icon: Bot, color: "var(--color-brand-secondary)" },
+  agent_blocker: { icon: ShieldAlert, color: "var(--color-rag-red)" },
+  agent_health: { icon: Activity, color: "var(--color-rag-amber)" },
+  agent_retro: { icon: FileText, color: "var(--color-rag-green)" },
 };
 
 const defaultConfig = { icon: Bell, color: "var(--text-secondary)" };
@@ -76,6 +86,11 @@ export function NotificationBell() {
     "notification",
     "standup_note_submitted",
     "blocker_flagged",
+    "standup_generated",
+    "blockers_detected",
+    "health_analysis_complete",
+    "retro_generated",
+    "sprint_completed",
   ]);
 
   const fetchNotifications = useCallback(async () => {
@@ -113,6 +128,15 @@ export function NotificationBell() {
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, read: true } : n))
       );
+    } catch {
+      // ignore
+    }
+  };
+
+  const clearAll = async () => {
+    try {
+      await fetch("/api/notifications/read-all", { method: "PATCH" });
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch {
       // ignore
     }
@@ -196,7 +220,7 @@ export function NotificationBell() {
               })
             )}
           </div>
-          <div className="border-t border-[var(--border-subtle)] px-4 py-2">
+          <div className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-2">
             <button
               onClick={() => {
                 setOpen(false);
@@ -206,6 +230,14 @@ export function NotificationBell() {
             >
               View all notifications
             </button>
+            {unreadCount > 0 && (
+              <button
+                onClick={clearAll}
+                className="text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+              >
+                Clear all
+              </button>
+            )}
           </div>
         </div>
       )}

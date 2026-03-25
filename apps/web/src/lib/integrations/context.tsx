@@ -193,6 +193,88 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Check Slack connection status from backend
+  const refreshSlackStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/integrations/slack/status");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.connected) {
+          setConnections((prev) => {
+            const existing = prev.find((c) => c.tool === "slack");
+            const others = prev.filter((c) => c.tool !== "slack");
+            return [
+              ...others,
+              {
+                id: existing?.id ?? `conn-slack-oauth`,
+                tool: "slack" as const,
+                variant: "cloud" as const,
+                status: "connected" as const,
+                displayName: data.team_name || existing?.displayName || "Slack",
+                syncMode: "manual" as const,
+                connectedAt: data.connected_at || existing?.connectedAt,
+                lastSyncedAt: existing?.lastSyncedAt || data.connected_at,
+              },
+            ];
+          });
+        } else {
+          setConnections((prev) => {
+            const had = prev.some((c) => c.tool === "slack");
+            if (had) {
+              const updated = prev.filter((c) => c.tool !== "slack");
+              saveToLocalStorage(updated);
+              return updated;
+            }
+            return prev;
+          });
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  // Check Teams connection status from backend
+  const refreshTeamsStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/integrations/teams/status");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.connected) {
+          setConnections((prev) => {
+            const existing = prev.find((c) => c.tool === "teams");
+            const others = prev.filter((c) => c.tool !== "teams");
+            return [
+              ...others,
+              {
+                id: existing?.id ?? `conn-teams-oauth`,
+                tool: "teams" as const,
+                variant: "cloud" as const,
+                status: data.token_expired ? "token_expired" as const : "connected" as const,
+                displayName: data.tenant_name || existing?.displayName || "Microsoft Teams",
+                syncMode: "manual" as const,
+                connectedAt: data.connected_at || existing?.connectedAt,
+                lastSyncedAt: existing?.lastSyncedAt || data.connected_at,
+              },
+            ];
+          });
+        } else {
+          setConnections((prev) => {
+            const had = prev.some((c) => c.tool === "teams");
+            if (had) {
+              const updated = prev.filter((c) => c.tool !== "teams");
+              saveToLocalStorage(updated);
+              return updated;
+            }
+            return prev;
+          });
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
+
   // Load connections on mount
   useEffect(() => {
     const stored = loadConnections();
@@ -203,7 +285,9 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
     refreshJiraStatus();
     refreshAdoStatus();
     refreshGithubStatus();
-  }, [refreshJiraStatus, refreshAdoStatus, refreshGithubStatus]);
+    refreshSlackStatus();
+    refreshTeamsStatus();
+  }, [refreshJiraStatus, refreshAdoStatus, refreshGithubStatus, refreshSlackStatus, refreshTeamsStatus]);
 
   // Persist whenever connections change
   useEffect(() => {

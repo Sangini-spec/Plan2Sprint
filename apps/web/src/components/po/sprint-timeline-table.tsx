@@ -42,11 +42,20 @@ interface TeamMemberData {
   skillTags: string[];
 }
 
+interface SprintDetail {
+  sprintNumber: number;
+  startDate: string;
+  endDate: string;
+  totalSP: number;
+  itemCount: number;
+}
+
 interface SprintTimelineTableProps {
   assignments: Assignment[];
   workItems: WorkItemData[];
   teamMembers: TeamMemberData[];
   estimatedSprints: number;
+  sprintDetails?: SprintDetail[];
 }
 
 // ---------------------------------------------------------------------------
@@ -74,10 +83,16 @@ const typeColors: Record<string, string> = {
 // Component
 // ---------------------------------------------------------------------------
 
+function formatShortDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 export function SprintTimelineTable({
   assignments,
   workItems,
   teamMembers,
+  sprintDetails = [],
   estimatedSprints,
 }: SprintTimelineTableProps) {
   const [activeSprint, setActiveSprint] = useState(1);
@@ -91,34 +106,51 @@ export function SprintTimelineTable({
     sprintGroups.get(sn)!.push(a);
   }
 
+  // Only show sprints that have assignments (no empty sprints)
   const sprintNums = Array.from(sprintGroups.keys()).sort((a, b) => a - b);
-  const activeAssignments = sprintGroups.get(activeSprint) || [];
+  // If activeSprint has no assignments, default to first non-empty sprint
+  const activeSprintNum = sprintGroups.has(activeSprint) ? activeSprint : (sprintNums[0] ?? 1);
+  const activeAssignments = sprintGroups.get(activeSprintNum) || [];
+
+  // Build a lookup for sprint details by number
+  const detailMap = new Map(sprintDetails.map((d) => [d.sprintNumber, d]));
 
   const lookupWI = (id: string) => workItems.find((wi) => wi.id === id);
   const lookupTM = (id: string) => teamMembers.find((tm) => tm.id === id);
 
   return (
     <div className="flex flex-col h-full">
-      {/* Sprint tabs */}
+      {/* Sprint tabs with date ranges */}
       <div className="flex items-center gap-1 border-b border-[var(--border-subtle)] px-4 overflow-x-auto">
         {sprintNums.map((sn) => {
           const sprintSP = (sprintGroups.get(sn) || []).reduce(
             (s, a) => s + a.storyPoints,
             0
           );
+          const detail = detailMap.get(sn);
+          const itemCount = (sprintGroups.get(sn) || []).length;
+          const dateRange = detail
+            ? `${formatShortDate(detail.startDate)}–${formatShortDate(detail.endDate)}`
+            : null;
+
           return (
             <button
               key={sn}
               onClick={() => setActiveSprint(sn)}
               className={cn(
                 "px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors cursor-pointer",
-                activeSprint === sn
+                activeSprintNum === sn
                   ? "border-[var(--color-brand-secondary)] text-[var(--text-primary)]"
                   : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               )}
             >
-              Sprint {sn}{" "}
-              <span className="text-xs opacity-70">({sprintSP} SP)</span>
+              <span>Sprint {sn}</span>
+              {dateRange && (
+                <span className="text-[10px] opacity-60 ml-1">{dateRange}</span>
+              )}
+              <span className="text-xs opacity-70 ml-1">
+                ({sprintSP} SP · {itemCount} items)
+              </span>
             </button>
           );
         })}

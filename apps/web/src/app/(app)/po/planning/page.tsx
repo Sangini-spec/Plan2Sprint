@@ -3,12 +3,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { Zap, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui";
+import { Button, Tabs } from "@/components/ui";
 import { MetricStrip, type MetricItem } from "@/components/ui/metric-strip";
+import { SprintForecastPanel } from "@/components/po/sprint-forecast-panel";
 import { SprintWorkspaceToolbar } from "@/components/po/sprint-workspace-toolbar";
 import { SprintTimelineTable } from "@/components/po/sprint-timeline-table";
 import { AIInsightsPanel } from "@/components/po/ai-insights-panel";
-import { SprintForecastPanel } from "@/components/po/sprint-forecast-panel";
 import { PlanApprovalModal } from "@/components/po/plan-approval-modal";
 import { WritebackConfirmationPanel } from "@/components/po/writeback-confirmation-panel";
 import { useSelectedProject } from "@/lib/project/context";
@@ -78,6 +78,15 @@ interface TeamMemberData {
 }
 
 // ---------------------------------------------------------------------------
+// Tab config
+// ---------------------------------------------------------------------------
+
+const TAB_ITEMS = [
+  { id: "planning", label: "Sprint Planning" },
+  { id: "forecast", label: "Sprint Forecast" },
+];
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -89,6 +98,9 @@ export default function PlanningPage() {
     "sync_complete",
   ]);
 
+  // Tab state
+  const [activeTab, setActiveTab] = useState("planning");
+
   // State
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -96,6 +108,9 @@ export default function PlanningPage() {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [workItems, setWorkItems] = useState<WorkItemData[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMemberData[]>([]);
+  const [excludedMembers, setExcludedMembers] = useState<TeamMemberData[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [sprintDetails, setSprintDetails] = useState<any[]>([]);
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -147,9 +162,11 @@ export default function PlanningPage() {
           setAssignments(data.assignments || []);
           setWorkItems(data.workItems || []);
           setTeamMembers(data.teamMembers || []);
+          setSprintDetails(data.sprintDetails || []);
         } else {
           setPlan(null);
           setAssignments([]);
+          setSprintDetails([]);
         }
       }
     } catch {
@@ -161,20 +178,35 @@ export default function PlanningPage() {
     setLoading(false);
   }, [projectId]);
 
+  const fetchExcludedMembers = useCallback(async () => {
+    if (!projectId) { setExcludedMembers([]); return; }
+    try {
+      const res = await fetch(`/api/sprints/excluded-members?projectId=${projectId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setExcludedMembers(data.members || []);
+      }
+    } catch { setExcludedMembers([]); }
+  }, [projectId]);
+
   useEffect(() => {
     setLoading(true);
     fetchPlanData();
+    fetchExcludedMembers();
   }, [fetchPlanData, refreshKey]);
 
   // -----------------------------------------------------------------------
   // Actions
   // -----------------------------------------------------------------------
 
+  // Use backend directly for sprint generation (bypasses Next.js proxy timeout)
+  const sprintApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
   const handleGenerate = async () => {
     if (!projectId) return;
     setGenerating(true);
     try {
-      const res = await fetch("/api/sprints", {
+      const res = await fetch(`${sprintApiBase}/api/sprints`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId }),
@@ -194,29 +226,79 @@ export default function PlanningPage() {
     }
   };
 
-  const handleRegenerate = async () => {
+  const handleRegenerate = async (feedback?: string) => {
     if (!projectId) return;
     setGenerating(true);
     try {
-      const res = await fetch("/api/sprints", {
+      // Default optimization: pack 2-3 features per sprint to minimize total sprints
+      const defaultFeedback = feedback ||
+        "CRITICAL: Pack 2-3 features/epics into EACH sprint. Do NOT put only 1 feature per sprint. " +
+        "Group related features together (e.g., registration + onboarding in Sprint 1, booking + consultation in Sprint 2). " +
+        "Each sprint must contain ALL stories from its assigned features. " +
+        "Target the minimum number of sprints possible — aim for half the number of features.";
+
+      const res = await fetch(`${sprintApiBase}/api/sprints`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId,
-          feedback:
-            plan?.status === "REJECTED"
-              ? "Regenerating after rejection"
-              : undefined,
+          feedback: defaultFeedback,
         }),
       });
       if (res.ok) {
+        // Aggressively invalidate all sprint caches
         invalidateCache("/api/sprints");
+        invalidateCache(`/api/sprints?projectId=${projectId}`);
+        invalidateCache(`/api/sprints/plan?projectId=${projectId}`);
+        invalidateCache("/api/sprints/plan");
         await fetchPlanData();
+      } else {
+        const text = await res.text().catch(() => "");
+        let errData;
+        try { errData = JSON.parse(text); } catch { errData = { raw: text.slice(0, 200) }; }
+        console.error(`Regeneration failed (${res.status}):`, errData);
+        alert(`Sprint generation failed: ${errData?.detail || errData?.raw || `HTTP ${res.status}`}`);
       }
     } catch (e) {
       console.error("Regeneration failed:", e);
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleExcludeMember = async (memberId: string, displayName: string) => {
+    if (!confirm(`Remove ${displayName} from sprint planning?`)) return;
+    try {
+      const res = await fetch("/api/sprints/team-member", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ memberId, action: "exclude" }),
+      });
+      if (res.ok) {
+        const excluded = teamMembers.find((tm) => tm.id === memberId);
+        setTeamMembers((prev) => prev.filter((tm) => tm.id !== memberId));
+        setAssignments((prev) => prev.filter((a) => a.teamMemberId !== memberId));
+        if (excluded) setExcludedMembers((prev) => [...prev, excluded]);
+      }
+    } catch (e) {
+      console.error("Failed to exclude member:", e);
+    }
+  };
+
+  const handleIncludeMember = async (memberId: string, displayName: string) => {
+    try {
+      const res = await fetch("/api/sprints/team-member", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ memberId, action: "include" }),
+      });
+      if (res.ok) {
+        const included = excludedMembers.find((tm) => tm.id === memberId);
+        setExcludedMembers((prev) => prev.filter((tm) => tm.id !== memberId));
+        if (included) setTeamMembers((prev) => [...prev, included]);
+      }
+    } catch (e) {
+      console.error("Failed to include member:", e);
     }
   };
 
@@ -345,71 +427,90 @@ export default function PlanningPage() {
     );
   }
 
-  // Plan exists — full workspace layout
+  // Plan exists — full workspace layout with tabs
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)]">
-      {/* Toolbar */}
-      <SprintWorkspaceToolbar
-        status={plan.status}
-        generating={generating}
-        projectName={selectedProject.name}
-        onGenerate={handleGenerate}
-        onRegenerate={handleRegenerate}
-        onApprove={handleApprove}
-        onReject={handleReject}
+    <div className="space-y-4">
+      {/* Tab bar — same pattern as PO Dashboard */}
+      <Tabs
+        items={TAB_ITEMS}
+        activeId={activeTab}
+        onChange={setActiveTab}
+        className="max-w-xs"
       />
 
-      {/* Metric strip */}
-      {metricItems.length > 0 && (
-        <div className="px-4 py-2.5 border-b border-[var(--border-subtle)]">
-          <MetricStrip items={metricItems} />
+      {/* ── Sprint Planning Tab ── */}
+      {activeTab === "planning" && (
+        <div className="flex flex-col h-[calc(100vh-180px)]">
+          {/* Toolbar */}
+          <SprintWorkspaceToolbar
+            status={plan.status}
+            generating={generating}
+            projectName={selectedProject.name}
+            onGenerate={handleGenerate}
+            onRegenerate={handleRegenerate}
+            onApprove={handleApprove}
+            onReject={handleReject}
+          />
+
+          {/* Metric strip */}
+          {metricItems.length > 0 && (
+            <div className="px-4 py-2.5 border-b border-[var(--border-subtle)]">
+              <MetricStrip items={metricItems} />
+            </div>
+          )}
+
+          {/* AI Insights — full-width collapsible overview */}
+          <AIInsightsPanel
+            estimatedSprints={plan.estimatedSprints}
+            estimatedWeeksTotal={plan.estimatedWeeksTotal}
+            estimatedEndDate={plan.estimatedEndDate}
+            projectCompletionSummary={plan.projectCompletionSummary}
+            capacityRecommendations={plan.capacityRecommendations}
+            totalStoryPoints={plan.totalStoryPoints}
+            riskSummary={plan.riskSummary}
+            assignments={assignments}
+            teamMembers={teamMembers}
+            overallRationale={plan.overallRationale}
+            onExcludeMember={handleExcludeMember}
+            excludedMembers={excludedMembers}
+            onIncludeMember={handleIncludeMember}
+          />
+
+          {/* Sprint Timeline Table — full width */}
+          <div className="flex-1 min-h-0">
+            <SprintTimelineTable
+              assignments={assignments}
+              workItems={workItems}
+              teamMembers={teamMembers}
+              estimatedSprints={plan.estimatedSprints ?? 1}
+              sprintDetails={sprintDetails}
+            />
+          </div>
+
+          {/* Writeback status — always visible when plan exists */}
+          <div className="border-t border-[var(--border-subtle)]">
+            <WritebackConfirmationPanel />
+          </div>
+
+          {/* Slim confirmation modal */}
+          <PlanApprovalModal
+            open={modalOpen}
+            onClose={handleModalClose}
+            mode={modalMode}
+            planId={plan.id}
+            totalSP={plan.totalStoryPoints}
+            estimatedSprints={plan.estimatedSprints}
+            tool={plan.tool}
+          />
         </div>
       )}
 
-      {/* AI Insights — full-width collapsible overview */}
-      <AIInsightsPanel
-        estimatedSprints={plan.estimatedSprints}
-        estimatedWeeksTotal={plan.estimatedWeeksTotal}
-        estimatedEndDate={plan.estimatedEndDate}
-        projectCompletionSummary={plan.projectCompletionSummary}
-        capacityRecommendations={plan.capacityRecommendations}
-        totalStoryPoints={plan.totalStoryPoints}
-        riskSummary={plan.riskSummary}
-        assignments={assignments}
-        teamMembers={teamMembers}
-        overallRationale={plan.overallRationale}
-      />
-
-      {/* Sprint Forecast — AI-powered prediction */}
-      <div className="px-4 py-3 overflow-y-auto max-h-[420px]">
-        <SprintForecastPanel />
-      </div>
-
-      {/* Sprint Timeline Table — full width now */}
-      <div className="flex-1 min-h-0">
-        <SprintTimelineTable
-          assignments={assignments}
-          workItems={workItems}
-          teamMembers={teamMembers}
-          estimatedSprints={plan.estimatedSprints ?? 1}
-        />
-      </div>
-
-      {/* Writeback status — always visible when plan exists */}
-      <div className="border-t border-[var(--border-subtle)]">
-        <WritebackConfirmationPanel />
-      </div>
-
-      {/* Slim confirmation modal */}
-      <PlanApprovalModal
-        open={modalOpen}
-        onClose={handleModalClose}
-        mode={modalMode}
-        planId={plan.id}
-        totalSP={plan.totalStoryPoints}
-        estimatedSprints={plan.estimatedSprints}
-        tool={plan.tool}
-      />
+      {/* ── Sprint Forecast Tab ── */}
+      {activeTab === "forecast" && (
+        <div className="space-y-4">
+          <SprintForecastPanel />
+        </div>
+      )}
     </div>
   );
 }

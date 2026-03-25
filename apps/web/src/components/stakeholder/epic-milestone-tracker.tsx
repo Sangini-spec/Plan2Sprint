@@ -9,6 +9,7 @@ import { Progress } from "@/components/ui";
 import type { HealthSeverity } from "@/lib/types/models";
 import { useAutoRefresh } from "@/lib/ws/context";
 import { cachedFetch } from "@/lib/fetch-cache";
+import { useSelectedProject } from "@/lib/project/context";
 
 interface EpicData {
   id: string;
@@ -48,12 +49,16 @@ export function EpicMilestoneTracker() {
   const [milestones, setMilestones] = useState<MilestoneData[]>([]);
   const [loading, setLoading] = useState(true);
   const refreshKey = useAutoRefresh(["sync_complete"]);
+  const { selectedProject } = useSelectedProject();
+  const projectId = selectedProject?.internalId;
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    const q = projectId ? `&projectId=${projectId}` : "";
+    const qFirst = projectId ? `?projectId=${projectId}` : "";
     try {
       // Derive epics from work items by grouping on type=Epic or Feature
-      const wiRes = await cachedFetch("/api/dashboard/work-items?limit=200");
+      const wiRes = await cachedFetch(`/api/dashboard/work-items?limit=200${q}`);
       if (wiRes.ok) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data = wiRes.data as any;
@@ -92,7 +97,7 @@ export function EpicMilestoneTracker() {
       }
 
       // Derive milestones from sprints
-      const spRes = await cachedFetch("/api/dashboard/sprints");
+      const spRes = await cachedFetch(`/api/dashboard/sprints${qFirst}`);
       if (spRes.ok) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data = spRes.data as any;
@@ -112,7 +117,7 @@ export function EpicMilestoneTracker() {
       setMilestones([]);
     }
     setLoading(false);
-  }, []);
+  }, [projectId]);
 
   useEffect(() => { fetchData(); }, [fetchData, refreshKey]);
 

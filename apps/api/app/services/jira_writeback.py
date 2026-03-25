@@ -4,21 +4,19 @@ Jira Write-back Service — batch write-back of approved sprint plan to Jira Clo
 After a sprint plan is approved:
   1. Load the approved plan and all assignments from DB
   2. Validate pre-conditions (plan is APPROVED, Jira connected, token valid)
-  3. For each assignment, PUT the Jira issue with:
-     - assignee (account ID)
-     - story_points (customfield_10016)
-  4. Move issues to the correct sprint via Agile API (sprint_id)
-  5. Add a comment to each issue with assignment rationale
-  6. Log each write-back in the audit log
-  7. Update the plan's synced_at timestamp and status
+  3. For each assignment, POST a rich AI recommendation comment to the Jira issue
+  4. Log each write-back in the audit log
+  5. Update the plan's synced_at timestamp and status
+
+NOTE: No fields are modified on the Jira issue (no assignee, story points, or sprint changes).
+      The comment serves as an AI recommendation that the team can act on manually.
 """
 
 from __future__ import annotations
 
 import base64
-import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,14 +34,6 @@ from ..services.encryption import decrypt_token
 import httpx
 
 logger = logging.getLogger(__name__)
-
-# Write-back allowlist (must match the frozen set in jira.py / writeback.ts)
-JIRA_WRITEBACK_ALLOWLIST = frozenset([
-    "assignee",
-    "sprint_id",
-    "story_points",
-    "status",
-])
 
 ATLASSIAN_API_BASE = "https://api.atlassian.com"
 ATLASSIAN_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
@@ -130,28 +120,6 @@ async def _get_valid_token(db: AsyncSession, conn: ToolConnection) -> str:
     return access_token
 
 
-async def _jira_put(
-    url: str,
-    access_token: str,
-    json_body: dict,
-    auth_header: str | None = None,
-) -> dict:
-    """PUT a Jira issue update."""
-    headers = {
-        "Authorization": auth_header or f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        res = await client.put(url, headers=headers, json=json_body)
-        if res.is_error:
-            logger.error(f"Jira PUT {url} failed: {res.status_code} {res.text[:300]}")
-            return {"error": f"Jira API error: {res.status_code}", "status_code": res.status_code}
-        if res.status_code == 204:
-            return {"ok": True}
-        return res.json()
-
-
 async def _jira_post(
     url: str,
     access_token: str,
@@ -175,6 +143,116 @@ async def _jira_post(
 
 
 # ---------------------------------------------------------------------------
+# ADF comment builder
+# ---------------------------------------------------------------------------
+
+def _adf_table_row(label: str, value: str) -> dict:
+    """Build an ADF table row with two cells."""
+    return {
+        "type": "tableRow",
+        "content": [
+            {
+                "type": "tableCell",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {"type": "text", "text": label, "marks": [{"type": "strong"}]},
+                        ],
+                    }
+                ],
+            },
+            {
+                "type": "tableCell",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {"type": "text", "text": value},
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _build_recommendation_comment(
+    assignment: PlanAssignment,
+    plan: SprintPlan,
+) -> dict:
+    """Build a rich ADF comment body for the AI recommendation."""
+    conf_pct = (
+        round(assignment.confidence_score * 100)
+        if assignment.confidence_score <= 1.0
+        else round(assignment.confidence_score)
+    )
+    risk_flags_str = ", ".join(assignment.risk_flags) if assignment.risk_flags else "None"
+    rationale_text = assignment.rationale or "No rationale provided."
+    model_used = plan.ai_model_used if hasattr(plan, "ai_model_used") and plan.ai_model_used else "auto"
+    approved_date = (
+        plan.approved_at.strftime("%Y-%m-%d %H:%M UTC")
+        if plan.approved_at
+        else "N/A"
+    )
+
+    content_blocks = [
+        # Heading
+        {
+            "type": "heading",
+            "attrs": {"level": 3},
+            "content": [
+                {"type": "text", "text": "Plan2Sprint AI Recommendation"},
+            ],
+        },
+        # Table with key metrics
+        {
+            "type": "table",
+            "attrs": {"isNumberColumnEnabled": False, "layout": "default"},
+            "content": [
+                _adf_table_row("Recommended Sprint", f"Sprint {assignment.sprint_number}"),
+                _adf_table_row("AI-Estimated Story Points", f"{assignment.story_points:.0f}"),
+                _adf_table_row("Confidence", f"{conf_pct}%"),
+                _adf_table_row("Risk Flags", risk_flags_str),
+            ],
+        },
+        # Rationale in info panel
+        {
+            "type": "panel",
+            "attrs": {"panelType": "info"},
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "Rationale: ", "marks": [{"type": "strong"}]},
+                        {"type": "text", "text": rationale_text},
+                    ],
+                }
+            ],
+        },
+        # Footer
+        {
+            "type": "paragraph",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Generated by Plan2Sprint AI ({model_used}) | Approved {approved_date}",
+                    "marks": [{"type": "em"}],
+                },
+            ],
+        },
+    ]
+
+    return {
+        "body": {
+            "type": "doc",
+            "version": 1,
+            "content": content_blocks,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # MAIN: execute_batch_writeback
 # ---------------------------------------------------------------------------
 
@@ -186,6 +264,9 @@ async def execute_batch_writeback(
 ) -> dict:
     """
     Execute batch write-back of approved plan assignments to Jira.
+
+    Posts an AI recommendation comment to each work item.
+    No fields are modified — comments are non-destructive.
 
     Returns: { synced: int, pending: int, failed: int, errors: [...] }
     """
@@ -212,16 +293,7 @@ async def execute_batch_writeback(
 
     access_token = await _get_valid_token(db, conn)
 
-    # 3. Load iteration for sprint ID
-    iter_result = await db.execute(
-        select(Iteration).where(Iteration.id == plan.iteration_id)
-    )
-    iteration = iter_result.scalar_one_or_none()
-
-    # The iteration's external_id maps to the Jira sprint ID
-    jira_sprint_id = iteration.external_id if iteration else None
-
-    # 4. Load assignments with work items and team members
+    # 3. Load assignments with work items
     assign_result = await db.execute(
         select(PlanAssignment).where(PlanAssignment.sprint_plan_id == plan_id)
     )
@@ -233,41 +305,27 @@ async def execute_batch_writeback(
         await db.commit()
         return {"synced": 0, "pending": 0, "failed": 0, "errors": []}
 
-    # Load work items and team members
+    # Load work items
     wi_ids = [a.work_item_id for a in assignments]
-    tm_ids = list(set(a.team_member_id for a in assignments))
-
     wi_result = await db.execute(
         select(WorkItem).where(WorkItem.id.in_(wi_ids))
     )
     work_items = {wi.id: wi for wi in wi_result.scalars().all()}
 
-    tm_result = await db.execute(
-        select(TeamMember).where(TeamMember.id.in_(tm_ids))
-    )
-    team_members = {tm.id: tm for tm in tm_result.scalars().all()}
-
-    # Get approver display name
-    approver_name = approver_id
-
-    # 5. Update plan status to SYNCING
+    # 4. Update plan status to SYNCING
     plan.status = "SYNCING"
     await db.flush()
 
-    # 6. Execute write-back for each assignment
+    # 5. Post AI recommendation comment for each assignment
     synced = 0
     failed = 0
     errors: list[str] = []
 
-    # Collect issue keys that need to be moved to the sprint (batch sprint move)
-    sprint_move_issues: list[str] = []
-
     for assignment in assignments:
         wi = work_items.get(assignment.work_item_id)
-        tm = team_members.get(assignment.team_member_id)
 
-        if not wi or not tm:
-            errors.append(f"Missing data for assignment {assignment.id}")
+        if not wi:
+            errors.append(f"Missing work item for assignment {assignment.id}")
             failed += 1
             continue
 
@@ -277,36 +335,23 @@ async def execute_batch_writeback(
             failed += 1
             continue
 
-        # Build Jira field update payload
-        # Map Plan2Sprint fields → Jira API field names
-        jira_fields: dict = {}
+        # Build rich ADF comment
+        comment_body = _build_recommendation_comment(assignment, plan)
 
-        # Assignee: use the team member's external_id (Jira accountId)
-        # Fall back to email-based lookup if no external_id
-        if tm.external_id:
-            jira_fields["assignee"] = {"accountId": tm.external_id}
-        elif tm.email:
-            jira_fields["assignee"] = {"accountId": tm.email}
-
-        # Story points (Jira custom field — varies by instance, 10016 is common)
-        jira_fields["customfield_10016"] = assignment.story_points
-
-        # Execute the PUT to update the issue
         try:
-            result = await _jira_put(
-                f"{base_url}/rest/api/3/issue/{external_id}",
+            result = await _jira_post(
+                f"{base_url}/rest/api/3/issue/{external_id}/comment",
                 access_token,
-                {"fields": jira_fields},
+                comment_body,
                 auth_header,
             )
 
             if "error" in result:
-                errors.append(f"Jira PUT failed for {external_id}: {result['error']}")
+                errors.append(f"Comment POST failed for {external_id}: {result['error']}")
                 failed += 1
 
-                # Audit log — failed
                 _add_audit_entry(
-                    db, org_id, approver_id, "writeback_failed", "work_item",
+                    db, org_id, approver_id, "comment_failed", "work_item",
                     wi.id, success=False,
                     metadata={
                         "tool": "jira",
@@ -317,74 +362,39 @@ async def execute_batch_writeback(
                 )
                 continue
 
-            # Track for sprint move
-            if jira_sprint_id:
-                sprint_move_issues.append(external_id)
-
-            # Add a comment with assignment rationale
-            conf_pct = round(assignment.confidence_score * 100) if assignment.confidence_score <= 1.0 else round(assignment.confidence_score)
-            comment_body = {
-                "body": {
-                    "type": "doc",
-                    "version": 1,
-                    "content": [
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Plan2Sprint Sprint Assignment", "marks": [{"type": "strong"}]},
-                            ],
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": f"Assigned to: {tm.display_name}\n"},
-                                {"type": "text", "text": f"Story Points: {assignment.story_points:.0f}\n"},
-                                {"type": "text", "text": f"Rationale: {assignment.rationale}\n"},
-                                {"type": "text", "text": f"Confidence: {conf_pct}%\n"},
-                                {"type": "text", "text": f"Approved by: {approver_name} on {plan.approved_at.strftime('%Y-%m-%d %H:%M') if plan.approved_at else 'N/A'}"},
-                            ],
-                        },
-                    ],
-                },
-            }
-
-            try:
-                await _jira_post(
-                    f"{base_url}/rest/api/3/issue/{external_id}/comment",
-                    access_token,
-                    comment_body,
-                    auth_header,
-                )
-            except Exception as ce:
-                logger.warning(f"Failed to add comment to {external_id}: {ce}")
-                # Don't fail the whole write-back for a comment error
-
             synced += 1
 
             # Audit log — success
+            conf_pct = (
+                round(assignment.confidence_score * 100)
+                if assignment.confidence_score <= 1.0
+                else round(assignment.confidence_score)
+            )
             _add_audit_entry(
-                db, org_id, approver_id, "writeback", "work_item",
+                db, org_id, approver_id, "comment_posted", "work_item",
                 wi.id, success=True,
                 metadata={
                     "tool": "jira",
                     "externalId": external_id,
                     "itemTitle": wi.title,
-                    "changes": [
-                        {"field": "assignee", "from": None, "to": tm.external_id or tm.email},
-                        {"field": "story_points", "from": wi.story_points, "to": assignment.story_points},
-                        {"field": "sprint_id", "from": None, "to": jira_sprint_id},
-                    ],
-                    "undoable": True,
+                    "action": "comment_posted",
+                    "commentSummary": {
+                        "recommendedSprint": assignment.sprint_number,
+                        "aiEstimatedSP": assignment.story_points,
+                        "confidence": conf_pct,
+                        "riskFlags": list(assignment.risk_flags) if assignment.risk_flags else [],
+                    },
+                    "undoable": False,
                 },
             )
 
         except Exception as e:
-            logger.error(f"Write-back error for {external_id}: {e}")
+            logger.error(f"Comment error for {external_id}: {e}")
             errors.append(f"Exception for {external_id}: {str(e)[:100]}")
             failed += 1
 
             _add_audit_entry(
-                db, org_id, approver_id, "writeback_failed", "work_item",
+                db, org_id, approver_id, "comment_failed", "work_item",
                 wi.id, success=False,
                 metadata={
                     "tool": "jira",
@@ -394,44 +404,19 @@ async def execute_batch_writeback(
                 },
             )
 
-    # 7. Batch sprint move via Agile API (more efficient than per-issue)
-    if jira_sprint_id and sprint_move_issues:
-        try:
-            # Jira Agile API: POST /rest/agile/1.0/sprint/{sprintId}/issue
-            config = conn.config or {}
-            cloud_id = config.get("cloud_id", "")
-            agile_base = f"{ATLASSIAN_API_BASE}/ex/jira/{cloud_id}" if cloud_id else base_url
-
-            move_result = await _jira_post(
-                f"{agile_base}/rest/agile/1.0/sprint/{jira_sprint_id}/issue",
-                access_token,
-                {"issues": sprint_move_issues},
-                auth_header,
-            )
-
-            if "error" in move_result:
-                logger.warning(f"Sprint move failed: {move_result['error']}")
-                errors.append(f"Sprint move failed for {len(sprint_move_issues)} issues: {move_result['error']}")
-            else:
-                logger.info(f"Moved {len(sprint_move_issues)} issues to sprint {jira_sprint_id}")
-
-        except Exception as e:
-            logger.warning(f"Sprint move error: {e}")
-            errors.append(f"Sprint move exception: {str(e)[:100]}")
-
-    # 8. Update plan status
+    # 6. Update plan status
     if failed == 0:
         plan.status = "SYNCED"
     else:
         plan.status = "SYNCED_PARTIAL"
 
     plan.synced_at = datetime.now(timezone.utc)
-    plan.undo_available_until = datetime.now(timezone.utc) + timedelta(minutes=60)
+    plan.undo_available_until = None  # No undo for comment-based sync
     await db.commit()
 
     logger.info(
-        f"Jira write-back complete for plan {plan_id}: "
-        f"{synced} synced, {failed} failed, {len(errors)} errors"
+        f"Jira comment sync complete for plan {plan_id}: "
+        f"{synced} commented, {failed} failed, {len(errors)} errors"
     )
 
     return {

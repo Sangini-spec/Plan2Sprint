@@ -1,35 +1,33 @@
 /**
- * Write-back safety enforcement.
- * Only specific fields are allowed to be written back to external tools.
- * This is a critical security boundary per the MRD.
+ * Write-back configuration.
+ *
+ * Sprint plan sync now uses comment-only mode — AI recommendations are posted
+ * as comments to each work item in Jira/ADO. No fields are modified.
+ *
+ * Board status write-back (drag-and-drop column changes) still updates
+ * the status field directly via the board writeback endpoint.
  */
 
-// Frozen allowlists — cannot be modified at runtime
-export const JIRA_WRITEBACK_ALLOWLIST = Object.freeze([
-  "assignee",
-  "sprint_id",
-  "story_points",
-  "status",
-] as const);
-
-export const ADO_WRITEBACK_ALLOWLIST = Object.freeze([
-  "System.AssignedTo",
-  "System.IterationPath",
-  "Microsoft.VSTS.Scheduling.StoryPoints",
-  "Microsoft.VSTS.Scheduling.StartDate",
-  "Microsoft.VSTS.Scheduling.TargetDate",
-  "System.State",
-] as const);
-
-// GitHub is read-only — no write-back allowed
+// GitHub remains read-only — no write-back of any kind
 export const GITHUB_WRITEBACK_ALLOWLIST = Object.freeze([] as const);
 
-export type JiraWritebackField = (typeof JIRA_WRITEBACK_ALLOWLIST)[number];
-export type AdoWritebackField = (typeof ADO_WRITEBACK_ALLOWLIST)[number];
+/**
+ * Sprint plan writeback mode.
+ * "comment" = post AI recommendation comments only (no field changes).
+ */
+export const WRITEBACK_MODE = "comment" as const;
+
+export type WritebackMode = typeof WRITEBACK_MODE;
+
+// Board status writeback still allows state field changes
+const BOARD_WRITEBACK_FIELDS: Record<string, readonly string[]> = {
+  jira: ["status"],
+  ado: ["System.State"],
+};
 
 /**
  * Validate that all fields in a write-back request are allowed.
- * Returns the list of disallowed fields (empty if all valid).
+ * With comment-only sprint sync, only board status fields are valid for direct write-back.
  */
 export function validateWritebackFields(
   tool: "jira" | "ado" | "github",
@@ -42,37 +40,13 @@ export function validateWritebackFields(
     };
   }
 
-  const allowlist = tool === "jira" ? JIRA_WRITEBACK_ALLOWLIST : ADO_WRITEBACK_ALLOWLIST;
+  const allowlist = BOARD_WRITEBACK_FIELDS[tool] || [];
   const disallowed = Object.keys(fields).filter(
-    (f) => !(allowlist as readonly string[]).includes(f)
+    (f) => !allowlist.includes(f)
   );
 
   return {
     valid: disallowed.length === 0,
     disallowedFields: disallowed,
-  };
-}
-
-/**
- * Build an audit-safe write-back payload with before/after states.
- */
-export function buildWritebackPayload(
-  tool: "jira" | "ado",
-  itemId: string,
-  fields: Record<string, unknown>,
-  previousValues: Record<string, unknown>
-): {
-  tool: string;
-  itemId: string;
-  changes: { field: string; from: unknown; to: unknown }[];
-} {
-  return {
-    tool,
-    itemId,
-    changes: Object.entries(fields).map(([field, value]) => ({
-      field,
-      from: previousValues[field] ?? null,
-      to: value,
-    })),
   };
 }

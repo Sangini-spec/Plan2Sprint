@@ -19,6 +19,7 @@ interface AuthContextType {
   role: UserRole;
   loading: boolean;
   signOut: () => Promise<void>;
+  updateAppUser: (updates: Partial<AppUser>) => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -27,6 +28,7 @@ const AuthContext = createContext<AuthContextType>({
   role: "developer",
   loading: true,
   signOut: async () => {},
+  updateAppUser: () => {},
 });
 
 const isDemoMode =
@@ -135,6 +137,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  const updateAppUser = useCallback((updates: Partial<AppUser>) => {
+    setAppUser((prev) => (prev ? { ...prev, ...updates } : prev));
+  }, []);
+
   const signOut = useCallback(async () => {
     if (isDemoMode) {
       localStorage.removeItem("plan2sprint_demo_user");
@@ -154,8 +160,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Memoize context value to prevent unnecessary child re-renders
   const value = useMemo(
-    () => ({ user, appUser, role, loading, signOut }),
-    [user, appUser, role, loading, signOut]
+    () => ({ user, appUser, role, loading, signOut, updateAppUser }),
+    [user, appUser, role, loading, signOut, updateAppUser]
   );
 
   return (

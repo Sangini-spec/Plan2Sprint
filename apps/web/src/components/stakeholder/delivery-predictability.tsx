@@ -7,6 +7,7 @@ import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { ChartWrapper, chartColors } from "@/components/dashboard/chart-wrapper";
 import { useAutoRefresh } from "@/lib/ws/context";
 import { cachedFetch } from "@/lib/fetch-cache";
+import { useSelectedProject } from "@/lib/project/context";
 import {
   LineChart,
   Line,
@@ -67,11 +68,14 @@ export function DeliveryPredictability() {
   const [data, setData] = useState<PredictabilityData | null>(null);
   const [loading, setLoading] = useState(true);
   const refreshKey = useAutoRefresh(["sync_complete"]);
+  const { selectedProject } = useSelectedProject();
+  const projectId = selectedProject?.internalId;
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    const q = projectId ? `?projectId=${projectId}` : "";
     try {
-      const res = await cachedFetch("/api/analytics");
+      const res = await cachedFetch(`/api/analytics${q}`);
       if (res.ok) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const json = res.data as any;
@@ -100,7 +104,7 @@ export function DeliveryPredictability() {
       setData(null);
     }
     setLoading(false);
-  }, []);
+  }, [projectId]);
 
   useEffect(() => { fetchData(); }, [fetchData, refreshKey]);
 

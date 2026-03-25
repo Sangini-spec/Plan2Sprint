@@ -6,7 +6,7 @@
 // TOOL TYPES
 // ============================================================================
 
-export type ToolType = "jira" | "ado" | "github" | "slack" | "linear";
+export type ToolType = "jira" | "ado" | "github" | "slack" | "teams" | "linear";
 
 export type ConnectionVariant =
   | "cloud"       // Jira Cloud, ADO Cloud

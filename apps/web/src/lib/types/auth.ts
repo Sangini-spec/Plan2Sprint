@@ -51,6 +51,11 @@ export const DEV_DASHBOARD_ROLES: UserRole[] = [
   "developer",
 ];
 
+/** Check if role has management access (owner, admin, or product_owner) */
+export function isAdmin(role: UserRole | string | undefined): boolean {
+  return role === "owner" || role === "admin" || role === "product_owner";
+}
+
 /** Roles that can access the Stakeholder dashboard */
 export const STAKEHOLDER_DASHBOARD_ROLES: UserRole[] = [
   "owner",

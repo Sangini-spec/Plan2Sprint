@@ -2,7 +2,14 @@
 WebSocket connection manager for real-time push events.
 
 Manages per-organization connection pools and broadcasts events to all
-connected clients in an org. Uses asyncio primitives — no external deps.
+connected clients in an org.
+
+When Redis is available, broadcast() dual-writes:
+  1. Local WebSocket push (immediate, in-process)
+  2. Redis Stream XADD (durable, cross-worker)
+
+A separate relay consumer (ws_relay.py) reads from the Redis Stream and
+pushes events from *other* workers to local WebSocket connections.
 
 Event types broadcasted:
   - sync_complete        (after Jira/ADO/GitHub sync finishes)
@@ -29,8 +36,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from fastapi import WebSocket
 
@@ -49,6 +58,8 @@ class ConnectionManager:
         # org_id -> list of (websocket, user_id)
         self._connections: dict[str, list[tuple[WebSocket, str]]] = {}
         self._lock = asyncio.Lock()
+        # Unique worker ID for cross-worker deduplication
+        self.worker_id: str = f"{os.getpid()}-{uuid4().hex[:8]}"
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -85,6 +96,10 @@ class ConnectionManager:
         """
         Send an event to ALL connected clients in the organization.
 
+        Dual-write:
+          1. Push to local WebSocket connections immediately.
+          2. Publish to Redis Stream for cross-worker relay (fire-and-forget).
+
         Event format:
         {
             "type": "sync_complete",
@@ -93,7 +108,25 @@ class ConnectionManager:
         }
         """
         event.setdefault("ts", datetime.now(timezone.utc).isoformat())
-        message = json.dumps(event)
+
+        # 1. Local push (existing behavior — always happens first)
+        await self._local_broadcast(org_id, event)
+
+        # 2. Publish to Redis Stream (non-blocking, graceful on failure)
+        try:
+            from .event_bus import publish
+            await publish(org_id, event, origin_worker=self.worker_id)
+        except Exception:
+            pass  # Redis unavailable — local broadcast already happened
+
+    async def _local_broadcast(self, org_id: str, event: dict[str, Any]) -> None:
+        """
+        Push event to all WebSocket connections in this process for the org.
+
+        This is the original broadcast logic, now extracted so the Redis
+        relay consumer can also call it for cross-worker events.
+        """
+        message = json.dumps(event) if isinstance(event, dict) else event
 
         conns = self._connections.get(org_id, [])
         if not conns:

@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { Settings } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Settings, Loader2, Check } from "lucide-react";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
-import { Button, Input, Select, FormField, Badge } from "@/components/ui";
+import { Button, Input, Select, FormField } from "@/components/ui";
+import { useAuth } from "@/lib/auth/context";
+import { isAdmin } from "@/lib/types/auth";
 
 const TIMEZONES = [
   "America/New_York",
@@ -24,58 +26,88 @@ const TIMEZONES = [
 ];
 
 const HOUR_OPTIONS = [
-  "06:00",
-  "06:30",
-  "07:00",
-  "07:30",
-  "08:00",
-  "08:30",
-  "09:00",
-  "09:30",
-  "10:00",
-  "10:30",
-  "11:00",
+  "06:00", "06:30", "07:00", "07:30", "08:00", "08:30",
+  "09:00", "09:30", "10:00", "10:30", "11:00",
 ];
 
 const END_HOUR_OPTIONS = [
-  "16:00",
-  "16:30",
-  "17:00",
-  "17:30",
-  "18:00",
-  "18:30",
-  "19:00",
-  "19:30",
-  "20:00",
+  "16:00", "16:30", "17:00", "17:30", "18:00", "18:30",
+  "19:00", "19:30", "20:00",
 ];
 
 export default function GeneralSettingsPage() {
-  const [orgName, setOrgName] = useState("Acme Corp");
+  const { role } = useAuth();
+  const canEdit = isAdmin(role);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const [orgName, setOrgName] = useState("");
   const [timezone, setTimezone] = useState("America/New_York");
   const [workStart, setWorkStart] = useState("09:00");
   const [workEnd, setWorkEnd] = useState("17:00");
-  const [displayName, setDisplayName] = useState("Jordan Rivera");
-  const [email] = useState("jordan.rivera@acme.com");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/organizations/current");
+        if (res.ok) {
+          const data = await res.json();
+          setOrgName(data.name || "");
+          setTimezone(data.timezone || "America/New_York");
+          setWorkStart(data.workingHoursStart || "09:00");
+          setWorkEnd(data.workingHoursEnd || "17:00");
+        }
+      } catch {
+        // API unavailable — keep defaults
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/organizations/current", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: orgName,
+          timezone,
+          workingHoursStart: workStart,
+          workingHoursEnd: workEnd,
+        }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    } catch {
+      // Handle error silently
+    }
+    setSaving(false);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-5 w-5 animate-spin text-[var(--text-secondary)]" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--text-primary)]">
-          General Settings
-        </h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          Manage your organization and account preferences.
-        </p>
-      </div>
-
       {/* Organization Settings */}
-      <DashboardPanel title="Organization Settings" icon={Settings}>
+      <DashboardPanel title="Organization" icon={Settings}>
         <div className="space-y-5">
           <FormField label="Organization Name" required>
             <Input
               value={orgName}
               onChange={(e) => setOrgName(e.target.value)}
               placeholder="Your organization name"
+              disabled={!canEdit}
             />
           </FormField>
 
@@ -83,6 +115,7 @@ export default function GeneralSettingsPage() {
             <Select
               value={timezone}
               onChange={(e) => setTimezone(e.target.value)}
+              disabled={!canEdit}
             >
               {TIMEZONES.map((tz) => (
                 <option key={tz} value={tz}>
@@ -97,6 +130,7 @@ export default function GeneralSettingsPage() {
               <Select
                 value={workStart}
                 onChange={(e) => setWorkStart(e.target.value)}
+                disabled={!canEdit}
               >
                 {HOUR_OPTIONS.map((h) => (
                   <option key={h} value={h}>
@@ -110,6 +144,7 @@ export default function GeneralSettingsPage() {
               <Select
                 value={workEnd}
                 onChange={(e) => setWorkEnd(e.target.value)}
+                disabled={!canEdit}
               >
                 {END_HOUR_OPTIONS.map((h) => (
                   <option key={h} value={h}>
@@ -122,42 +157,24 @@ export default function GeneralSettingsPage() {
         </div>
       </DashboardPanel>
 
-      {/* Account Settings */}
-      <DashboardPanel title="Account Settings" icon={Settings}>
-        <div className="space-y-5">
-          <FormField label="Display Name">
-            <Input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Your display name"
-            />
-          </FormField>
-
-          <FormField label="Email Address">
-            <Input value={email} disabled />
-            <p className="text-xs text-[var(--text-secondary)] mt-1">
-              Email is managed through your authentication provider and cannot be
-              changed here.
-            </p>
-          </FormField>
-
-          <FormField label="Role">
-            <div className="flex items-center gap-3 h-10">
-              <Badge variant="brand">Product Owner</Badge>
-              <span className="text-xs text-[var(--text-secondary)]">
-                Contact an admin to change your role.
-              </span>
-            </div>
-          </FormField>
-        </div>
-      </DashboardPanel>
-
       {/* Save */}
-      <div className="flex justify-end">
-        <Button variant="primary" size="md">
-          Save Changes
-        </Button>
-      </div>
+      {canEdit && (
+        <div className="flex justify-end">
+          <Button
+            variant="primary"
+            size="md"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : saved ? (
+              <Check className="h-4 w-4" />
+            ) : null}
+            {saving ? "Saving..." : saved ? "Saved" : "Save Changes"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

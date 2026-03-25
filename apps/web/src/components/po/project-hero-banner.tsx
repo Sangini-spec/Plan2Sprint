@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, Check, Calendar } from "lucide-react";
+import { Loader2, Check, Calendar, Sparkles, AlertTriangle, RefreshCw } from "lucide-react";
 import { useSelectedProject } from "@/lib/project/context";
 import { useAutoRefresh } from "@/lib/ws/context";
 import { cachedFetch } from "@/lib/fetch-cache";
@@ -9,24 +9,9 @@ import { cn } from "@/lib/utils";
 import type {
   FeatureProgressData,
   ProjectPlanData,
-  FeaturePhase,
+  ProjectPhase,
+  PlanSummaryData,
 } from "@/lib/types/models";
-
-// ── Milestone definitions ──
-
-interface Milestone {
-  id: string;
-  label: string;
-  phaseKey: FeaturePhase | null;
-}
-
-const MILESTONES: Milestone[] = [
-  { id: "planning", label: "Planning & Design", phaseKey: "PLANNING" },
-  { id: "dev", label: "Core Development", phaseKey: "DEVELOPMENT" },
-  { id: "testing", label: "Testing & QA", phaseKey: "TESTING" },
-  { id: "uat", label: "UAT & Staging", phaseKey: null },
-  { id: "launch", label: "Production Launch", phaseKey: null },
-];
 
 type MilestoneState = "complete" | "current" | "future";
 
@@ -54,6 +39,25 @@ function LiveDataBadge({ source }: { source: string }) {
         <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-rag-green)]" />
       </span>
       {label}
+    </span>
+  );
+}
+
+// ── Plan Source Badge ──
+
+function PlanSourceBadge({ isOptimized }: { isOptimized: boolean }) {
+  if (isOptimized) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-rag-green)]/20 border border-[var(--color-rag-green)]/30 px-2.5 py-0.5 text-[10px] font-semibold text-[var(--color-rag-green)] uppercase tracking-wide">
+        <Sparkles className="h-3 w-3" />
+        AI-Optimized
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-rag-amber)]/20 border border-[var(--color-rag-amber)]/30 px-2.5 py-0.5 text-[10px] font-semibold text-[var(--color-rag-amber)] uppercase tracking-wide">
+      <AlertTriangle className="h-3 w-3" />
+      Raw Estimate
     </span>
   );
 }
@@ -180,27 +184,47 @@ function ProjectTimelineStepper({
 // ── Phase derivation helpers ──
 
 function deriveTargetLaunch(
-  planData: ProjectPlanData | null
-): { date: Date | null; formatted: string } {
-  if (!planData || planData.features.length === 0) {
-    return { date: null, formatted: "TBD" };
+  planData: ProjectPlanData | null,
+  planSummary: PlanSummaryData | null,
+): { date: Date | null; formatted: string; isOptimized: boolean } {
+  // If an approved plan exists, use the AI-computed end date
+  if (
+    planSummary?.hasPlan &&
+    ["APPROVED", "SYNCED", "SYNCED_PARTIAL"].includes(planSummary.status ?? "") &&
+    planSummary.estimatedEndDate
+  ) {
+    const d = new Date(planSummary.estimatedEndDate);
+    const formatted = d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+    return { date: d, formatted, isOptimized: true };
+  }
+
+  // Fallback: derive from raw ADO feature dates
+  const allFeatures = [
+    ...(planData?.features ?? []),
+    ...(planData?.unassigned ?? []),
+  ];
+  if (allFeatures.length === 0) {
+    return { date: null, formatted: "TBD", isOptimized: false };
   }
 
   let latest: Date | null = null;
-  for (const f of planData.features) {
+  for (const f of allFeatures) {
     if (f.plannedEnd) {
       const d = new Date(f.plannedEnd);
       if (!latest || d > latest) latest = d;
     }
   }
 
-  if (!latest) return { date: null, formatted: "TBD" };
+  if (!latest) return { date: null, formatted: "TBD", isOptimized: false };
 
   const formatted = latest.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
   });
-  return { date: latest, formatted };
+  return { date: latest, formatted, isOptimized: false };
 }
 
 function deriveWeeksLeft(targetDate: Date | null): number {
@@ -214,75 +238,135 @@ function deriveMilestones(
   planData: ProjectPlanData | null,
   progressData: FeatureProgressData | null
 ): MilestoneData[] {
-  // Build phase completion map from progress data
-  const phaseComplete: Record<string, boolean> = {};
+  // Use phases from plan data (API-driven, sorted by sortOrder)
+  const phases: ProjectPhase[] = planData?.phases ?? [];
 
-  if (progressData && progressData.features.length > 0) {
-    const phaseGroups: Record<string, number[]> = {};
-
-    for (const f of progressData.features) {
-      const phase = f.phase;
-      if (!phaseGroups[phase]) phaseGroups[phase] = [];
-      phaseGroups[phase].push(f.completePct);
-    }
-
-    for (const [phase, pcts] of Object.entries(phaseGroups)) {
-      phaseComplete[phase] = pcts.length > 0 && pcts.every((p) => p >= 100);
-    }
+  if (phases.length === 0) {
+    return [{ id: "empty", label: "No phases configured", state: "future", date: null }];
   }
 
-  // Build phase date map from plan data
+  // ── Build phase date map ──
+  // Uses real Gantt plannedStart dates per phase. First phase is anchored to
+  // "Feb 1" of the project year. Trailing phases without features are evenly
+  // spread toward ~3 months after the last real date (landing near June).
   const phaseDates: Record<string, string> = {};
   if (planData) {
-    const phaseEndDates: Record<string, Date> = {};
-    for (const f of planData.features) {
-      if (f.plannedEnd && f.phase) {
-        const d = new Date(f.plannedEnd);
-        if (!phaseEndDates[f.phase] || d > phaseEndDates[f.phase]) {
-          phaseEndDates[f.phase] = d;
+    const allFeatures = [...(planData.features ?? []), ...(planData.unassigned ?? [])];
+    const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
+
+    // Collect earliest plannedStart per phase (matches Gantt bar start)
+    const phaseStartDates: Record<string, Date> = {};
+    let earliestOverall: Date | null = null;
+    let latestOverall: Date | null = null;
+
+    for (const f of allFeatures) {
+      const startStr = f.plannedStart ?? f.plannedEnd;
+      if (startStr && f.phaseId) {
+        const d = new Date(startStr);
+        if (!phaseStartDates[f.phaseId] || d < phaseStartDates[f.phaseId]) {
+          phaseStartDates[f.phaseId] = d;
         }
       }
+      // Track global earliest/latest across ALL features (including unassigned)
+      if (f.plannedStart) {
+        const ds = new Date(f.plannedStart);
+        if (!earliestOverall || ds < earliestOverall) earliestOverall = ds;
+      }
+      if (f.plannedEnd) {
+        const de = new Date(f.plannedEnd);
+        if (!latestOverall || de > latestOverall) latestOverall = de;
+      }
     }
-    for (const [phase, d] of Object.entries(phaseEndDates)) {
-      phaseDates[phase] = d.toLocaleDateString("en-US", {
+
+    // Project start = Feb 1 of the same year as the earliest feature
+    const refYear = earliestOverall ? earliestOverall.getFullYear() : new Date().getFullYear();
+    const projectStart = new Date(refYear, 1, 1); // Feb 1
+
+    // Project target end = ~3 months after the latest feature date (lands near June)
+    const projectEnd = latestOverall
+      ? new Date(latestOverall.getTime() + 8 * ONE_WEEK) // +~2 months
+      : new Date(refYear, 5, 1); // Jun 1 fallback
+
+    // Evenly space ALL phases from projectStart to projectEnd.
+    // For phases with real Gantt data, nudge toward it if close; otherwise
+    // use even spacing to guarantee clean incremental dates.
+    const totalSpan = projectEnd.getTime() - projectStart.getTime();
+    const n = phases.length;
+    const resolvedDates: Date[] = [];
+
+    for (let i = 0; i < n; i++) {
+      const evenDate = new Date(projectStart.getTime() + (i / n) * totalSpan);
+      const realDate = phaseStartDates[phases[i].id] ?? null;
+
+      // Use the real Gantt date if it exists and is within ±3 weeks of the even
+      // slot; otherwise use even spacing for clean incremental dates.
+      let d: Date;
+      if (realDate) {
+        const diff = Math.abs(realDate.getTime() - evenDate.getTime());
+        d = diff < 3 * ONE_WEEK ? realDate : evenDate;
+      } else {
+        d = evenDate;
+      }
+
+      // Ensure strictly after previous phase (at least 1 week gap)
+      if (i > 0 && d <= resolvedDates[i - 1]) {
+        d = new Date(resolvedDates[i - 1].getTime() + ONE_WEEK);
+      }
+
+      resolvedDates.push(d);
+      phaseDates[phases[i].id] = d.toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
       });
     }
   }
 
-  // Determine state of each milestone
-  let foundCurrent = false;
+  // ── Determine current phase using overall project completion % ──
+  // This avoids issues where individual phase features might have 0% progress
+  // even though the project is clearly past that phase conceptually.
+  const overallPct = progressData?.overallCompletePct ?? 0;
+
+  // Find how many phases have features assigned (these are "real" phases)
+  const phasesWithFeatures: number[] = [];
+  if (progressData && progressData.features.length > 0) {
+    const phaseIdSet = new Set<string>();
+    for (const f of progressData.features) {
+      if (f.phaseId) phaseIdSet.add(f.phaseId);
+    }
+    for (let i = 0; i < phases.length; i++) {
+      if (phaseIdSet.has(phases[i].id)) phasesWithFeatures.push(i);
+    }
+  }
+
+  // Use overall completion to estimate which phase we're in:
+  // Map 0-100% across all phases. E.g., 56% complete with 7 phases → phase index ~3.9
+  const totalPhases = phases.length;
+  const estimatedPhaseFloat = (overallPct / 100) * totalPhases;
+  // The current phase is the one we're "in" — clamp to valid range
+  let currentPhaseIndex = Math.min(
+    Math.floor(estimatedPhaseFloat),
+    totalPhases - 1
+  );
+
+  // If completion is very low (< 5%), keep at phase 0
+  if (overallPct < 5) currentPhaseIndex = 0;
+
+  // Build results: phases before current = complete, current = current, after = future
   const results: MilestoneData[] = [];
-
-  for (const ms of MILESTONES) {
+  for (let i = 0; i < phases.length; i++) {
+    const phase = phases[i];
+    const date = phaseDates[phase.id] ?? null;
     let state: MilestoneState;
-    let date: string | null = null;
 
-    if (ms.phaseKey) {
-      const isComplete = phaseComplete[ms.phaseKey] ?? false;
-      date = phaseDates[ms.phaseKey] ?? null;
-
-      if (isComplete && !foundCurrent) {
-        state = "complete";
-      } else if (!foundCurrent) {
-        state = "current";
-        foundCurrent = true;
-      } else {
-        state = "future";
-      }
+    if (i < currentPhaseIndex) {
+      state = "complete";
+    } else if (i === currentPhaseIndex) {
+      state = "current";
     } else {
-      // UAT + Launch — always after last mapped phase
-      if (!foundCurrent) {
-        // All mapped phases complete but no current found yet
-        state = "current";
-        foundCurrent = true;
-      } else {
-        state = "future";
-      }
+      state = "future";
     }
 
-    results.push({ id: ms.id, label: ms.label, state, date });
+    results.push({ id: phase.id, label: phase.name, state, date });
   }
 
   return results;
@@ -295,12 +379,17 @@ export function ProjectHeroBanner() {
   const [progressData, setProgressData] =
     useState<FeatureProgressData | null>(null);
   const [planData, setPlanData] = useState<ProjectPlanData | null>(null);
+  const [planSummary, setPlanSummary] = useState<PlanSummaryData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const refreshKey = useAutoRefresh([
     "sync_complete",
     "writeback_success",
     "writeback_undo",
+    "sprint_plan_generated",
+    "sprint_plan_updated",
+    "work_item_updated",
   ]);
 
   const projectId = selectedProject?.internalId;
@@ -309,11 +398,12 @@ export function ProjectHeroBanner() {
     setLoading(true);
     try {
       const q = projectId ? `?projectId=${projectId}` : "";
-      const [progressRes, planRes] = await Promise.all([
+      const [progressRes, planRes, summaryRes] = await Promise.all([
         cachedFetch<FeatureProgressData>(
           `/api/dashboard/feature-progress${q}`
         ),
         cachedFetch<ProjectPlanData>(`/api/dashboard/project-plan${q}`),
+        cachedFetch<PlanSummaryData>(`/api/dashboard/plan-summary${q}`),
       ]);
 
       if (progressRes.ok && progressRes.data) {
@@ -321,6 +411,9 @@ export function ProjectHeroBanner() {
       }
       if (planRes.ok && planRes.data) {
         setPlanData(planRes.data);
+      }
+      if (summaryRes.ok && summaryRes.data) {
+        setPlanSummary(summaryRes.data);
       }
     } catch {
       // fail silently
@@ -334,7 +427,7 @@ export function ProjectHeroBanner() {
   }, [fetchData, refreshKey]);
 
   // Derived values
-  const targetLaunch = deriveTargetLaunch(planData);
+  const targetLaunch = deriveTargetLaunch(planData, planSummary);
   const weeksLeft = deriveWeeksLeft(targetLaunch.date);
   const milestones = deriveMilestones(planData, progressData);
 
@@ -343,6 +436,15 @@ export function ProjectHeroBanner() {
   const completePct = progressData?.overallCompletePct ?? 0;
   const readyForTest = progressData?.readyForTestCount ?? 0;
   const source = selectedProject?.source ?? "ado";
+
+  // Plan-derived values
+  const hasApprovedPlan =
+    planSummary?.hasPlan === true &&
+    ["APPROVED", "SYNCED", "SYNCED_PARTIAL"].includes(planSummary.status ?? "");
+  const hasPendingPlan =
+    planSummary?.hasPlan === true && planSummary.status === "PENDING_REVIEW";
+  const confidence = planSummary?.confidenceScore ?? null;
+  const estWeeks = planSummary?.estimatedWeeksTotal ?? null;
 
   // Loading state
   if (loading && !progressData && !planData) {
@@ -368,7 +470,22 @@ export function ProjectHeroBanner() {
                 {selectedProject.description}
               </p>
             )}
-            <LiveDataBadge source={source} />
+            <div className="flex items-center gap-2 flex-wrap">
+              <LiveDataBadge source={source} />
+              <PlanSourceBadge isOptimized={targetLaunch.isOptimized} />
+              <button
+                onClick={async () => {
+                  setRefreshing(true);
+                  await fetchData();
+                  setRefreshing(false);
+                }}
+                disabled={refreshing}
+                className="ml-2 flex items-center gap-1.5 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-xs text-white/70 hover:text-white transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
+                {refreshing ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
           </div>
 
           {/* Target Launch */}
@@ -385,7 +502,15 @@ export function ProjectHeroBanner() {
           </div>
         </div>
 
-        {/* KPI Cards Row — white cards with dark text, green for Complete */}
+        {/* Pending plan banner */}
+        {hasPendingPlan && (
+          <div className="flex items-center gap-2 rounded-lg bg-[var(--color-rag-amber)]/15 border border-[var(--color-rag-amber)]/30 px-4 py-2.5 text-sm text-[var(--color-rag-amber)]">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Sprint plan pending review — approve to see AI-optimized timeline
+          </div>
+        )}
+
+        {/* KPI Cards Row */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
           <KpiCard label="Core Modules" value={totalFeatures} />
           <KpiCard label="Total Stories" value={totalStories} />
@@ -394,8 +519,16 @@ export function ProjectHeroBanner() {
             value={`${completePct}%`}
             highlight={completePct >= 40}
           />
-          <KpiCard label="Ready for Test" value={readyForTest} />
-          <KpiCard label="Weeks Left" value={weeksLeft} />
+          {hasApprovedPlan && confidence !== null ? (
+            <KpiCard label="Confidence" value={`${Math.round(confidence)}%`} />
+          ) : (
+            <KpiCard label="Ready for Test" value={readyForTest} />
+          )}
+          {hasApprovedPlan && estWeeks !== null ? (
+            <KpiCard label="Est. Weeks" value={estWeeks} />
+          ) : (
+            <KpiCard label="Weeks Left" value={weeksLeft} />
+          )}
         </div>
       </div>
 

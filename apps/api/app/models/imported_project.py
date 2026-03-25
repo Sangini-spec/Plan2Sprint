@@ -50,3 +50,20 @@ class UserProjectPreference(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     selected_project = relationship("ImportedProject")
+
+
+class StakeholderProjectAssignment(Base):
+    """Maps a stakeholder user to projects they can view — assigned by PO/admin."""
+    __tablename__ = "stakeholder_project_assignments"
+    __table_args__ = (
+        UniqueConstraint("user_id", "imported_project_id", name="uq_stakeholder_project"),
+    )
+
+    id: Mapped[str] = mapped_column(String(25), primary_key=True, default=generate_cuid)
+    user_id: Mapped[str] = mapped_column(String(25), nullable=False)  # can be users.id or team_members.id
+    imported_project_id: Mapped[str] = mapped_column(String(25), ForeignKey("imported_projects.id"), nullable=False)
+    organization_id: Mapped[str] = mapped_column(String(25), ForeignKey("organizations.id"), nullable=False)
+    assigned_by: Mapped[str | None] = mapped_column(String(25), nullable=True)  # user_id of assigner
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project = relationship("ImportedProject")

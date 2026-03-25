@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Unplug, RefreshCw, ExternalLink, Loader2, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIntegrations } from "@/lib/integrations/context";
+import { apiFetch } from "@/lib/api-fetch";
 import { ConnectionStatusBadge } from "./connection-status";
 
 type ConnectMode = "oauth" | "token";
@@ -46,7 +47,10 @@ export function JiraConnectCard() {
 
   const handleOAuthConnect = () => {
     setIsRedirecting(true);
-    window.location.href = "/api/integrations/jira/connect";
+    // Pass auth token as query param for full-page navigation (no Bearer header)
+    const sb = JSON.parse(localStorage.getItem(`sb-obmbpfoormxbbizudrrp-auth-token`) || "{}");
+    const token = sb?.access_token || "";
+    window.location.href = `/api/integrations/jira/connect${token ? `?token=${token}` : ""}`;
   };
 
   const handleTokenConnect = async () => {
@@ -59,7 +63,7 @@ export function JiraConnectCard() {
     setError("");
 
     try {
-      const res = await fetch("/api/integrations/jira/connect-token", {
+      const res = await apiFetch("/api/integrations/jira/connect-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -91,7 +95,7 @@ export function JiraConnectCard() {
 
   const handleDisconnect = async () => {
     try {
-      await fetch("/api/integrations/jira/disconnect", { method: "POST" });
+      await apiFetch("/api/integrations/jira/disconnect", { method: "POST" });
       await disconnect("jira");
     } catch {
       // Silently handle

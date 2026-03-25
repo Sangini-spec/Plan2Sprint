@@ -37,20 +37,6 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-
-  /* Webpack tweaks for faster dev compilation */
-  webpack: (config, { dev }) => {
-    if (dev) {
-      // Reduce filesystem polling overhead (OneDrive path)
-      config.watchOptions = {
-        ...config.watchOptions,
-        poll: 1000,
-        aggregateTimeout: 300,
-        ignored: ["**/node_modules/**", "**/.git/**", "**/.next/**"],
-      };
-    }
-    return config;
-  },
 };
 
 export default nextConfig;

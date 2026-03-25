@@ -21,34 +21,7 @@ import { cn } from "@/lib/utils";
 import type {
   FeatureProgressData,
   FeatureProgressCard,
-  FeaturePhase,
 } from "@/lib/types/models";
-
-// ── Phase badge styling ──
-
-const PHASE_CONFIG: Record<
-  FeaturePhase,
-  { label: string; badgeClass: string; barClass: string }
-> = {
-  TESTING: {
-    label: "TESTING",
-    badgeClass:
-      "bg-[var(--color-rag-amber)]/10 text-[var(--color-rag-amber)] border-[var(--color-rag-amber)]/30",
-    barClass: "AMBER" as const,
-  },
-  DEVELOPMENT: {
-    label: "DEVELOPMENT",
-    badgeClass:
-      "bg-[var(--color-brand-secondary)]/10 text-[var(--color-brand-secondary)] border-[var(--color-brand-secondary)]/30",
-    barClass: "GREEN" as const,
-  },
-  PLANNING: {
-    label: "PLANNING",
-    badgeClass:
-      "bg-[var(--color-rag-green)]/10 text-[var(--color-rag-green)] border-[var(--color-rag-green)]/30",
-    barClass: "GREEN" as const,
-  },
-};
 
 // ── Risk derivation ──
 
@@ -93,18 +66,18 @@ interface DerivedDep {
 }
 
 function deriveDependencies(features: FeatureProgressCard[]): DerivedDep[] {
-  // Simple heuristic: features in PLANNING that block features in TESTING
+  // Simple heuristic: low-progress features may delay higher-progress ones
   const deps: DerivedDep[] = [];
-  const planning = features.filter((f) => f.phase === "PLANNING");
-  const testing = features.filter((f) => f.phase === "TESTING");
+  const lowProgress = features.filter((f) => f.completePct < 20 && f.breakdown.remaining > 5);
+  const highProgress = features.filter((f) => f.completePct >= 50 && f.breakdown.readyForTest > 0);
 
-  for (const p of planning) {
-    for (const t of testing) {
-      if (p.breakdown.remaining > 5 && t.breakdown.readyForTest > 0) {
+  for (const p of lowProgress) {
+    for (const t of highProgress) {
+      if (p.phaseId !== t.phaseId) {
         deps.push({
           from: p.title,
           to: t.title,
-          description: `${p.title} still in planning may delay ${t.title} testing`,
+          description: `${p.title} (${p.completePct}%) may delay ${t.title}`,
         });
       }
     }
@@ -130,7 +103,8 @@ function SeverityDot({ severity }: { severity: "red" | "amber" | "green" }) {
 // ── Feature Card ──
 
 function FeatureCard({ feature }: { feature: FeatureProgressCard }) {
-  const phase = PHASE_CONFIG[feature.phase] ?? PHASE_CONFIG.PLANNING;
+  const phaseColor = feature.phaseInfo?.color ?? "#64748b";
+  const phaseName = feature.phaseInfo?.name ?? "Unassigned";
   const severity =
     feature.completePct >= 70 ? "GREEN" : feature.completePct >= 40 ? "AMBER" : "RED";
 
@@ -142,12 +116,14 @@ function FeatureCard({ feature }: { feature: FeatureProgressCard }) {
           {feature.title}
         </h4>
         <span
-          className={cn(
-            "shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border",
-            phase.badgeClass
-          )}
+          className="shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border"
+          style={{
+            backgroundColor: `${phaseColor}15`,
+            color: phaseColor,
+            borderColor: `${phaseColor}40`,
+          }}
         >
-          {phase.label}
+          {phaseName}
         </span>
       </div>
 
@@ -212,7 +188,7 @@ function FeatureCard({ feature }: { feature: FeatureProgressCard }) {
 
 // ── Main Component ──
 
-export function ProjectOverviewPanel({ hideKpiRow }: { hideKpiRow?: boolean } = {}) {
+export function ProjectOverviewPanel({ hideKpiRow, hideRisks }: { hideKpiRow?: boolean; hideRisks?: boolean } = {}) {
   const { selectedProject } = useSelectedProject();
   const [data, setData] = useState<FeatureProgressData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -326,7 +302,7 @@ export function ProjectOverviewPanel({ hideKpiRow }: { hideKpiRow?: boolean } = 
           </div>
 
           {/* ── Key Risks ── */}
-          {risks.length > 0 && (
+          {!hideRisks && risks.length > 0 && (
             <div>
               <h3 className="text-xs font-bold uppercase tracking-[0.15em] text-[var(--text-secondary)] mb-3">
                 Key Risks
@@ -351,7 +327,7 @@ export function ProjectOverviewPanel({ hideKpiRow }: { hideKpiRow?: boolean } = 
           )}
 
           {/* ── Critical Dependencies ── */}
-          {deps.length > 0 && (
+          {!hideRisks && deps.length > 0 && (
             <div>
               <h3 className="text-xs font-bold uppercase tracking-[0.15em] text-[var(--text-secondary)] mb-3">
                 Critical Dependencies

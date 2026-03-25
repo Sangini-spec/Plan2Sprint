@@ -111,7 +111,7 @@ export function PlanApprovalModal({
               </h3>
             </div>
             <p className="text-sm text-[var(--text-secondary)]">
-              Approve and sync{" "}
+              Approve and post AI recommendations for{" "}
               <span className="font-semibold text-[var(--text-primary)]">
                 {totalSP ?? 0} SP
               </span>{" "}
@@ -120,6 +120,9 @@ export function PlanApprovalModal({
                 {estimatedSprints ?? 1} sprint{(estimatedSprints ?? 1) > 1 ? "s" : ""}
               </span>{" "}
               to {toolLabel}?
+            </p>
+            <p className="text-xs text-[var(--text-tertiary)]">
+              AI recommendation comments will be posted to each work item. No fields will be modified.
             </p>
             <div className="flex items-center justify-end gap-2 pt-2">
               <Button

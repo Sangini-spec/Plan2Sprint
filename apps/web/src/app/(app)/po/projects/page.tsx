@@ -18,6 +18,7 @@ import {
   RefreshCw,
   PanelLeftOpen,
   X,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIntegrations } from "@/lib/integrations/context";
@@ -207,6 +208,16 @@ export default function ProjectsPage() {
     })();
   }, []);
 
+  const removeProject = useCallback(async (project: SelectedProject) => {
+    if (!confirm(`Remove "${project.name}" from Plan2Sprint? This won't delete it from ${project.source === "ado" ? "Azure DevOps" : "Jira"}.`)) return;
+    const pid = project.internalId || project.id;
+    try {
+      await fetch(`/api/projects/${pid}`, { method: "DELETE" });
+      setDbProjects((prev) => prev.filter((p) => p.id !== project.id));
+      if (selectedProject?.id === project.id) setSelectedProject(null);
+    } catch { /* ignore */ }
+  }, [selectedProject]);
+
   // Live projects from active connections
   const liveProjects: SelectedProject[] = connections
     .filter((c) => c.status === "connected" || c.status === "syncing")
@@ -284,9 +295,11 @@ export default function ProjectsPage() {
           teamMembers = tmData.members ?? [];
           iterations = itData.iterations ?? [];
         } else if (project.source === "jira") {
-          const [issRes, memRes] = await Promise.all([
-            fetch("/api/integrations/jira/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey: project.key ?? project.name }) }),
-            fetch("/api/integrations/jira/members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey: project.key ?? project.name }) }),
+          const projectKey = project.key ?? project.name;
+          const [issRes, memRes, spRes] = await Promise.all([
+            fetch("/api/integrations/jira/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey }) }),
+            fetch("/api/integrations/jira/members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey }) }),
+            fetch("/api/integrations/jira/sprints", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey }) }),
           ]);
           if (issRes.status === 404 || memRes.status === 404) {
             throw new Error("Jira connection not found. Please reconnect Jira from the Integrations page.");
@@ -295,8 +308,29 @@ export default function ProjectsPage() {
           if (!memRes.ok) throw new Error(`Members: ${memRes.status} ${memRes.statusText}`);
           const issData = await issRes.json();
           const memData = await memRes.json();
+          const spData = spRes.ok ? await spRes.json() : { sprints: [], sprintIssueMap: {} };
           workItems = issData.issues ?? [];
           teamMembers = memData.members ?? [];
+          iterations = spData.sprints ?? [];
+
+          // Enrich issues with sprint IDs from agile API mapping
+          // (team-managed Jira projects don't include sprint field in REST API v3)
+          const sprintIssueMap = spData.sprintIssueMap || {};
+          const issueToSprint: Record<string, number> = {};
+          for (const [sprintId, keys] of Object.entries(sprintIssueMap)) {
+            for (const key of (keys as string[])) {
+              issueToSprint[key] = Number(sprintId);
+            }
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          workItems = (workItems as any[]).map((wi: any) => {
+            if (!wi.sprintId && issueToSprint[wi.key]) {
+              const sid = issueToSprint[wi.key];
+              const sprint = (iterations as any[]).find((s: any) => s.id === sid);
+              return { ...wi, sprintId: sid, sprint: sprint?.name ?? wi.sprint, fields: { ...wi.fields, sprint: sprint ? { id: sid, name: sprint.name, state: sprint.state } : wi.fields?.sprint } };
+            }
+            return wi;
+          });
         }
 
         setProjectData({ workItems, teamMembers, iterations, loading: false });
@@ -430,21 +464,30 @@ export default function ProjectsPage() {
           </div>
           <div className="space-y-1">
             {allProjects.map((project) => (
-              <button key={`${project.source}-${project.id}`} onClick={() => { setSelectedProject(project); setSearchQuery(""); }}
-                className={cn("w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all cursor-pointer",
-                  selectedProject?.id === project.id && selectedProject?.source === project.source
-                    ? "bg-[var(--color-brand-secondary)]/10 text-[var(--color-brand-secondary)]"
-                    : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-raised)]")}>
-                <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold",
-                  project.source === "ado" ? "bg-[#0078D4]/10 text-[#0078D4]" : "bg-[#0052CC]/10 text-[#0052CC]")}>
-                  {project.source === "ado" ? "AD" : "JR"}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{project.name}</p>
-                  {project.key && <p className="text-[10px] text-[var(--text-tertiary)]">{project.key}</p>}
-                </div>
-                <ChevronRight size={14} className="shrink-0 opacity-40" />
-              </button>
+              <div key={`${project.source}-${project.id}`} className="group relative">
+                <button onClick={() => { setSelectedProject(project); setSearchQuery(""); }}
+                  className={cn("w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all cursor-pointer",
+                    selectedProject?.id === project.id && selectedProject?.source === project.source
+                      ? "bg-[var(--color-brand-secondary)]/10 text-[var(--color-brand-secondary)]"
+                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-raised)]")}>
+                  <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[10px] font-bold",
+                    project.source === "ado" ? "bg-[#0078D4]/10 text-[#0078D4]" : "bg-[#0052CC]/10 text-[#0052CC]")}>
+                    {project.source === "ado" ? "AD" : "JR"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{project.name}</p>
+                    {project.key && <p className="text-[10px] text-[var(--text-tertiary)]">{project.key}</p>}
+                  </div>
+                  <ChevronRight size={14} className="shrink-0 opacity-40 group-hover:hidden" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); removeProject(project); }}
+                  title="Remove project"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 hidden group-hover:flex h-6 w-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--color-rag-red)] hover:bg-[var(--color-rag-red)]/10 transition-colors"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
             ))}
           </div>
         </div>

@@ -1,11 +1,17 @@
 "use client";
 
-import { MySprintBoard } from "@/components/dev/my-sprint-board";
+import dynamic from "next/dynamic";
+import { Loader2 } from "lucide-react";
 
-export default function SprintPage() {
-  return (
-    <div className="space-y-6">
-      <MySprintBoard />
+const DevSprintView = dynamic(
+  () => import("@/components/dev/dev-sprint-view").then((m) => ({ default: m.DevSprintView })),
+  { loading: () => (
+    <div className="flex items-center justify-center py-16">
+      <Loader2 className="h-5 w-5 animate-spin text-[var(--text-secondary)]" />
     </div>
-  );
+  )}
+);
+
+export default function DevSprintPage() {
+  return <DevSprintView />;
 }

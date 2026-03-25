@@ -47,7 +47,7 @@ ATLASSIAN_AUTH_URL = "https://auth.atlassian.com/authorize"
 ATLASSIAN_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 ATLASSIAN_API_BASE = "https://api.atlassian.com"
 
-JIRA_SCOPES = "read:jira-work read:jira-user write:jira-work offline_access"
+JIRA_SCOPES = "read:jira-work read:jira-user write:jira-work read:board-scope:jira-software read:sprint:jira-software offline_access"
 
 # In-memory CSRF state store (in production, use Redis or DB)
 _oauth_states: dict[str, dict] = {}
@@ -738,29 +738,39 @@ async def fetch_issues(
             "maxResults": 200,
             "fields": [
                 "summary", "status", "issuetype", "assignee",
-                "priority", "customfield_10016", "sprint",
+                "priority", "customfield_10016", "customfield_10028",
+                "customfield_10102", "sprint", "parent",
                 "created", "updated", "labels",
             ],
         },
     )
 
-    issues = [
-        {
+    issues = []
+    for issue in data.get("issues", []):
+        f = issue.get("fields") or {}
+        sprint_obj = f.get("sprint") or {}
+        status_obj = f.get("status") or {}
+        assignee_obj = f.get("assignee") or {}
+        issues.append({
             "id": str(issue.get("id")),
             "key": str(issue.get("key")),
-            "summary": (issue.get("fields") or {}).get("summary", ""),
-            "status": ((issue.get("fields") or {}).get("status") or {}).get("name", ""),
-            "issueType": ((issue.get("fields") or {}).get("issuetype") or {}).get("name", ""),
-            "assignee": ((issue.get("fields") or {}).get("assignee") or {}).get("displayName"),
-            "priority": ((issue.get("fields") or {}).get("priority") or {}).get("name"),
-            "storyPoints": (issue.get("fields") or {}).get("customfield_10016"),
-            "sprint": ((issue.get("fields") or {}).get("sprint") or {}).get("name"),
-            "created": (issue.get("fields") or {}).get("created"),
-            "updated": (issue.get("fields") or {}).get("updated"),
-            "labels": (issue.get("fields") or {}).get("labels", []),
-        }
-        for issue in data.get("issues", [])
-    ]
+            "summary": f.get("summary", ""),
+            "status": status_obj.get("name", ""),
+            "statusCategory": (status_obj.get("statusCategory") or {}).get("key", ""),
+            "issueType": (f.get("issuetype") or {}).get("name", ""),
+            "assignee": assignee_obj.get("displayName"),
+            "assigneeAccountId": assignee_obj.get("accountId"),
+            "priority": (f.get("priority") or {}).get("name"),
+            "storyPoints": f.get("customfield_10016") or f.get("customfield_10028") or f.get("customfield_10102"),
+            "sprint": sprint_obj.get("name") if sprint_obj else None,
+            "sprintId": sprint_obj.get("id") if sprint_obj else None,
+            "created": f.get("created"),
+            "updated": f.get("updated"),
+            "labels": f.get("labels", []),
+            "parentKey": (f.get("parent") or {}).get("key"),
+            # Preserve raw fields for normalizer (used by sync)
+            "fields": f,
+        })
     return {"issues": issues}
 
 
@@ -817,13 +827,115 @@ async def fetch_members(
 # SPRINTS
 # ===================================================================
 
+@router.post("/sprints")
+async def list_sprints_post(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /sprints — list sprints for a Jira project (finds board automatically)."""
+    if settings.is_demo_mode:
+        return {"sprints": MOCK_JIRA_SPRINTS}
+
+    project_key = body.get("projectKey")
+    if not project_key:
+        raise HTTPException(status_code=400, detail="projectKey is required")
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_jira_connection(db, org_id)
+
+    if not conn:
+        raise HTTPException(status_code=404, detail="Jira not connected")
+
+    base_url, auth_header, _ = _get_auth_info(conn)
+    config = conn.config or {}
+    cloud_id = config.get("cloud_id", "")
+    auth_method = config.get("auth_method", "oauth2")
+    site_url = config.get("site_url", "")
+
+    # Agile API requires granular scopes (read:board-scope:jira-software) that
+    # must be registered in the Atlassian developer console. As a fallback, use
+    # a stored API token with basic auth for direct site URL calls.
+
+    # Build basic auth header from stored agile API token if available
+    agile_api_token = config.get("agile_api_token")
+    agile_email = config.get("agile_email")
+    agile_basic_header = None
+    if agile_api_token and agile_email and site_url:
+        agile_auth_str = base64.b64encode(f"{agile_email}:{agile_api_token}".encode()).decode()
+        agile_basic_header = f"Basic {agile_auth_str}"
+
+    async def _agile_get(path: str, params: dict | None = None) -> dict | None:
+        """Try agile API call with multiple auth methods."""
+        attempts = []
+
+        if auth_method == "api_token":
+            attempts.append((f"{site_url}/rest/agile/1.0{path}", auth_header))
+        else:
+            # Try OAuth first
+            attempts.append((f"{ATLASSIAN_API_BASE}/ex/jira/{cloud_id}/rest/agile/1.0{path}", None))
+            # Fallback: use stored API token with basic auth via site URL
+            if agile_basic_header and site_url:
+                attempts.append((f"{site_url}/rest/agile/1.0{path}", agile_basic_header))
+
+        for url, override_auth in attempts:
+            try:
+                return await _jira_request_with_retry(
+                    db, conn, "GET", url,
+                    auth_header=override_auth,
+                    params=params,
+                )
+            except HTTPException as e:
+                logger.warning(f"Agile API {path} failed at {url}: {e.status_code}")
+                continue
+        return None
+
+    # Step 1: Find the board
+    boards_data = await _agile_get("/board", params={"projectKeyOrId": project_key, "maxResults": 1})
+    if not boards_data or not boards_data.get("values"):
+        logger.info(f"No boards found for project {project_key}")
+        return {"sprints": []}
+
+    board_id = boards_data["values"][0]["id"]
+
+    # Step 2: Fetch sprints for the board
+    sprints_data = await _agile_get(f"/board/{board_id}/sprint", params={"maxResults": 50})
+    if not sprints_data:
+        logger.warning(f"Failed to fetch sprints for board {board_id}")
+        return {"sprints": []}
+
+    sprints = [
+        {
+            "id": s.get("id"),
+            "name": s.get("name", ""),
+            "state": s.get("state", "future"),
+            "startDate": s.get("startDate"),
+            "endDate": s.get("endDate"),
+            "completeDate": s.get("completeDate"),
+            "goal": s.get("goal"),
+        }
+        for s in sprints_data.get("values", [])
+    ]
+
+    # Also fetch issue-sprint mappings for each sprint so we can associate them
+    sprint_issue_map = {}
+    for sprint in sprints:
+        sid = sprint["id"]
+        issues_data = await _agile_get(f"/sprint/{sid}/issue", params={"maxResults": 200, "fields": "key"})
+        if issues_data:
+            keys = [i.get("key") for i in issues_data.get("issues", []) if i.get("key")]
+            sprint_issue_map[str(sid)] = keys
+
+    return {"sprints": sprints, "sprintIssueMap": sprint_issue_map}
+
+
 @router.get("/sprints")
-async def list_sprints(
+async def list_sprints_get(
     boardId: str = Query("board-1"),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """GET /sprints?boardId=... — list sprints for a Jira board."""
+    """GET /sprints?boardId=... — list sprints for a Jira board (legacy)."""
     if settings.is_demo_mode:
         return {"sprints": MOCK_JIRA_SPRINTS}
 
@@ -833,7 +945,6 @@ async def list_sprints(
     if not conn:
         return {"sprints": MOCK_JIRA_SPRINTS}
 
-    # TODO: Implement real sprint fetch via Jira Agile API
     return {"sprints": MOCK_JIRA_SPRINTS}
 
 

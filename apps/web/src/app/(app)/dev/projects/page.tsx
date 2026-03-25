@@ -277,16 +277,38 @@ export default function DevProjectsPage() {
           teamMembers = tmData.members ?? [];
           iterations = itData.iterations ?? [];
         } else if (project.source === "jira") {
-          const [issRes, memRes] = await Promise.all([
-            fetch("/api/integrations/jira/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey: project.key ?? project.name }) }),
-            fetch("/api/integrations/jira/members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey: project.key ?? project.name }) }),
+          const projectKey = project.key ?? project.name;
+          const [issRes, memRes, spRes] = await Promise.all([
+            fetch("/api/integrations/jira/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey }) }),
+            fetch("/api/integrations/jira/members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey }) }),
+            fetch("/api/integrations/jira/sprints", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectKey }) }),
           ]);
           if (!issRes.ok) throw new Error(`Issues: ${issRes.status} ${issRes.statusText}`);
           if (!memRes.ok) throw new Error(`Members: ${memRes.status} ${memRes.statusText}`);
           const issData = await issRes.json();
           const memData = await memRes.json();
+          const spData = spRes.ok ? await spRes.json() : { sprints: [], sprintIssueMap: {} };
           workItems = issData.issues ?? [];
           teamMembers = memData.members ?? [];
+          iterations = spData.sprints ?? [];
+
+          // Enrich issues with sprint IDs from agile API mapping
+          const sprintIssueMap = spData.sprintIssueMap || {};
+          const issueToSprint: Record<string, number> = {};
+          for (const [sprintId, keys] of Object.entries(sprintIssueMap)) {
+            for (const key of (keys as string[])) {
+              issueToSprint[key] = Number(sprintId);
+            }
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          workItems = (workItems as any[]).map((wi: any) => {
+            if (!wi.sprintId && issueToSprint[wi.key]) {
+              const sid = issueToSprint[wi.key];
+              const sprint = (iterations as any[]).find((s: any) => s.id === sid);
+              return { ...wi, sprintId: sid, sprint: sprint?.name ?? wi.sprint, fields: { ...wi.fields, sprint: sprint ? { id: sid, name: sprint.name, state: sprint.state } : wi.fields?.sprint } };
+            }
+            return wi;
+          });
         }
 
         setProjectData({ workItems, teamMembers, iterations, loading: false });

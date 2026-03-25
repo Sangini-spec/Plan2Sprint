@@ -17,7 +17,8 @@ import { useIntegrations } from "@/lib/integrations/context";
 import { ROLE_LABELS } from "@/lib/types/auth";
 import { NotificationBell } from "@/components/dashboard/notification-bell";
 import { ProjectSelector } from "@/components/layout/project-selector";
-import { ConnectionIndicator } from "@/components/realtime/connection-indicator";
+import { StakeholderProjectSelector } from "@/components/layout/stakeholder-project-selector";
+
 
 /* -------------------------------------------------------------------------- */
 /*  PAGE TITLE MAPPING                                                         */
@@ -33,19 +34,19 @@ const PAGE_TITLES: Record<string, string> = {
   "/po/projects": "Projects",
   "/po/notifications": "Channels",
   "/dev": "My Sprint Workspace",
+  "/dev/sprint": "My Sprint",
   "/dev/standup": "My Standup",
-  "/dev/sprint": "My Sprint Board",
   "/dev/github": "My GitHub Activity",
   "/dev/projects": "My Projects",
   "/dev/velocity": "My Velocity",
   "/dev/notifications": "Channels",
-  "/stakeholder": "Portfolio Health",
-  "/stakeholder/health": "Team Health Summary",
+  "/stakeholder": "Project Overview",
   "/stakeholder/delivery": "Delivery Predictability",
   "/stakeholder/epics": "Epics & Milestones",
-  "/stakeholder/standups": "Standup Replacement Status",
+  "/stakeholder/health": "Team Health",
   "/stakeholder/export": "Export Dashboard",
   "/settings": "Settings",
+  "/settings/profile": "Profile Settings",
   "/settings/connections": "Tool Connections",
   "/settings/team": "Team Management",
   "/settings/notifications": "Notification Preferences",
@@ -54,7 +55,11 @@ const PAGE_TITLES: Record<string, string> = {
 };
 
 function getPageTitle(pathname: string): string {
-  return PAGE_TITLES[pathname] ?? "Dashboard";
+  // Exact match first
+  if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname];
+  // Dynamic route patterns
+  if (pathname.startsWith("/po/retro/")) return "Retrospective Detail";
+  return "Dashboard";
 }
 
 /* -------------------------------------------------------------------------- */
@@ -136,7 +141,7 @@ function UserDropdown() {
               <button
                 onClick={() => {
                   setOpen(false);
-                  router.push("/settings");
+                  router.push("/settings/profile");
                 }}
                 className="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-raised)] transition-colors cursor-pointer"
               >
@@ -186,9 +191,10 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
   const { role } = useAuth();
   const { hasAnyConnection, openModal } = useIntegrations();
 
-  // Show "Connect Tools" button on PO and Dev routes
-  const isAppRoute = pathname.startsWith("/po") || pathname.startsWith("/dev") || pathname === "/dashboard";
-  const showConnectTools = isAppRoute;
+  // Route detection
+  const isStakeholderRoute = pathname.startsWith("/stakeholder");
+  const isAppRoute = pathname.startsWith("/po") || pathname.startsWith("/dev") || isStakeholderRoute || pathname === "/dashboard";
+  const showConnectTools = isAppRoute && !isStakeholderRoute; // stakeholders don't connect tools
 
   const hasConnections = hasAnyConnection;
 
@@ -219,8 +225,9 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
           {pageTitle}
         </h1>
 
-        {/* Project selector — visible on PO and Dev routes */}
-        {isAppRoute && <ProjectSelector />}
+        {/* Project selector — stakeholder uses assignment-based selector */}
+        {isStakeholderRoute && <StakeholderProjectSelector />}
+        {isAppRoute && !isStakeholderRoute && <ProjectSelector />}
       </div>
 
       {/* Right: connect tools + notifications + user */}
@@ -245,9 +252,6 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
             )}
           </button>
         )}
-
-        {/* Real-time status */}
-        <ConnectionIndicator />
 
         {/* Notifications */}
         <NotificationBell />

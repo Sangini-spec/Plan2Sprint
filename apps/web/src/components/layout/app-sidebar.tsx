@@ -16,15 +16,18 @@ import {
   ChevronLeft,
   Sun,
   Moon,
+  CalendarClock,
   Briefcase,
   BarChart3,
   Milestone,
   FileDown,
-  KanbanSquare,
   GitPullRequest,
   TrendingUp,
   Inbox,
   FolderKanban,
+  Crown,
+  Code2,
+  Eye,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -56,8 +59,8 @@ const PO_NAV: NavItem[] = [
 
 const DEV_NAV: NavItem[] = [
   { label: "Dashboard", href: "/dev", icon: LayoutDashboard, iconColor: "#06b6d4" },
+  { label: "Sprint", href: "/dev/sprint", icon: CalendarClock, iconColor: "#06b6d4" },
   { label: "Standup", href: "/dev/standup", icon: MessageSquareText, iconColor: "#34d399" },
-  { label: "Sprint", href: "/dev/sprint", icon: KanbanSquare, iconColor: "#f59e0b" },
   { label: "GitHub", href: "/dev/github", icon: GitPullRequest, iconColor: "#e879f9" },
   { label: "Projects", href: "/dev/projects", icon: FolderKanban, iconColor: "#a78bfa" },
   { label: "Velocity", href: "/dev/velocity", icon: TrendingUp, iconColor: "#fb923c" },
@@ -65,11 +68,10 @@ const DEV_NAV: NavItem[] = [
 ];
 
 const STAKEHOLDER_NAV: NavItem[] = [
-  { label: "Portfolio", href: "/stakeholder", icon: Briefcase, iconColor: "#06b6d4" },
-  { label: "Team Health", href: "/stakeholder/health", icon: HeartPulse, iconColor: "#f87171" },
+  { label: "Overview", href: "/stakeholder", icon: Briefcase, iconColor: "#06b6d4" },
   { label: "Delivery", href: "/stakeholder/delivery", icon: BarChart3, iconColor: "#34d399" },
   { label: "Epics", href: "/stakeholder/epics", icon: Milestone, iconColor: "#a78bfa" },
-  { label: "Standup Status", href: "/stakeholder/standups", icon: MessageSquareText, iconColor: "#60a5fa" },
+  { label: "Team Health", href: "/stakeholder/health", icon: HeartPulse, iconColor: "#f87171" },
   { label: "Export", href: "/stakeholder/export", icon: FileDown, iconColor: "#fbbf24" },
 ];
 
@@ -192,21 +194,34 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
       )}
     >
       {/* Logo + collapse toggle */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
-        <Link href="/" className="flex items-center gap-2 overflow-hidden">
+      <div className="relative border-b border-[var(--border-subtle)] px-3 pt-5 pb-3">
+        <Link href="/" className="flex items-center justify-start">
           {collapsed ? (
             <Logo size="sm" iconOnly />
           ) : (
-            <Logo size="md" />
+            <Logo size="sidebar" />
           )}
         </Link>
+        {!collapsed && role && (
+          <div className="flex items-center gap-1.5 px-1 pb-1.5 mt-6">
+            {role === "product_owner" && <Crown size={13} className="text-amber-400" />}
+            {role === "developer" && <Code2 size={13} className="text-cyan-400" />}
+            {role === "stakeholder" && <Eye size={13} className="text-violet-400" />}
+            {role === "engineering_manager" && <Briefcase size={13} className="text-emerald-400" />}
+            {role === "admin" && <Crown size={13} className="text-rose-400" />}
+            {role === "owner" && <Crown size={13} className="text-amber-500" />}
+            <span className="text-[11px] font-medium text-[var(--text-secondary)] tracking-wide uppercase">
+              {ROLE_LABELS[role] ?? role}
+            </span>
+          </div>
+        )}
         <button
           onClick={() => {
             onToggle();
             onMobileClose?.();
           }}
           className={cn(
-            "flex h-6 w-6 items-center justify-center rounded-lg shrink-0",
+            "absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-lg",
             "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
             "hover:bg-[var(--bg-surface-raised)]",
             "transition-colors duration-200",

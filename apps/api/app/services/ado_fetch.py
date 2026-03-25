@@ -309,7 +309,7 @@ async def fetch_sprint_context(
                     f"System.IterationPath,System.Description,System.Tags,"
                     f"Microsoft.VSTS.Common.Priority,Microsoft.VSTS.Common.AcceptanceCriteria,"
                     f"System.Parent,Microsoft.VSTS.Scheduling.StartDate,"
-                    f"Microsoft.VSTS.Scheduling.TargetDate"
+                    f"Microsoft.VSTS.Scheduling.TargetDate,System.BoardColumn"
                     f"&api-version=7.1",
                     access_token,
                     auth_header,

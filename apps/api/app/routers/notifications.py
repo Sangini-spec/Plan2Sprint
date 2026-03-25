@@ -302,17 +302,36 @@ async def list_notifications(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return recent in-app notifications for the current user."""
+    """Return recent in-app notifications for the current user.
+
+    Includes:
+      - Notifications addressed directly to the user's email
+      - Broadcast notifications: __all__ (everyone), __all_po__ (PO/admin roles)
+    """
+    from sqlalchemy import or_
     from ..models.in_app_notification import InAppNotification
 
     user_email = current_user.get("email", "")
+    user_role = current_user.get("role", "")
     org_id = current_user.get("organization_id", "demo-org")
+
+    # Build recipient filter: direct + broadcasts the user qualifies for
+    recipient_filters = [
+        InAppNotification.recipient_email == user_email,
+        InAppNotification.recipient_email == "__all__",
+    ]
+
+    # PO/admin roles also see __all_po__ broadcasts
+    if user_role.lower() in {"owner", "admin", "product_owner", "engineering_manager"}:
+        recipient_filters.append(
+            InAppNotification.recipient_email == "__all_po__"
+        )
 
     result = await db.execute(
         select(InAppNotification)
         .where(
             InAppNotification.organization_id == org_id,
-            InAppNotification.recipient_email == user_email,
+            or_(*recipient_filters),
         )
         .order_by(InAppNotification.created_at.desc())
         .limit(limit)
@@ -332,6 +351,45 @@ async def list_notifications(
             for n in rows
         ]
     }
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/notifications/read-all — mark all as read (MUST be before /:id)
+# ---------------------------------------------------------------------------
+
+@router.patch("/notifications/read-all")
+async def mark_all_notifications_read(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark all in-app notifications as read for the current user."""
+    from sqlalchemy import or_, update
+    from ..models.in_app_notification import InAppNotification
+
+    user_email = current_user.get("email", "")
+    user_role = current_user.get("role", "")
+    org_id = current_user.get("organization_id", "demo-org")
+
+    recipient_filters = [
+        InAppNotification.recipient_email == user_email,
+        InAppNotification.recipient_email == "__all__",
+    ]
+    if user_role.lower() in {"owner", "admin", "product_owner", "engineering_manager"}:
+        recipient_filters.append(
+            InAppNotification.recipient_email == "__all_po__"
+        )
+
+    await db.execute(
+        update(InAppNotification)
+        .where(
+            InAppNotification.organization_id == org_id,
+            InAppNotification.read == False,
+            or_(*recipient_filters),
+        )
+        .values(read=True)
+    )
+    await db.commit()
+    return {"success": True}
 
 
 # ---------------------------------------------------------------------------

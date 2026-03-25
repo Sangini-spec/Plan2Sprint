@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { BellRing } from "lucide-react";
+import { BellRing, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Button } from "@/components/ui";
+import { useAuth } from "@/lib/auth/context";
 
 type Channel = "slack" | "teams" | "email" | "inApp";
 
@@ -13,9 +14,18 @@ interface NotificationPreference {
   label: string;
   description: string;
   channels: Record<Channel, boolean>;
+  /** If set, only show this preference for these roles */
+  roles?: string[];
 }
 
 const INITIAL_PREFERENCES: NotificationPreference[] = [
+  {
+    id: "weekly-report",
+    label: "Weekly Project Report",
+    description: "Automated weekly summary of project progress, delivery metrics, and epic status — delivered every Monday",
+    channels: { slack: false, teams: false, email: true, inApp: true },
+    roles: ["stakeholder", "owner", "admin", "product_owner", "engineering_manager"],
+  },
   {
     id: "standup-digest",
     label: "Standup Digest",
@@ -89,8 +99,14 @@ function ToggleSwitch({
 }
 
 export default function NotificationsSettingsPage() {
+  const { role } = useAuth();
   const [preferences, setPreferences] = useState<NotificationPreference[]>(
     INITIAL_PREFERENCES
+  );
+
+  // Filter preferences by role
+  const visiblePreferences = preferences.filter(
+    (p) => !p.roles || p.roles.includes(role)
   );
 
   function toggleChannel(prefId: string, channel: Channel) {
@@ -130,7 +146,7 @@ export default function NotificationsSettingsPage() {
           </div>
 
           {/* Rows */}
-          {preferences.map((pref) => (
+          {visiblePreferences.map((pref) => (
             <div
               key={pref.id}
               className={cn(

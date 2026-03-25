@@ -163,15 +163,44 @@ def build_sprint_prompt(
 ) -> str:
     """Build the LLM prompt with real scrubbed data."""
 
-    # Format backlog items
-    backlog_text = ""
+    # Format backlog items — group by epic/feature for AI context
+    # Build epic lookup: epic_id → epic title
+    epics = {item["id"]: item["title"] for item in backlog_items if item.get("type") in ("epic", "feature")}
+    stories_by_epic: dict[str, list] = {}
+    standalone_items: list = []
     for item in backlog_items:
+        epic = item.get("epic_id")
+        if epic and epic in epics:
+            stories_by_epic.setdefault(epic, []).append(item)
+        else:
+            standalone_items.append(item)
+
+    backlog_text = ""
+    # First list epics with their children grouped together
+    for epic_id, epic_title in epics.items():
+        blocked = " [BLOCKED]" if epic_id in blocked_item_ids else ""
+        backlog_text += f"\n  [FEATURE/EPIC] ID: {epic_id} | Title: {epic_title}{blocked}\n"
+        children = stories_by_epic.get(epic_id, [])
+        for item in children:
+            blocked = " [BLOCKED]" if item["id"] in blocked_item_ids else ""
+            backlog_text += (
+                f"    - ID: {item['id']} | Title: {item['title']} | Type: {item['type']} | "
+                f"Priority: {item['priority']} | SP: {item.get('story_points') or 'unestimated'} | "
+                f"Status: {item['status']} | Parent: {epic_title}{blocked}\n"
+            )
+    # Then standalone items
+    for item in standalone_items:
+        if item.get("type") in ("epic", "feature"):
+            continue  # Already listed above
         blocked = " [BLOCKED]" if item["id"] in blocked_item_ids else ""
         backlog_text += (
             f"  - ID: {item['id']} | Title: {item['title']} | Type: {item['type']} | "
             f"Priority: {item['priority']} | SP: {item.get('story_points') or 'unestimated'} | "
             f"Status: {item['status']}{blocked}\n"
         )
+
+    num_features = len(epics)
+    num_stories = len(backlog_items) - len(epics)
 
     # Format carry-forward items
     carry_text = ""
@@ -271,48 +300,60 @@ def build_sprint_prompt(
     start_date = iteration.get("startDate", "unknown")
     end_date = iteration.get("endDate", "unknown")
 
-    # Regeneration feedback
+    # PO instructions / regeneration feedback
     feedback_section = ""
     if feedback:
         feedback_section = f"""
-REGENERATION FEEDBACK:
-The Product Owner rejected the previous plan with this feedback:
+PRODUCT OWNER INSTRUCTIONS:
+The Product Owner has provided specific instructions for this sprint plan:
   "{feedback}"
-Take this into account when generating the new plan.
+You MUST follow these instructions. They take priority over default ordering and distribution rules. Adjust the plan to satisfy the PO's requirements while still assigning all items.
 """
 
-    prompt = f"""You are a sprint planning AI for an agile development team. Your job is to create a COMPLETE project plan by assigning ALL backlog items to developers across multiple sprints. You also provide project-level insights: total weeks to complete the project, team capacity analysis, and priority recommendations for unprioritized items.
+    prompt = f"""You are a sprint planning AI. Create a project plan by assigning ALL backlog items to developers across sprints.
 
-SPRINT CONTEXT:
-- Sprint duration: {sprint_days} days per sprint ({start_date} → {end_date} is Sprint 1)
-- Goal: {sprint_goal}
-- Team capacity per sprint: ~{total_team_capacity:.0f} story points
+PROJECT STATS:
+- {num_features} features/epics, {num_stories} stories/tasks/bugs
+- Sprint duration: {sprint_days} days ({start_date} → {end_date} is Sprint 1)
+- Team capacity per sprint: ~{total_team_capacity:.0f} SP
+- Today's date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
 
-AVAILABLE DEVELOPERS (only these people can be assigned work):
+DEVELOPERS:
 {team_text}
-NOTE: Only the developers listed above are available for assignments. There may be other team members (POs, stakeholders) who are NOT developers and must NOT receive assignments.
+Only these developers can receive assignments.
 
-CARRY-FORWARD ITEMS (must be included in Sprint 1 if possible):
+CARRY-FORWARD (prioritize in Sprint 1):
 {carry_text}
 
-BACKLOG ITEMS (ordered by priority, highest first):
+BACKLOG (grouped by feature):
 {backlog_text}
 {data_gaps_section}{feedback_section}
-{_format_constraints(constraints)}RULES:
-1. Assign ALL items to developers — do NOT leave items unplanned unless they are [BLOCKED].
-2. If the total work exceeds one sprint's capacity, spread items across multiple sprints (Sprint 1, Sprint 2, Sprint 3, etc.). Each sprint has the same duration ({sprint_days} days).
-3. Higher-priority items go into earlier sprints. Sprint 1 gets the most critical work.
-4. Use each developer's "Sprint capacity (per sprint)" as their maximum SP per sprint. A developer can be assigned work in multiple sprints.
-5. Carry-forward items should be prioritized in Sprint 1.
-6. [BLOCKED] items must NOT be assigned — include them in unplanned_items with reason.
-7. Items without story points: estimate based on type AND title complexity (not just a flat default). Consider: "Redesign checkout" ≈ 8 SP vs "Fix typo" ≈ 1 SP. General defaults: story=5, bug=3, task=2, feature=8, epic=13.
-8. For each assignment, provide a rationale and a sprint_number (1, 2, 3, etc.).
-9. Calculate a confidence score (0.0 to 1.0) for each assignment.
-10. Provide estimated_sprints (total number of sprints needed to complete ALL work).
-11. IMPORTANT: Every non-blocked item MUST be assigned. The plan should cover the entire backlog across however many sprints are needed.
-12. Calculate estimated_weeks_total — the total calendar weeks needed to finish ALL backlog items across all sprints.
-13. Provide capacity_recommendations: analyze whether the team is under-staffed or over-staffed for this backlog, identify bottleneck skill areas, and suggest how many additional developers (if any) would help.
-14. For EVERY assignment where the original item had priority=0, include a "suggested_priority" field (1-5) in that assignment. For items that already have a priority, omit suggested_priority or set it to null.
+{_format_constraints(constraints)}SPRINT ASSIGNMENT RULES (CRITICAL — follow exactly):
+
+1. FEATURE-BASED GROUPING: Assign sprints BY FEATURE. All stories under the same feature/epic go into the SAME sprint. One sprint can contain multiple complete features if capacity allows. NEVER split a feature's stories across different sprints.
+
+2. SPRINT ORDERING = FEATURE ORDER: Sprint 1 gets the first feature(s) in the backlog, Sprint 2 gets the next, etc. Follow the feature order as listed above. Foundational features (auth, registration, core models) go first, dependent features next, polish last.
+
+3. PACK SPRINTS FULL: Each sprint should have MULTIPLE items (stories + their parent epic). Fill each sprint to near the team capacity before moving to the next sprint. A sprint with only 1 item is wrong — pack more features in.
+
+4. NO EMPTY SPRINTS: The sprint_number values must be CONSECUTIVE (1, 2, 3...) with NO gaps. If you use sprints 1-6, every sprint 1 through 6 must have items.
+
+5. MINIMIZE SPRINT COUNT: Use the FEWEST sprints possible. With {num_features} features, you likely need around {max(3, num_features // 2)}-{num_features} sprints (grouping 1-3 features per sprint), NOT 20+ sprints.
+
+6. ASSIGN ALL ITEMS: Every non-blocked item (epics AND their stories) must be assigned. Do NOT leave items unplanned.
+
+7. STORY POINTS: Items without SP — estimate from complexity (story=3-5, bug=2-3, task=2, epic=5-8). Keep estimates realistic and low — minimum 2 SP per item.
+
+8. CAPACITY IS FLEXIBLE: You can exceed the stated capacity by up to 30% per sprint. The goal is fewer, denser sprints — not perfectly balanced load.
+
+9. [BLOCKED] items go in unplanned_items.
+
+10. For items with priority=0, include "suggested_priority" (1-5) in the assignment.
+
+PROJECT ANALYSIS:
+- estimated_sprints = exact count of sprints that have assignments (no empty ones)
+- estimated_weeks_total = estimated_sprints × {sprint_days / 7.0:.1f} weeks per sprint
+- capacity_recommendations: is the team understaffed? how many more developers would help?
 
 Respond with ONLY a JSON object (no markdown, no explanation outside JSON) matching this schema:
 
@@ -421,9 +462,13 @@ async def generate_sprint_plan_ai(
 
     # -----------------------------------------------------------------------
     # 4. Load team members — only developers get assignments
+    #    Filter by project to avoid mixing members from other projects
     # -----------------------------------------------------------------------
+    tm_filters = [TeamMember.organization_id == org_id]
+    if project_id:
+        tm_filters.append(TeamMember.imported_project_id == project_id)
     tm_result = await db.execute(
-        select(TeamMember).where(TeamMember.organization_id == org_id)
+        select(TeamMember).where(*tm_filters)
     )
     all_members = list(tm_result.scalars().all())
     # Filter to developers only for assignment purposes
@@ -538,6 +583,7 @@ async def generate_sprint_plan_ai(
             "priority": wi.priority,
             "story_points": wi.story_points,
             "status": wi.status,
+            "epic_id": wi.epic_id,
         }
 
     def _member_to_dict(m: TeamMember) -> dict:
@@ -757,13 +803,27 @@ async def generate_sprint_plan_ai(
     plan.total_story_points = total_sp
     plan.overall_rationale = reconstruct_pii(overall_rationale, reverse_map)
     plan.goal_attainment_confidence = float(goal_confidence)
-    plan.estimated_sprints = int(estimated_sprints) if estimated_sprints else 1
+    # Count sprints from ACTUAL assignments — only sprints that have items count
+    from datetime import timedelta
+    from math import ceil
+    used_sprints = set(a.get("sprint_number", 1) for a in assignments_raw)
+    actual_sprint_count = len(used_sprints) if used_sprints else 1
+    # Use actual count of non-empty sprints (not AI's estimated_sprints which may include empties)
+    plan.estimated_sprints = actual_sprint_count
+
+    # Calculate weeks from real sprint count × sprint duration
+    sprint_weeks = sprint_days / 7.0
+    plan.estimated_weeks_total = ceil(plan.estimated_sprints * sprint_weeks)
+
+    # Calculate estimated_end_date from today (not iteration start which may be past)
+    now = datetime.now(timezone.utc)
+    planning_start = max(now, iteration.start_date) if iteration.start_date else now
+    if plan.estimated_sprints:
+        plan.estimated_end_date = planning_start + timedelta(
+            days=sprint_days * plan.estimated_sprints
+        )
+
     # New project-level fields
-    if estimated_weeks_total is not None:
-        try:
-            plan.estimated_weeks_total = int(estimated_weeks_total)
-        except (ValueError, TypeError):
-            pass
     if project_completion_summary:
         plan.project_completion_summary = reconstruct_pii(
             str(project_completion_summary), reverse_map
@@ -775,12 +835,6 @@ async def generate_sprint_plan_ai(
                 str(capacity_recommendations["summary"]), reverse_map
             )
         plan.capacity_recommendations = capacity_recommendations
-    # Calculate estimated end date based on sprint count and duration
-    if iteration.start_date and plan.estimated_sprints:
-        from datetime import timedelta
-        plan.estimated_end_date = iteration.start_date + timedelta(
-            days=sprint_days * plan.estimated_sprints
-        )
     plan.risk_summary = _build_risk_summary(
         risk_level, avg_confidence, total_sp, len(unplanned_raw), risk_flags_all,
         plan.estimated_sprints,

@@ -43,6 +43,12 @@ class TeamMember(Base):
         name="organization_id",
         nullable=False,
     )
+    imported_project_id: Mapped[Optional[str]] = mapped_column(
+        String(25),
+        ForeignKey("imported_projects.id"),
+        name="imported_project_id",
+        nullable=True,
+    )
     external_id: Mapped[str] = mapped_column(
         String, name="external_id", nullable=False
     )

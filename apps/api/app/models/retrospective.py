@@ -59,6 +59,12 @@ class Retrospective(Base):
     feed_forward_signals: Mapped[Optional[Any]] = mapped_column(
         JSON, name="feed_forward_signals", nullable=True
     )
+    conclusion: Mapped[Optional[str]] = mapped_column(
+        String, name="conclusion", nullable=True
+    )
+    is_archived: Mapped[bool] = mapped_column(
+        Boolean, name="is_archived", nullable=False, default=False
+    )
     is_draft: Mapped[bool] = mapped_column(
         Boolean, name="is_draft", nullable=False, default=True
     )

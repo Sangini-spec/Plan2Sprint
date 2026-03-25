@@ -166,7 +166,7 @@ export function TeamHealthPanel() {
     const q = projectId ? `?projectId=${projectId}` : "";
     try {
       const [healthRes, analyticsRes] = await Promise.all([
-        cachedFetch<{ signals?: HealthSignalData[] }>("/api/team-health"),
+        cachedFetch<{ signals?: HealthSignalData[] }>(`/api/team-health${q}`),
         cachedFetch<{ backlogHealth?: BacklogHealthData }>(`/api/analytics${q}`),
       ]);
 

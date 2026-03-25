@@ -1,15 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Shield, X, Check, AlertTriangle } from "lucide-react";
+import { MessageSquare, X, Check, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface WritebackChange {
-  field: string;
-  from: string | number | null;
-  to: string | number;
-}
 
 interface WritebackGuardProps {
   open: boolean;
@@ -18,7 +11,6 @@ interface WritebackGuardProps {
   tool: "jira" | "ado";
   itemId: string;
   itemTitle: string;
-  changes: WritebackChange[];
   loading?: boolean;
 }
 
@@ -29,7 +21,6 @@ export function WritebackGuard({
   tool,
   itemId,
   itemTitle,
-  changes,
   loading,
 }: WritebackGuardProps) {
   const toolLabel = tool === "jira" ? "Jira" : "Azure DevOps";
@@ -59,9 +50,9 @@ export function WritebackGuard({
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-subtle)]">
               <div className="flex items-center gap-2">
-                <Shield size={18} className="text-[var(--color-rag-amber)]" />
+                <MessageSquare size={18} className="text-[var(--color-brand-secondary)]" />
                 <h2 className="text-base font-semibold text-[var(--text-primary)]">
-                  Approve Write-Back
+                  Post AI Comment
                 </h2>
               </div>
               <button
@@ -75,36 +66,26 @@ export function WritebackGuard({
             {/* Content */}
             <div className="px-6 py-5 space-y-4">
               <div className="flex items-center gap-2">
-                <AlertTriangle size={14} className="text-[var(--color-rag-amber)]" />
+                <Info size={14} className="text-[var(--color-brand-secondary)]" />
                 <p className="text-xs text-[var(--text-secondary)]">
-                  This will modify <span className="font-medium text-[var(--text-primary)]">{itemId}</span> in {toolLabel}.
+                  An AI recommendation comment will be posted to{" "}
+                  <span className="font-medium text-[var(--text-primary)]">{itemId}</span>{" "}
+                  in {toolLabel}.
                 </p>
               </div>
 
               <p className="text-sm font-medium text-[var(--text-primary)]">{itemTitle}</p>
 
-              {/* Changes diff */}
-              <div className="rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
-                {changes.map((change) => (
-                  <div key={change.field} className="px-4 py-2.5">
-                    <p className="text-xs font-medium text-[var(--text-secondary)] mb-1">
-                      {change.field}
-                    </p>
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="text-[var(--color-rag-red)] line-through">
-                        {change.from ?? "unset"}
-                      </span>
-                      <span className="text-[var(--text-tertiary)]">&rarr;</span>
-                      <span className="text-[var(--color-rag-green)] font-medium">
-                        {change.to}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+              {/* Info box */}
+              <div className="rounded-lg border border-[var(--color-brand-secondary)]/20 bg-[var(--color-brand-secondary)]/5 px-4 py-3">
+                <p className="text-xs text-[var(--text-secondary)]">
+                  The comment will include sprint placement, story points, confidence score,
+                  risk flags, and AI rationale. No fields on the work item will be modified.
+                </p>
               </div>
 
               <p className="text-[11px] text-[var(--text-tertiary)]">
-                This action will be logged in the audit trail. You can undo within 1 hour.
+                This action will be logged in the audit trail.
               </p>
             </div>
 
@@ -128,7 +109,7 @@ export function WritebackGuard({
                 )}
               >
                 <Check size={14} />
-                {loading ? "Writing..." : "Approve & Write Back"}
+                {loading ? "Posting..." : "Post Comment"}
               </button>
             </div>
           </motion.div>

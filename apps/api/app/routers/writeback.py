@@ -262,129 +262,14 @@ async def undo_writeback(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Undo a write-back within the 60-minute window.
-
-    Body:
-    {
-        "auditEntryId": "cuid-of-the-original-writeback"
-    }
+    Undo is no longer available — sprint plan sync now posts comments only,
+    which are append-only and cannot be undone.
     """
-    org_id = current_user.get("organization_id", "demo-org")
-    user_id = current_user.get("id", "demo-user")
-    user_role = current_user.get("role", "developer")
-    audit_id = body.get("auditEntryId", "")
-
-    if not audit_id:
-        raise HTTPException(status_code=400, detail="auditEntryId is required")
-
-    # Find the original write-back entry
-    result = await db.execute(
-        select(AuditLogEntry).where(
-            AuditLogEntry.id == audit_id,
-            AuditLogEntry.organization_id == org_id,
-            AuditLogEntry.event_type == "writeback",
-            AuditLogEntry.success == True,
-        )
+    raise HTTPException(
+        status_code=410,
+        detail="Undo is not available for comment-based sync. "
+               "AI recommendation comments are append-only and cannot be removed.",
     )
-    original = result.scalar_one_or_none()
-
-    if not original:
-        raise HTTPException(status_code=404, detail="Write-back entry not found or not undoable")
-
-    # Check undo window
-    if original.created_at:
-        elapsed = datetime.now(timezone.utc) - original.created_at.replace(tzinfo=timezone.utc)
-        if elapsed > timedelta(minutes=UNDO_WINDOW_MINUTES):
-            raise HTTPException(
-                status_code=410,
-                detail=f"Undo window expired ({UNDO_WINDOW_MINUTES} minutes). "
-                       f"Write-back was {int(elapsed.total_seconds() / 60)} minutes ago.",
-            )
-
-    # Swap before/after: write back the PREVIOUS values
-    previous_values = original.before_state or {}
-    current_values = original.after_state or {}
-    tool = (original.metadata_ or {}).get("tool", "")
-    item_id = original.resource_id
-
-    if not previous_values:
-        raise HTTPException(status_code=400, detail="No previous values recorded — cannot undo")
-
-    # Validate undo fields
-    is_valid, disallowed = validate_writeback_fields(tool, previous_values)
-    if not is_valid:
-        raise HTTPException(status_code=400, detail=f"Undo blocked: disallowed fields {disallowed}")
-
-    # Create undo audit entry
-    undo_entry = AuditLogEntry(
-        organization_id=org_id,
-        actor_id=user_id,
-        actor_role=user_role,
-        event_type="writeback_undo",
-        resource_type=f"{tool}_work_item",
-        resource_id=item_id,
-        before_state=current_values,
-        after_state=previous_values,
-        source_channel="api",
-        success=False,
-        metadata_={
-            "tool": tool,
-            "originalEntryId": audit_id,
-            "undone": True,
-        },
-    )
-    db.add(undo_entry)
-    await db.flush()
-
-    # Execute the undo write-back
-    undo_result: dict = {"success": True}
-
-    if settings.is_demo_mode:
-        undo_result = {"success": True, "status": 200, "demo": True}
-    else:
-        conn = await _get_connection(db, org_id, tool)
-        if not conn:
-            raise HTTPException(status_code=404, detail=f"No {tool.upper()} connection found")
-
-        if tool == "ado":
-            undo_result = await _execute_ado_writeback(conn, item_id, previous_values)
-        else:
-            undo_result = await _execute_jira_writeback(conn, item_id, previous_values)
-
-    undo_entry.success = undo_result.get("success", False)
-    if not undo_result.get("success"):
-        undo_entry.event_type = "writeback_undo_failed"
-
-    # Mark original as undone
-    if undo_result.get("success") and original.metadata_:
-        original.metadata_["undone"] = True
-        original.metadata_["undoable"] = False
-
-    await db.commit()
-
-    if not undo_result.get("success"):
-        raise HTTPException(
-            status_code=502,
-            detail=f"Undo failed: {undo_result.get('error', 'Unknown error')}",
-        )
-
-    # Broadcast undo to all connected clients
-    await ws_manager.broadcast(org_id, {
-        "type": "writeback_undo",
-        "data": {
-            "tool": tool,
-            "itemId": item_id,
-            "restoredValues": previous_values,
-        },
-    })
-
-    return {
-        "ok": True,
-        "undone": True,
-        "tool": tool,
-        "itemId": item_id,
-        "restoredValues": previous_values,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -394,18 +279,32 @@ async def undo_writeback(
 @router.get("/writeback/log")
 async def get_writeback_log(
     limit: int = 20,
+    projectId: str | None = None,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return recent write-back audit log entries."""
+    """Return recent write-back audit log entries, optionally scoped to a project."""
     org_id = current_user.get("organization_id", "demo-org")
+
+    filters = [
+        AuditLogEntry.organization_id == org_id,
+        AuditLogEntry.event_type.in_([
+            "writeback", "writeback_failed", "writeback_undo", "writeback_undo_failed",
+            "comment_posted", "comment_failed",
+        ]),
+    ]
+
+    # If projectId is provided, only return entries for work items in that project
+    if projectId:
+        from ..models.work_item import WorkItem
+        sub = select(WorkItem.id).where(
+            WorkItem.imported_project_id == projectId,
+        ).scalar_subquery()
+        filters.append(AuditLogEntry.resource_id.in_(sub))
 
     result = await db.execute(
         select(AuditLogEntry)
-        .where(
-            AuditLogEntry.organization_id == org_id,
-            AuditLogEntry.event_type.in_(["writeback", "writeback_failed", "writeback_undo", "writeback_undo_failed"]),
-        )
+        .where(*filters)
         .order_by(AuditLogEntry.created_at.desc())
         .limit(limit)
     )
@@ -423,13 +322,7 @@ async def get_writeback_log(
                 "success": e.success,
                 "metadata": e.metadata_,
                 "createdAt": e.created_at.isoformat() if e.created_at else None,
-                "undoable": (
-                    e.event_type == "writeback"
-                    and e.success
-                    and e.created_at is not None
-                    and (datetime.now(timezone.utc) - e.created_at.replace(tzinfo=timezone.utc)) < timedelta(minutes=UNDO_WINDOW_MINUTES)
-                    and not (e.metadata_ or {}).get("undone", False)
-                ),
+                "undoable": False,  # Comment-based sync is non-destructive, no undo needed
             }
             for e in entries
         ],

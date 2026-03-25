@@ -37,6 +37,91 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 
+async def _build_what_went_well(
+    db: AsyncSession,
+    org_id: str,
+    project_id: str,
+    iteration_id: str,
+    wi_filters: list,
+    done_sp: float,
+    total_sp: float,
+    completion_rate: float,
+    developers: list,
+    blockers: list,
+) -> list[str]:
+    """Generate positive highlights from completed work items, even in a failed sprint."""
+    items: list[str] = []
+
+    if done_sp <= 0:
+        return items
+
+    # 1. Story points delivered
+    done_count_result = await db.execute(
+        select(func.count())
+        .select_from(WorkItem)
+        .where(*wi_filters, WorkItem.status.in_(["DONE", "CLOSED"]))
+    )
+    done_count = done_count_result.scalar() or 0
+    items.append(
+        f"The team delivered {done_sp:.0f} story points across {done_count} completed items "
+        f"({completion_rate:.0f}% of the sprint goal)"
+    )
+
+    # 2. Feature/epic progress — group completed items by parent epic
+    epic_result = await db.execute(
+        select(WorkItem.epic_id, func.count().label("cnt"))
+        .where(*wi_filters, WorkItem.status.in_(["DONE", "CLOSED"]), WorkItem.epic_id.isnot(None))
+        .group_by(WorkItem.epic_id)
+    )
+    epic_completions = list(epic_result.all())
+    if epic_completions:
+        # Get epic titles
+        epic_ids = [row[0] for row in epic_completions]
+        epic_names_result = await db.execute(
+            select(WorkItem.id, WorkItem.title)
+            .where(WorkItem.id.in_(epic_ids))
+        )
+        epic_names = {r[0]: r[1] for r in epic_names_result.all()}
+
+        top_epics = sorted(epic_completions, key=lambda r: r[1], reverse=True)[:3]
+        for epic_id, count in top_epics:
+            name = epic_names.get(epic_id, "Unknown Epic")
+            items.append(f"Progressed on \"{name}\" — {count} item{'s' if count > 1 else ''} completed")
+
+    # 3. Developers who delivered all their assigned work
+    for dev in developers:
+        dev_done_result = await db.execute(
+            select(func.count())
+            .select_from(WorkItem)
+            .where(
+                WorkItem.assignee_id == dev.id,
+                WorkItem.iteration_id == iteration_id,
+                WorkItem.status.in_(["DONE", "CLOSED"]),
+            )
+        )
+        dev_done = dev_done_result.scalar() or 0
+
+        dev_total_result = await db.execute(
+            select(func.count())
+            .select_from(WorkItem)
+            .where(
+                WorkItem.assignee_id == dev.id,
+                WorkItem.iteration_id == iteration_id,
+            )
+        )
+        dev_total = dev_total_result.scalar() or 0
+
+        if dev_total > 0 and dev_done == dev_total:
+            items.append(f"{dev.display_name} completed all {dev_done} assigned items")
+
+    # 4. Blockers that were resolved
+    resolved_blockers = [b for b in blockers if b.status in ("RESOLVED", "CLOSED")]
+    if resolved_blockers:
+        items.append(f"{len(resolved_blockers)} blocker{'s' if len(resolved_blockers) > 1 else ''} were identified and resolved during the sprint")
+
+    return items
+
+
 async def analyze_sprint_failure(
     db: AsyncSession,
     org_id: str,
@@ -287,6 +372,66 @@ async def analyze_sprint_failure(
             "reason": "Max sprint commitment reduced to 85% of team velocity",
         })
 
+    # --- Build "what went well" from completed work ---
+    what_went_well_items = await _build_what_went_well(
+        db, org_id, project_id, iteration_id, wi_filters,
+        done_sp, total_sp, completion_rate, developers, blockers,
+    )
+
+    # --- Generate one-line conclusion ---
+    cls_label = {
+        "OVERCOMMITMENT": "Overcommitment",
+        "EXECUTION": "Execution Failure",
+        "DEPENDENCY": "External Dependency",
+        "CAPACITY": "Capacity Shortage",
+        "SCOPE_CREEP": "Scope Creep",
+    }.get(classification["type"], classification["type"])
+
+    conclusion = (
+        f"{completion_rate:.0f}% completion ({done_sp:.0f}/{total_sp:.0f} SP), "
+        f"classified as {cls_label}"
+    )
+    if carry_forward_count > 0:
+        conclusion += f", {carry_forward_count} items carried forward"
+    if overloaded_devs:
+        conclusion += f", {len(overloaded_devs)} dev{'s' if len(overloaded_devs) > 1 else ''} overloaded"
+
+    # --- Archive previous retros for this project ---
+    from sqlalchemy import update as sql_update
+    prev_retros_for_project = (
+        select(Retrospective.id)
+        .join(Iteration, Retrospective.iteration_id == Iteration.id)
+        .where(
+            Retrospective.organization_id == org_id,
+            Iteration.imported_project_id == project_id,
+            Retrospective.iteration_id != iteration_id,
+            Retrospective.is_archived == False,
+        )
+    )
+    prev_ids = [r[0] for r in (await db.execute(prev_retros_for_project)).all()]
+    if prev_ids:
+        for prev_id in prev_ids:
+            prev_result = await db.execute(
+                select(Retrospective).where(Retrospective.id == prev_id)
+            )
+            prev_retro = prev_result.scalar_one_or_none()
+            if prev_retro:
+                # Generate conclusion for old retros that don't have one
+                if not prev_retro.conclusion:
+                    prev_evidence = prev_retro.failure_evidence if isinstance(prev_retro.failure_evidence, dict) else {}
+                    prev_rate = prev_evidence.get("completionRate", 0)
+                    prev_total = prev_evidence.get("totalSP", 0)
+                    prev_done = prev_evidence.get("doneSP", 0)
+                    prev_cls = prev_retro.failure_classification or "Completed"
+                    prev_retro.conclusion = f"{prev_rate:.0f}% completion ({prev_done:.0f}/{prev_total:.0f} SP), classified as {prev_cls}"
+                # Archive: clear heavy data
+                prev_retro.is_archived = True
+                prev_retro.failure_evidence = None
+                prev_retro.feed_forward_signals = None
+                prev_retro.what_went_well = {"items": []}
+                prev_retro.what_didnt_go_well = {"items": []}
+                prev_retro.root_cause_analysis = None
+
     # --- Persist to retrospective ---
     retro_result = await db.execute(
         select(Retrospective)
@@ -314,12 +459,18 @@ async def analyze_sprint_failure(
             "signals": [ff["reason"] for ff in feed_forward],
             "details": feed_forward,
         }
+        retro.conclusion = conclusion
+        retro.is_archived = False  # Current sprint is never archived
+        # Update what_went_well if it was empty
+        existing_well = retro.what_went_well
+        if not existing_well or (isinstance(existing_well, dict) and not existing_well.get("items")):
+            retro.what_went_well = {"items": what_went_well_items}
     else:
         retro = Retrospective(
             id=generate_cuid(),
             organization_id=org_id,
             iteration_id=iteration_id,
-            what_went_well={"items": []},
+            what_went_well={"items": what_went_well_items},
             what_didnt_go_well={"items": evidence},
             failure_classification=classification["type"],
             failure_evidence={
@@ -336,10 +487,67 @@ async def analyze_sprint_failure(
                 "signals": [ff["reason"] for ff in feed_forward],
                 "details": feed_forward,
             },
+            conclusion=conclusion,
+            is_archived=False,
             is_draft=False,
             finalized_at=datetime.now(timezone.utc),
         )
         db.add(retro)
+
+    # --- Generate action items from analysis ---
+    from ..models.retrospective import RetroActionItem
+
+    # Check if action items already exist for this retro
+    existing_actions_result = await db.execute(
+        select(func.count())
+        .select_from(RetroActionItem)
+        .where(RetroActionItem.retrospective_id == retro.id)
+    )
+    existing_action_count = existing_actions_result.scalar() or 0
+
+    if existing_action_count == 0:
+        action_items_data: list[dict] = []
+
+        # From feed-forward signals
+        for ff in feed_forward:
+            action_items_data.append({
+                "title": ff["reason"],
+                "status": "open",
+            })
+
+        # From evidence — create actionable items
+        if unresolved_blockers > 0:
+            action_items_data.append({
+                "title": f"Resolve {unresolved_blockers} outstanding blockers before next sprint",
+                "status": "open",
+            })
+
+        if no_activity_count > 0:
+            action_items_data.append({
+                "title": f"Review {no_activity_count} stalled tickets and reassign or descope",
+                "status": "open",
+            })
+
+        if overcommitted:
+            action_items_data.append({
+                "title": "Right-size next sprint backlog to match team velocity",
+                "status": "open",
+            })
+
+        if carry_forward_count > 0:
+            action_items_data.append({
+                "title": f"Prioritize {carry_forward_count} carry-forward items in next sprint planning",
+                "status": "open",
+            })
+
+        for ai_data in action_items_data:
+            action_item = RetroActionItem(
+                id=generate_cuid(),
+                retrospective_id=retro.id,
+                title=ai_data["title"],
+                status=ai_data["status"],
+            )
+            db.add(action_item)
 
     # --- Write feed-forward constraints ---
     if feed_forward:
@@ -636,6 +844,49 @@ async def generate_success_retrospective(
             "adjustment": 5,
         })
 
+    # --- Generate one-line conclusion ---
+    conclusion = f"{completion_rate:.0f}% completion ({done_sp:.0f}/{total_sp:.0f} SP)"
+    if done_items == total_items:
+        conclusion += ", all items delivered"
+    elif total_items - done_items > 0:
+        conclusion += f", {total_items - done_items} item{'s' if total_items - done_items > 1 else ''} spilled over"
+    if contributing_devs == len(developers) and len(developers) > 0:
+        conclusion += f", full team contribution"
+
+    # --- Archive previous retros for this project ---
+    from sqlalchemy import update as sql_update
+    prev_retros_for_project = (
+        select(Retrospective.id)
+        .join(Iteration, Retrospective.iteration_id == Iteration.id)
+        .where(
+            Retrospective.organization_id == org_id,
+            Iteration.imported_project_id == project_id,
+            Retrospective.iteration_id != iteration_id,
+            Retrospective.is_archived == False,
+        )
+    )
+    prev_ids = [r[0] for r in (await db.execute(prev_retros_for_project)).all()]
+    if prev_ids:
+        for prev_id in prev_ids:
+            prev_result = await db.execute(
+                select(Retrospective).where(Retrospective.id == prev_id)
+            )
+            prev_retro = prev_result.scalar_one_or_none()
+            if prev_retro:
+                if not prev_retro.conclusion:
+                    prev_evidence = prev_retro.failure_evidence if isinstance(prev_retro.failure_evidence, dict) else {}
+                    prev_rate = prev_evidence.get("completionRate", 0)
+                    prev_total = prev_evidence.get("totalSP", 0)
+                    prev_done = prev_evidence.get("doneSP", 0)
+                    prev_cls = prev_retro.failure_classification or "Completed"
+                    prev_retro.conclusion = f"{prev_rate:.0f}% completion ({prev_done:.0f}/{prev_total:.0f} SP), classified as {prev_cls}"
+                prev_retro.is_archived = True
+                prev_retro.failure_evidence = None
+                prev_retro.feed_forward_signals = None
+                prev_retro.what_went_well = {"items": []}
+                prev_retro.what_didnt_go_well = {"items": []}
+                prev_retro.root_cause_analysis = None
+
     # --- Persist ---
     retro = Retrospective(
         id=generate_cuid(),
@@ -657,6 +908,8 @@ async def generate_success_retrospective(
             "signals": [ff["reason"] for ff in feed_forward],
             "details": feed_forward,
         },
+        conclusion=conclusion,
+        is_archived=False,
         is_draft=False,
         finalized_at=datetime.now(timezone.utc),
     )

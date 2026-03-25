@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from ..config import settings
@@ -15,16 +15,23 @@ DEMO_USER = {
 }
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict:
     # Demo mode bypass — identical to TypeScript isDemoMode
     if settings.is_demo_mode:
         return DEMO_USER
 
-    if not credentials:
-        # In debug/development mode, fall back to demo user for unauthenticated requests.
-        # This allows testing the API without Supabase auth tokens.
-        # In production (DEBUG=false), this will properly return 401.
+    # Try to get token from: 1) Bearer header, 2) query param, 3) cookie
+    token = None
+    if credentials:
+        token = credentials.credentials
+    elif request.query_params.get("token"):
+        token = request.query_params.get("token")
+    elif request.cookies.get("sb-access-token"):
+        token = request.cookies.get("sb-access-token")
+
+    if not token:
         if settings.debug:
             return DEMO_USER
         raise HTTPException(
@@ -33,19 +40,22 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = credentials.credentials
     try:
         payload = jwt.decode(
             token,
             settings.supabase_jwt_secret,
             algorithms=["HS256"],
             audience="authenticated",
+            options={"verify_signature": True},
         )
         # Enrich with organization_id from our users table if not in JWT
         if "organization_id" not in payload:
             payload["organization_id"] = "demo-org"
         return payload
     except JWTError as e:
+        # Log the actual error for debugging
+        import logging
+        logging.getLogger(__name__).error(f"JWT decode failed: {e}, token_start={token[:20]}...")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid or expired token: {str(e)}",

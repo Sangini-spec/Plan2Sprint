@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge, Button } from "@/components/ui";
 import type { BlockerStatus } from "@/lib/types/models";
+import { useSelectedProject } from "@/lib/project/context";
 import { useAutoRefresh } from "@/lib/ws/context";
 import { cachedFetch } from "@/lib/fetch-cache";
 
@@ -40,14 +41,18 @@ const statusBadgeVariant: Record<BlockerStatus, "rag-red" | "rag-amber" | "rag-g
 // ---------------------------------------------------------------------------
 
 export function BlockerActionPanel() {
+  const { selectedProject } = useSelectedProject();
   const [blockers, setBlockers] = useState<BlockerData[]>([]);
   const [loading, setLoading] = useState(true);
   const refreshKey = useAutoRefresh(["sync_complete", "standup_generated", "github_activity"]);
 
+  const projectId = selectedProject?.internalId;
+
   const fetchBlockers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await cachedFetch("/api/standups");
+      const q = projectId ? `?projectId=${projectId}` : "";
+      const res = await cachedFetch(`/api/standups${q}`);
       if (res.ok) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data = res.data as any;
@@ -77,7 +82,7 @@ export function BlockerActionPanel() {
       setBlockers([]);
     }
     setLoading(false);
-  }, []);
+  }, [projectId]);
 
   useEffect(() => { fetchBlockers(); }, [fetchBlockers, refreshKey]);
 

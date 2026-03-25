@@ -69,8 +69,8 @@ async def generate_sprint_plan(
     proj_result = await db.execute(proj_q)
     project = proj_result.scalar_one_or_none()
 
-    # 3. Load team members — only developers get assignments
-    all_members = await _load_team_members(db, org_id)
+    # 3. Load team members — only developers get assignments (filtered by project)
+    all_members = await _load_team_members(db, org_id, project_id)
     members = [m for m in all_members if m.role == "developer"]
     if not members:
         return {"error": "No developers found in the team. Mark at least one team member as a developer."}
@@ -286,10 +286,13 @@ async def _resolve_iteration(
 
 
 async def _load_team_members(
-    db: AsyncSession, org_id: str,
+    db: AsyncSession, org_id: str, project_id: str | None = None,
 ) -> list[TeamMember]:
+    filters = [TeamMember.organization_id == org_id]
+    if project_id:
+        filters.append(TeamMember.imported_project_id == project_id)
     result = await db.execute(
-        select(TeamMember).where(TeamMember.organization_id == org_id)
+        select(TeamMember).where(*filters)
     )
     return list(result.scalars().all())
 

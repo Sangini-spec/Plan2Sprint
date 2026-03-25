@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.12",
     "anthropic>=0.80.0",
+    "redis[hiredis]>=5.0.0",
 ]
 
 [project.optional-dependencies]

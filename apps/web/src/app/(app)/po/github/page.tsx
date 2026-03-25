@@ -873,13 +873,49 @@ function GitHubConnectedView() {
 // Page
 // ---------------------------------------------------------------------------
 
+function GitHubNoRepoState({ projectName }: { projectName: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--bg-surface-raised)] mb-6">
+        <Github size={32} className="text-[var(--text-secondary)]" />
+      </div>
+      <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">
+        No GitHub Repository Linked
+      </h2>
+      <p className="text-sm text-[var(--text-secondary)] max-w-md mb-4">
+        <span className="font-medium text-[var(--text-primary)]">{projectName}</span> does not have a GitHub repository linked.
+        GitHub monitoring shows data only for projects with connected repos.
+      </p>
+      <p className="text-xs text-[var(--text-tertiary)]">
+        To see GitHub data, select a project that has a linked repository, or link a repo to this project.
+      </p>
+    </div>
+  );
+}
+
 export default function GithubPage() {
   const { isConnected } = useIntegrations();
   const githubConnected = isConnected("github");
+  const { selectedProject } = useSelectedProject();
+
+  // If GitHub is connected but the selected project is from Jira/ADO (not GitHub-linked),
+  // show a message that no repos are linked to this project
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const projectSource = ((selectedProject as any)?.sourceTool ?? selectedProject?.source ?? "")?.toUpperCase();
+  const isGitHubProject = projectSource === "GITHUB";
+  // For Jira/ADO projects, we'd need a linked repo — for now, show no-repo state
+  // unless the project explicitly has repos linked
+  const hasNoLinkedRepo = githubConnected && selectedProject && !isGitHubProject;
 
   return (
     <div className="space-y-6">
-      {githubConnected ? <GitHubConnectedView /> : <GitHubEmptyState />}
+      {!githubConnected ? (
+        <GitHubEmptyState />
+      ) : hasNoLinkedRepo ? (
+        <GitHubNoRepoState projectName={selectedProject?.name || "This project"} />
+      ) : (
+        <GitHubConnectedView />
+      )}
     </div>
   );
 }

@@ -24,6 +24,7 @@ import {
 } from "react";
 import { useIntegrations } from "@/lib/integrations/context";
 import type { SelectedProject } from "@/lib/integrations/types";
+import { invalidateCache } from "@/lib/fetch-cache";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +50,8 @@ interface SelectedProjectContextType {
   selectedProject: ProjectItem | null;
   /** Whether the initial load is happening */
   loading: boolean;
+  /** True briefly after switching projects (cache cleared, data re-fetching) */
+  switching: boolean;
   /** Select a project (pass null for "All Projects") */
   selectProject: (project: ProjectItem | null) => void;
   /** Refresh the project list from the API */
@@ -59,6 +62,7 @@ const SelectedProjectContext = createContext<SelectedProjectContextType>({
   projects: [],
   selectedProject: null,
   loading: true,
+  switching: false,
   selectProject: () => {},
   refreshProjects: async () => {},
 });
@@ -75,7 +79,9 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [selectedProject, setSelectedProject] = useState<ProjectItem | null>(null);
   const [loading, setLoading] = useState(true);
+  const [switching, setSwitching] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const switchingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { connections } = useIntegrations();
 
   // Derive live projects from integration connections (fallback source)
@@ -216,7 +222,14 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   }, [selectedProject, initialized]);
 
   const selectProject = useCallback((project: ProjectItem | null) => {
+    // Clear all cached API responses so components re-fetch with the new projectId
+    invalidateCache();
+    setSwitching(true);
     setSelectedProject(project);
+
+    // Clear switching flag after a short delay to allow components to re-fetch
+    if (switchingTimer.current) clearTimeout(switchingTimer.current);
+    switchingTimer.current = setTimeout(() => setSwitching(false), 400);
   }, []);
 
   // Use ref for selectedProject to avoid re-creating refreshProjects on every selection
@@ -260,10 +273,11 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
       projects,
       selectedProject,
       loading,
+      switching,
       selectProject,
       refreshProjects,
     }),
-    [projects, selectedProject, loading, selectProject, refreshProjects]
+    [projects, selectedProject, loading, switching, selectProject, refreshProjects]
   );
 
   return (

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Logo } from "@/components/ui/logo";
+import { AuthBranding } from "@/components/auth/auth-branding";
 
 export default function AuthLayout({
   children,
@@ -7,31 +7,32 @@ export default function AuthLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-[var(--bg-base)] px-4 py-12">
-      {/* Subtle grid background */}
-      <div className="fixed inset-0 grid-pattern opacity-30 pointer-events-none" />
+    <div className="h-screen flex bg-[var(--bg-base)] overflow-hidden">
+      {/* Left branding panel */}
+      <AuthBranding />
 
-      {/* Logo */}
-      <Link href="/" className="relative z-10 mb-8 inline-block">
-        <Logo size="xl" />
-      </Link>
+      {/* Right form panel */}
+      <div className="flex-1 flex flex-col h-screen">
+        {/* Back button */}
+        <div className="px-6 pt-4 pb-0">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            Back
+          </Link>
+        </div>
 
-      {/* Auth card */}
-      <div className="relative z-10 w-full max-w-md">
-        <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-8">
-          {children}
+        {/* Form area — vertically centered, compact */}
+        <div className="flex-1 flex items-center justify-center px-6 py-4 overflow-y-auto">
+          <div className="w-full max-w-md">
+            {children}
+          </div>
         </div>
       </div>
-
-      {/* Footer link */}
-      <p className="relative z-10 mt-8 text-sm text-[var(--text-secondary)]">
-        <Link
-          href="/"
-          className="hover:text-[var(--color-brand-secondary)] transition-colors"
-        >
-          &larr; Back to home
-        </Link>
-      </p>
     </div>
   );
 }

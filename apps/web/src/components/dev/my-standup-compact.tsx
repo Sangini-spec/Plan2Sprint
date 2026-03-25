@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge } from "@/components/ui";
+import { useSelectedProject } from "@/lib/project/context";
 import { useAutoRefresh } from "@/lib/ws/context";
 import { cachedFetch } from "@/lib/fetch-cache";
 import Link from "next/link";
@@ -59,6 +60,7 @@ function formatTime(iso: string): string {
 // ---------------------------------------------------------------------------
 
 export function MyStandupCompact() {
+  const { selectedProject } = useSelectedProject();
   const [noteText, setNoteText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -69,6 +71,8 @@ export function MyStandupCompact() {
   const [loading, setLoading] = useState(true);
   const refreshKey = useAutoRefresh(["standup_generated", "sync_complete"]);
 
+  const projectId = selectedProject?.internalId;
+
   const today = new Date();
   const isWeekend = today.getDay() === 0 || today.getDay() === 6;
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -77,7 +81,8 @@ export function MyStandupCompact() {
   const fetchStandup = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await cachedFetch(`/api/standups?date=${todayKey}`);
+      const pidParam = projectId ? `&projectId=${projectId}` : "";
+      const res = await cachedFetch(`/api/standups?date=${todayKey}${pidParam}`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = res.data as any;
 
@@ -95,7 +100,7 @@ export function MyStandupCompact() {
       setNotes([]);
     }
     setLoading(false);
-  }, [todayKey]);
+  }, [todayKey, projectId]);
 
   useEffect(() => { fetchStandup(); }, [fetchStandup, refreshKey]);
 

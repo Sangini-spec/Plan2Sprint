@@ -133,7 +133,7 @@ def normalize_ado_work_item(raw: dict, org_id: str) -> dict:
         "title": fields.get("System.Title", "Untitled"),
         "description": fields.get("System.Description"),
         "status": map_ado_status(fields.get("System.State", "New")),
-        "source_status": fields.get("System.State", "New"),
+        "source_status": fields.get("System.BoardColumn") or fields.get("System.State", "New"),
         "story_points": _safe_float(
             fields.get("Microsoft.VSTS.Scheduling.StoryPoints")
             or fields.get("Microsoft.VSTS.Scheduling.Effort")
@@ -230,10 +230,11 @@ def normalize_jira_issue(raw: dict, org_id: str) -> dict:
     assignee_obj = fields.get("assignee") or {}
     sprint_obj = fields.get("sprint") or {}  # Jira Agile sprint field
 
-    # Try common story point custom fields
+    # Try common story point custom fields (ID varies per Jira site)
     story_points = (
         _safe_float(fields.get("customfield_10016"))   # Jira Cloud default
         or _safe_float(fields.get("customfield_10028"))  # Common alternative
+        or _safe_float(fields.get("customfield_10102"))  # Team-managed projects
         or _safe_float(fields.get("story_points"))
     )
 
@@ -266,7 +267,10 @@ def normalize_jira_issue(raw: dict, org_id: str) -> dict:
         "_assignee_display_name": assignee_obj.get("displayName"),
         "_sprint_id": sprint_obj.get("id"),
         "_sprint_name": sprint_obj.get("name"),
-        "_epic_key": fields.get("epic", {}).get("key") if isinstance(fields.get("epic"), dict) else fields.get("epic"),
+        "_epic_key": (
+            (fields.get("epic", {}).get("key") if isinstance(fields.get("epic"), dict) else fields.get("epic"))
+            or (fields.get("parent") or {}).get("key")  # Team-managed projects use parent instead of epic link
+        ),
         "_created": fields.get("created"),
         "_updated": fields.get("updated"),
     }

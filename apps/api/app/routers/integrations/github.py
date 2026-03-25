@@ -1042,6 +1042,17 @@ async def receive_webhook(
                         "transitions": tracker_result.get("transitions", []),
                     },
                 })
+                # Also broadcast work_item_updated for each status transition
+                # so hero banner and other panels refresh too
+                for transition in (tracker_result.get("transitions") or []):
+                    await ws_manager.broadcast(org_id, {
+                        "type": "work_item_updated",
+                        "data": {
+                            "workItemId": transition.get("work_item_id"),
+                            "oldStatus": transition.get("old_status"),
+                            "newStatus": transition.get("new_status"),
+                        },
+                    })
             except Exception as e:
                 _logger.warning(f"WebSocket broadcast after webhook failed: {e}")
 

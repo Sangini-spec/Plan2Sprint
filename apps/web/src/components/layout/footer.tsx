@@ -63,7 +63,7 @@ const FOOTER_COLUMNS: FooterColumn[] = [
 function FooterLinkGroup({ title, links }: FooterColumn) {
   return (
     <div>
-      <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/80">
+      <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-800 dark:text-white/80">
         {title}
       </h3>
       <ul className="space-y-3">
@@ -72,7 +72,7 @@ function FooterLinkGroup({ title, links }: FooterColumn) {
             <a
               href={link.href}
               className={cn(
-                "text-sm text-white/50",
+                "text-sm text-slate-500 dark:text-white/50",
                 "transition-colors duration-200",
                 "hover:text-[#0D96E6]"
               )}
@@ -91,8 +91,8 @@ function GdprBadge() {
     <div
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full",
-        "border border-white/10 bg-white/5",
-        "px-3 py-1 text-xs text-white/50"
+        "border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/5",
+        "px-3 py-1 text-xs text-slate-500 dark:text-white/50"
       )}
     >
       <Shield size={12} className="text-[#22C55E]" />
@@ -107,7 +107,7 @@ function GdprBadge() {
 
 export function Footer() {
   return (
-    <footer className="bg-[#0A0A0F] text-white">
+    <footer className="bg-slate-50 dark:bg-[#0A0A0F] text-slate-900 dark:text-white">
       {/* Top divider gradient */}
       <div className="h-px bg-gradient-to-r from-transparent via-[#0D96E6]/30 to-transparent" />
 
@@ -116,16 +116,13 @@ export function Footer() {
         <div className="grid grid-cols-1 gap-12 md:grid-cols-2 lg:grid-cols-5 lg:gap-8">
           {/* Column 1: Brand */}
           <div className="lg:col-span-2">
-            {/* Logo with light background container */}
             <a href="/" className="inline-block">
               <Logo size="lg" />
             </a>
 
-            <p className="mt-4 max-w-xs text-sm leading-relaxed text-white/50">
+            <p className="mt-4 max-w-xs text-sm leading-relaxed text-slate-500 dark:text-white/50">
               The planning brain for engineering teams.
             </p>
-
-            {/* Social / newsletter could go here in a future iteration */}
           </div>
 
           {/* Columns 2-4: Link groups */}
@@ -137,17 +134,17 @@ export function Footer() {
         {/* Bottom bar */}
         <div
           className={cn(
-            "mt-16 flex flex-col items-center justify-between gap-4 border-t border-white/10 pt-8",
+            "mt-16 flex flex-col items-center justify-between gap-4 border-t border-slate-200 dark:border-white/10 pt-8",
             "sm:flex-row"
           )}
         >
           {/* Left: copyright */}
-          <p className="text-xs text-white/40">
+          <p className="text-xs text-slate-400 dark:text-white/40">
             &copy; {new Date().getFullYear()} Plan2Sprint. All rights reserved.
           </p>
 
           {/* Center: tagline */}
-          <p className="text-xs text-white/30">
+          <p className="text-xs text-slate-400 dark:text-white/30">
             Made with love for engineering teams
           </p>
 

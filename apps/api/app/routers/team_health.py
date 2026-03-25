@@ -5,7 +5,8 @@ POST /api/team-health/resolve    — Resolve (dismiss) a signal
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query as Q
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -22,6 +23,7 @@ router = APIRouter()
 
 @router.get("/team-health")
 async def get_team_health(
+    projectId: Optional[str] = Q(None, description="Filter signals to team members of a specific project"),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -35,6 +37,13 @@ async def get_team_health(
         .order_by(HealthSignal.created_at.desc())
         .limit(50)
     )
+
+    # If projectId specified, filter to team members belonging to that project
+    if projectId:
+        query = query.join(TeamMember, HealthSignal.team_member_id == TeamMember.id).where(
+            TeamMember.imported_project_id == projectId
+        )
+
     result = await db.execute(query)
     signals = result.scalars().all()
 
@@ -106,3 +115,27 @@ async def resolve_signal(
     signal.resolved_at = datetime.now(timezone.utc)
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/team-health/dashboard")
+async def get_health_dashboard(
+    projectId: Optional[str] = Q(None),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Full 6-pillar team health dashboard."""
+    from ..services.team_health_engine import get_full_health_dashboard
+    org_id = current_user.get("organization_id", "demo-org")
+    try:
+        result = await get_full_health_dashboard(db, org_id, projectId)
+        return result
+    except Exception as e:
+        logger.exception("Health dashboard computation failed")
+        return {
+            "overallScore": 0,
+            "overallSeverity": "GREY",
+            "pillars": {},
+            "workHours": {"developers": []},
+            "recommendations": [],
+            "error": str(e)
+        }

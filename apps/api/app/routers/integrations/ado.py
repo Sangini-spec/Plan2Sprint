@@ -19,9 +19,12 @@ Endpoints (all prefixed with /api/integrations/ado by main.py):
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -429,6 +432,28 @@ async def connect_with_pat(
             detail="org_url and pat are required",
         )
 
+    # Auto-fix: normalize the org URL
+    from urllib.parse import urlparse
+    parsed = urlparse(org_url)
+    path_parts = [p for p in parsed.path.split("/") if p]
+
+    # Handle visualstudio.com format: https://orgname.visualstudio.com → https://dev.azure.com/orgname
+    hostname = parsed.hostname or ""
+    if hostname.endswith(".visualstudio.com"):
+        vs_org = hostname.replace(".visualstudio.com", "")
+        org_url = f"https://dev.azure.com/{vs_org}"
+        logger.info(f"Converted visualstudio.com URL to dev.azure.com: {org_url}")
+    elif hostname in ("dev.azure.com", "azure.devops.com") and len(path_parts) > 1:
+        # Strip project name if user pasted full project URL
+        # e.g. "https://dev.azure.com/OrgName/ProjectName" → "https://dev.azure.com/OrgName"
+        org_url = f"{parsed.scheme}://{hostname}/{path_parts[0]}"
+        logger.info(f"Auto-stripped project from org URL: {body.get('org_url')} → {org_url}")
+    elif hostname in ("dev.azure.com", "azure.devops.com") and len(path_parts) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid URL — missing organization name. Use: https://dev.azure.com/YourOrgName",
+        )
+
     # Validate credentials by calling ADO API
     auth_str = base64.b64encode(f":{pat}".encode()).decode()
     headers = {
@@ -436,28 +461,77 @@ async def connect_with_pat(
         "Accept": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    logger.info(f"Validating ADO connection to: {org_url}")
+
+    # IMPORTANT: Do NOT follow redirects. ADO returns 302 to sign-in page
+    # when auth fails — following it leads to HTML errors.
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+        projects_data = None
+
+        # Step 1: Validate org + PAT via _apis/connectiondata
         try:
-            res = await client.get(
-                f"{org_url}/_apis/projects?api-version=7.0&$top=1",
+            conn_res = await client.get(
+                f"{org_url}/_apis/connectiondata",
                 headers=headers,
             )
-            if res.status_code in (401, 403):
+            logger.info(f"connectiondata response: {conn_res.status_code}")
+
+            if conn_res.status_code in (301, 302, 303, 307, 308):
+                # ADO redirects to sign-in when PAT is invalid or doesn't belong to this org.
+                # Extract org name for the message
+                org_parts = [p for p in org_url.rstrip("/").split("/") if p and "." not in p and ":" not in p]
+                org_display = org_parts[-1] if org_parts else org_url
                 raise HTTPException(
                     status_code=401,
-                    detail="Invalid PAT or insufficient permissions. Check your token and try again.",
+                    detail=(
+                        f"Authentication failed for '{org_display}'. "
+                        "Please check: (1) The PAT was created inside the Azure DevOps organization you're connecting to — "
+                        "PATs are org-specific. (2) The PAT has not expired. "
+                        "(3) The PAT has at least 'Read' scope for Work Items and Project."
+                    ),
                 )
-            if res.is_error:
+            if conn_res.status_code in (401, 403):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid PAT or insufficient permissions. Ensure the token was created for this organization.",
+                )
+            if conn_res.status_code == 203:
+                raise HTTPException(
+                    status_code=401,
+                    detail="PAT authentication failed. Ensure the token has 'Read' access and was created in this organization.",
+                )
+            if conn_res.is_error:
+                body_text = conn_res.text[:300]
+                logger.error(f"ADO connectiondata failed ({conn_res.status_code}): {body_text}")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"ADO API error: {res.status_code}",
+                    detail="Could not connect to Azure DevOps. Verify the organization URL and PAT are correct.",
                 )
-            projects_data = res.json()
+
         except httpx.RequestError as e:
             raise HTTPException(
                 status_code=400,
-                detail=f"Could not reach ADO organization: {str(e)}",
+                detail=f"Could not reach Azure DevOps: {str(e)[:150]}",
             )
+
+        # Step 2: Fetch projects list
+        try:
+            res = await client.get(
+                f"{org_url}/_apis/projects",
+                headers=headers,
+                params={"api-version": "7.0", "$top": "1"},
+            )
+            if res.status_code in (301, 302, 303):
+                # Auth worked on connectiondata but not projects — PAT lacks project scope
+                projects_data = {"count": 0, "value": []}
+            elif res.ok:
+                projects_data = res.json()
+            else:
+                logger.warning(f"Projects list returned {res.status_code}")
+                projects_data = {"count": 0, "value": []}
+        except Exception as e:
+            logger.warning(f"Projects list failed (non-fatal): {e}")
+            projects_data = {"count": 0, "value": []}
 
     org_id = current_user.get("organization_id", "demo-org")
 

@@ -1,169 +1,590 @@
 "use client";
 
-import { useState } from "react";
-import { Users } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Users, UserPlus, Loader2, Clock, Mail, CircleCheck, CircleX, FolderKanban, X, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button, Select, Avatar, Badge } from "@/components/ui";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
-import { Button, Input, Select, FormField, Avatar, Badge } from "@/components/ui";
+import { useAuth } from "@/lib/auth/context";
+import { isAdmin, ROLE_LABELS, type UserRole } from "@/lib/types/auth";
+import { InviteMemberModal } from "@/components/settings/invite-member-modal";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
-type Role = "Admin" | "Product Owner" | "Scrum Master" | "Developer" | "Viewer";
+interface MemberProject {
+  id: string;
+  name: string;
+}
 
 interface Member {
   id: string;
-  name: string;
+  teamMemberId: string | null;
+  type: string;
   email: string;
-  role: Role;
+  displayName: string;
+  avatarUrl: string | null;
+  role: string;
+  isActive: boolean;
+  projects: MemberProject[];
+  createdAt: string | null;
 }
 
-const ROLES: Role[] = ["Admin", "Product Owner", "Scrum Master", "Developer", "Viewer"];
+interface Invitation {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  invitedBy: string;
+  expiresAt: string | null;
+  createdAt: string | null;
+}
 
-const INITIAL_MEMBERS: Member[] = [
-  { id: "tm-1", name: "Alex Chen", email: "alex.chen@acme.com", role: "Developer" },
-  { id: "tm-2", name: "Sarah Kim", email: "sarah.kim@acme.com", role: "Developer" },
-  { id: "tm-3", name: "Marcus Johnson", email: "marcus.johnson@acme.com", role: "Developer" },
-  { id: "tm-4", name: "Priya Patel", email: "priya.patel@acme.com", role: "Scrum Master" },
-  { id: "tm-5", name: "James Wilson", email: "james.wilson@acme.com", role: "Developer" },
-  { id: "tm-6", name: "Emma Davis", email: "emma.davis@acme.com", role: "Developer" },
+const EDITABLE_ROLES: { value: UserRole; label: string }[] = [
+  { value: "product_owner", label: "Product Owner" },
+  { value: "developer", label: "Developer" },
+  { value: "stakeholder", label: "Stakeholder" },
 ];
 
-const roleBadgeVariant: Record<Role, "brand" | "rag-green" | "rag-amber" | "rag-red"> = {
-  Admin: "rag-red",
-  "Product Owner": "rag-amber",
-  "Scrum Master": "brand",
-  Developer: "rag-green",
-  Viewer: "brand",
-};
-
 export default function TeamSettingsPage() {
-  const [members, setMembers] = useState<Member[]>(INITIAL_MEMBERS);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<Role>("Developer");
+  const { appUser, role } = useAuth();
+  const canManage = isAdmin(role);
 
-  function handleRoleChange(memberId: string, newRole: Role) {
-    setMembers((prev) =>
-      prev.map((m) => (m.id === memberId ? { ...m, role: newRole } : m))
+  const [members, setMembers] = useState<Member[]>([]);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [inviteOpen, setInviteOpen] = useState(false);
+
+  // Confirm dialog state
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<{
+    type: "remove_member" | "revoke_invite";
+    id: string;
+    name: string;
+  } | null>(null);
+
+  // Assign Projects modal state
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [assignTarget, setAssignTarget] = useState<Member | null>(null);
+  const [orgProjects, setOrgProjects] = useState<{ internalId: string; name: string; source: string }[]>([]);
+  const [assignedProjectIds, setAssignedProjectIds] = useState<Set<string>>(new Set());
+  const [assignLoading, setAssignLoading] = useState(false);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [membersRes, invitationsRes] = await Promise.all([
+        fetch("/api/organizations/current/members"),
+        canManage
+          ? fetch("/api/organizations/current/invitations")
+          : Promise.resolve(null),
+      ]);
+
+      if (membersRes.ok) {
+        const data = await membersRes.json();
+        setMembers(data.members || []);
+      }
+
+      if (invitationsRes && invitationsRes.ok) {
+        const data = await invitationsRes.json();
+        setInvitations(
+          (data.invitations || []).filter(
+            (i: Invitation) => i.status === "pending"
+          )
+        );
+      }
+    } catch {
+      // API unavailable
+    }
+    setLoading(false);
+  }, [canManage]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleRoleChange = async (memberId: string, newRole: string) => {
+    const res = await fetch(
+      `/api/organizations/current/members/${memberId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: newRole }),
+      }
     );
-  }
+    if (res.ok) {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === memberId ? { ...m, role: newRole } : m
+        )
+      );
+    }
+  };
 
-  function handleRemove(memberId: string) {
-    setMembers((prev) => prev.filter((m) => m.id !== memberId));
+  const handleRemoveMember = async () => {
+    if (!confirmTarget || confirmTarget.type !== "remove_member") return;
+    await fetch(
+      `/api/organizations/current/members/${confirmTarget.id}`,
+      { method: "DELETE" }
+    );
+    setMembers((prev) => prev.filter((m) => m.id !== confirmTarget.id));
+    setConfirmOpen(false);
+    setConfirmTarget(null);
+  };
+
+  const handleRevokeInvite = async () => {
+    if (!confirmTarget || confirmTarget.type !== "revoke_invite") return;
+    await fetch(
+      `/api/organizations/current/invitations/${confirmTarget.id}`,
+      { method: "DELETE" }
+    );
+    setInvitations((prev) =>
+      prev.filter((i) => i.id !== confirmTarget.id)
+    );
+    setConfirmOpen(false);
+    setConfirmTarget(null);
+  };
+
+  const openAssignModal = async (member: Member) => {
+    setAssignTarget(member);
+    setAssignLoading(true);
+    setAssignModalOpen(true);
+
+    try {
+      // Fetch all org projects + existing assignments for this user
+      const [projRes, assignRes] = await Promise.all([
+        fetch("/api/projects/"),
+        fetch(`/api/projects/stakeholder-assignments?userId=${member.id}`),
+      ]);
+
+      if (projRes.ok) {
+        const data = await projRes.json();
+        setOrgProjects(data.projects ?? []);
+      }
+
+      if (assignRes.ok) {
+        const data = await assignRes.json();
+        const ids = new Set<string>(
+          (data.assignments ?? []).map((a: { projectId: string }) => a.projectId)
+        );
+        setAssignedProjectIds(ids);
+      }
+    } catch {
+      // silent
+    }
+    setAssignLoading(false);
+  };
+
+  const toggleProjectAssignment = async (projectId: string) => {
+    if (!assignTarget) return;
+    const isAssigned = assignedProjectIds.has(projectId);
+
+    if (isAssigned) {
+      // Find the assignment to remove
+      const assignRes = await fetch(
+        `/api/projects/stakeholder-assignments?userId=${assignTarget.id}`
+      );
+      if (assignRes.ok) {
+        const data = await assignRes.json();
+        const assignment = (data.assignments ?? []).find(
+          (a: { projectId: string }) => a.projectId === projectId
+        );
+        if (assignment) {
+          await fetch(`/api/projects/stakeholder-assignments/${assignment.id}`, {
+            method: "DELETE",
+          });
+        }
+      }
+      setAssignedProjectIds((prev) => {
+        const next = new Set(prev);
+        next.delete(projectId);
+        return next;
+      });
+    } else {
+      // Add assignment
+      await fetch("/api/projects/stakeholder-assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: assignTarget.id, projectId }),
+      });
+      setAssignedProjectIds((prev) => new Set([...prev, projectId]));
+    }
+  };
+
+  const handleResend = async (invId: string) => {
+    await fetch(
+      `/api/organizations/current/invitations/${invId}/resend`,
+      { method: "POST" }
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-5 w-5 animate-spin text-[var(--text-secondary)]" />
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--text-primary)]">
-          Team Management
-        </h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          Manage team members, roles, and send invitations.
-        </p>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold text-[var(--text-primary)]">
+            Team Management
+          </h1>
+          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+            {members.length} member{members.length !== 1 ? "s" : ""}
+            {members.filter((m) => m.isActive).length < members.length && (
+              <span className="ml-1 text-[var(--text-tertiary)]">
+                ({members.filter((m) => m.isActive).length} active)
+              </span>
+            )}
+          </p>
+        </div>
+        {canManage && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setInviteOpen(true)}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Invite Member
+          </Button>
+        )}
       </div>
 
-      {/* Team Members List */}
-      <DashboardPanel title="Team Members" icon={Users}>
-        <div className="space-y-1">
-          {/* Header row */}
-          <div className="hidden sm:grid grid-cols-[1fr_1fr_160px_80px] gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+      {/* Members Table */}
+      <DashboardPanel title="Members" icon={Users}>
+        <div className="space-y-0.5">
+          {/* Header */}
+          <div className="hidden sm:grid grid-cols-[1fr_1.2fr_120px_1fr_80px_80px] gap-2 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
             <span>Member</span>
             <span>Email</span>
             <span>Role</span>
-            <span />
+            <span>Projects</span>
+            <span>Status</span>
+            <span className="text-right">Actions</span>
           </div>
 
-          {/* Member rows */}
-          {members.map((member) => (
-            <div
-              key={member.id}
-              className={cn(
-                "grid grid-cols-1 sm:grid-cols-[1fr_1fr_160px_80px] gap-3 sm:gap-4 items-center",
-                "rounded-xl px-4 py-3",
-                "border border-[var(--border-subtle)] sm:border-transparent",
-                "hover:bg-[var(--bg-surface-raised)]/50 transition-colors duration-200"
-              )}
-            >
-              {/* Avatar + Name */}
-              <div className="flex items-center gap-3">
-                <Avatar
-                  fallback={member.name}
-                  size="md"
-                />
-                <span className="text-sm font-medium text-[var(--text-primary)]">
-                  {member.name}
-                </span>
-              </div>
+          {members.map((member) => {
+            const isSelf =
+              member.email === appUser?.email || member.id === appUser?.id;
+            const roleLabel =
+              ROLE_LABELS[member.role as UserRole] || member.role;
 
-              {/* Email */}
-              <span className="text-sm text-[var(--text-secondary)] truncate">
-                {member.email}
-              </span>
-
-              {/* Role select */}
-              <Select
-                value={member.role}
-                onChange={(e) =>
-                  handleRoleChange(member.id, e.target.value as Role)
-                }
+            return (
+              <div
+                key={member.id}
+                className={cn(
+                  "grid grid-cols-1 sm:grid-cols-[1fr_1.2fr_120px_1fr_80px_80px] gap-2 items-center",
+                  "rounded-lg px-4 py-2.5",
+                  "hover:bg-[var(--bg-surface-raised)]/50 transition-colors"
+                )}
               >
-                {ROLES.map((role) => (
-                  <option key={role} value={role}>
-                    {role}
-                  </option>
-                ))}
-              </Select>
+                {/* Avatar + Name */}
+                <div className="flex items-center gap-3">
+                  <Avatar
+                    src={member.avatarUrl ?? undefined}
+                    fallback={member.displayName}
+                    size="sm"
+                  />
+                  <div className="min-w-0">
+                    <span className="text-sm font-medium text-[var(--text-primary)] truncate block">
+                      {member.displayName}
+                    </span>
+                    {isSelf && (
+                      <span className="text-[10px] text-[var(--text-secondary)]">
+                        You
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-              {/* Remove */}
-              <div className="flex justify-end">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleRemove(member.id)}
-                  className="text-[var(--color-rag-red)] hover:text-[var(--color-rag-red)] hover:bg-[var(--color-rag-red)]/5"
-                >
-                  Remove
-                </Button>
+                {/* Email */}
+                <span className="text-xs text-[var(--text-secondary)] truncate">
+                  {member.email}
+                </span>
+
+                {/* Role */}
+                <Badge variant="brand">{roleLabel}</Badge>
+
+                {/* Projects */}
+                <div className="flex flex-wrap items-center gap-1">
+                  {member.projects.length > 0 ? (
+                    member.projects.map((p) => (
+                      <span
+                        key={p.id}
+                        className="inline-flex items-center rounded-md bg-[var(--bg-surface-raised)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-secondary)] border border-[var(--border-subtle)]"
+                      >
+                        {p.name}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-[11px] text-[var(--text-tertiary)]">
+                      None
+                    </span>
+                  )}
+                  {canManage && (
+                    <button
+                      onClick={() => openAssignModal(member)}
+                      className="inline-flex items-center gap-0.5 text-[11px] text-[var(--color-brand-secondary)] hover:underline cursor-pointer ml-1"
+                    >
+                      <FolderKanban className="h-3 w-3" />
+                      Assign
+                    </button>
+                  )}
+                </div>
+
+                {/* Status */}
+                <div>
+                  {member.isActive ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-rag-green)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--color-rag-green)]">
+                      <CircleCheck size={12} />
+                      Active
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--text-tertiary)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--text-tertiary)]">
+                      <CircleX size={12} />
+                      Inactive
+                    </span>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-1 justify-end">
+                  {canManage && !isSelf && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setConfirmTarget({
+                          type: "remove_member",
+                          id: member.id,
+                          name: member.displayName,
+                        });
+                        setConfirmOpen(true);
+                      }}
+                      className="text-[var(--color-rag-red)] hover:text-[var(--color-rag-red)] hover:bg-[var(--color-rag-red)]/5 text-xs"
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {members.length === 0 && (
             <p className="py-8 text-center text-sm text-[var(--text-secondary)]">
-              No team members yet. Invite someone below.
+              No team members found.
             </p>
           )}
         </div>
       </DashboardPanel>
 
-      {/* Invite Member */}
-      <DashboardPanel title="Invite Member" icon={Users}>
-        <div className="flex flex-col sm:flex-row gap-4 items-end">
-          <FormField label="Email Address" className="flex-1">
-            <Input
-              type="email"
-              value={inviteEmail}
-              onChange={(e) => setInviteEmail(e.target.value)}
-              placeholder="colleague@acme.com"
-            />
-          </FormField>
+      {/* Pending Invitations (admin only) */}
+      {canManage && invitations.length > 0 && (
+        <DashboardPanel title="Pending Invitations" icon={Mail}>
+          <div className="space-y-0.5">
+            <div className="hidden sm:grid grid-cols-[1fr_120px_120px_100px] gap-4 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+              <span>Email</span>
+              <span>Role</span>
+              <span>Expires</span>
+              <span />
+            </div>
 
-          <FormField label="Role" className="sm:w-48">
-            <Select
-              value={inviteRole}
-              onChange={(e) => setInviteRole(e.target.value as Role)}
-            >
-              {ROLES.map((role) => (
-                <option key={role} value={role}>
-                  {role}
-                </option>
-              ))}
-            </Select>
-          </FormField>
+            {invitations.map((inv) => {
+              const roleLabel =
+                ROLE_LABELS[inv.role as UserRole] || inv.role;
+              const expiresAt = inv.expiresAt
+                ? new Date(inv.expiresAt)
+                : null;
+              const daysLeft = expiresAt
+                ? Math.max(
+                    0,
+                    Math.ceil(
+                      (expiresAt.getTime() - Date.now()) / 86400000
+                    )
+                  )
+                : null;
 
-          <Button variant="primary" size="md">
-            Send Invite
-          </Button>
+              return (
+                <div
+                  key={inv.id}
+                  className="grid grid-cols-1 sm:grid-cols-[1fr_120px_120px_100px] gap-3 sm:gap-4 items-center rounded-lg px-4 py-2.5 hover:bg-[var(--bg-surface-raised)]/50 transition-colors"
+                >
+                  <span className="text-sm text-[var(--text-primary)] truncate">
+                    {inv.email}
+                  </span>
+                  <Badge variant="brand">{roleLabel}</Badge>
+                  <span className="text-xs text-[var(--text-secondary)] flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {daysLeft !== null ? `${daysLeft}d left` : "—"}
+                  </span>
+                  <div className="flex gap-1 justify-end">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleResend(inv.id)}
+                      className="text-xs"
+                    >
+                      Resend
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setConfirmTarget({
+                          type: "revoke_invite",
+                          id: inv.id,
+                          name: inv.email,
+                        });
+                        setConfirmOpen(true);
+                      }}
+                      className="text-[var(--color-rag-red)] hover:text-[var(--color-rag-red)] text-xs"
+                    >
+                      Revoke
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </DashboardPanel>
+      )}
+
+      {/* Invite modal */}
+      <InviteMemberModal
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        onInvited={fetchData}
+      />
+
+      {/* Confirm dialog */}
+      <ConfirmDialog
+        open={confirmOpen}
+        title={
+          confirmTarget?.type === "remove_member"
+            ? "Remove Member"
+            : "Revoke Invitation"
+        }
+        description={
+          confirmTarget?.type === "remove_member"
+            ? `Are you sure you want to remove ${confirmTarget?.name} from the organization? They will lose access immediately.`
+            : `Are you sure you want to revoke the invitation for ${confirmTarget?.name}?`
+        }
+        confirmLabel={
+          confirmTarget?.type === "remove_member" ? "Remove" : "Revoke"
+        }
+        variant="danger"
+        onConfirm={
+          confirmTarget?.type === "remove_member"
+            ? handleRemoveMember
+            : handleRevokeInvite
+        }
+        onCancel={() => {
+          setConfirmOpen(false);
+          setConfirmTarget(null);
+        }}
+      />
+
+      {/* Assign Projects Modal */}
+      {assignModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-5 py-4">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text-primary)]">
+                  Assign Projects
+                </h2>
+                <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                  {assignTarget?.displayName} — Stakeholder
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setAssignModalOpen(false);
+                  setAssignTarget(null);
+                  fetchData();
+                }}
+                className="rounded-lg p-1.5 hover:bg-[var(--bg-surface-raised)] text-[var(--text-secondary)] cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="px-5 py-4 max-h-80 overflow-y-auto">
+              {assignLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 size={20} className="animate-spin text-[var(--text-secondary)]" />
+                </div>
+              ) : orgProjects.length === 0 ? (
+                <p className="text-sm text-[var(--text-secondary)] text-center py-6">
+                  No projects found. Import projects from ADO/Jira first.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  <p className="text-xs text-[var(--text-secondary)] mb-3">
+                    Toggle projects this stakeholder can access:
+                  </p>
+                  {orgProjects.map((project) => {
+                    const isAssigned = assignedProjectIds.has(project.internalId);
+                    return (
+                      <button
+                        key={project.internalId}
+                        onClick={() => toggleProjectAssignment(project.internalId)}
+                        className={cn(
+                          "w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors cursor-pointer",
+                          isAssigned
+                            ? "bg-[var(--color-brand-secondary)]/10 border border-[var(--color-brand-secondary)]/30"
+                            : "hover:bg-[var(--bg-surface-raised)] border border-transparent"
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[10px] font-bold",
+                            project.source === "ado"
+                              ? "bg-[#0078D4]/10 text-[#0078D4]"
+                              : "bg-[#0052CC]/10 text-[#0052CC]"
+                          )}
+                        >
+                          {project.source === "ado" ? "AD" : "JR"}
+                        </div>
+                        <span className="text-sm font-medium text-[var(--text-primary)] flex-1">
+                          {project.name}
+                        </span>
+                        {isAssigned ? (
+                          <span className="text-xs font-medium text-[var(--color-brand-secondary)]">
+                            Assigned
+                          </span>
+                        ) : (
+                          <Plus size={16} className="text-[var(--text-tertiary)]" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-[var(--border-subtle)] px-5 py-3 flex justify-end">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => {
+                  setAssignModalOpen(false);
+                  setAssignTarget(null);
+                  fetchData();
+                }}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
         </div>
-      </DashboardPanel>
+      )}
     </div>
   );
 }

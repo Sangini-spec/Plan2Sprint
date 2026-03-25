@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Inbox,
@@ -11,124 +11,174 @@ import {
   HeartPulse,
   GitPullRequest,
   CheckCheck,
+  MessageSquareText,
+  Zap,
+  Bot,
+  ShieldAlert,
+  Activity,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { DeliveryChannelsSection } from "@/components/notifications/delivery-channels-section";
 import { SlackMessageComposer } from "@/components/notifications/slack-message-composer";
 import { SlackQuickActions } from "@/components/notifications/slack-quick-actions";
+import { useAutoRefresh } from "@/lib/ws/context";
 
 /* -------------------------------------------------------------------------- */
-/*  PO NOTIFICATION TYPES & MOCK DATA                                          */
+/*  TYPES                                                                      */
 /* -------------------------------------------------------------------------- */
-
-type NotificationType =
-  | "approval"
-  | "blocker"
-  | "health"
-  | "writeback"
-  | "info";
 
 interface Notification {
   id: string;
-  type: NotificationType;
+  type: string;
   title: string;
-  body: string;
+  message: string;
   time: string;
   read: boolean;
 }
 
-const MOCK_NOTIFICATIONS: Notification[] = [
-  {
-    id: "1",
-    type: "approval",
-    title: "Sprint plan ready for approval",
-    body: "Sprint 14 plan for Team Alpha has been generated with 34 story points across 8 tickets.",
-    time: "12 min ago",
-    read: false,
-  },
-  {
-    id: "2",
-    type: "blocker",
-    title: "Blocker flagged by Sarah Chen",
-    body: "AUTH-245: OAuth token refresh failing in staging — blocking QA for 2 days.",
-    time: "1 hour ago",
-    read: false,
-  },
-  {
-    id: "3",
-    type: "health",
-    title: "Burnout risk detected",
-    body: "Marcus Johnson has worked 6 consecutive late evenings. Consider reassigning DASH-189.",
-    time: "3 hours ago",
-    read: false,
-  },
-  {
-    id: "4",
-    type: "writeback",
-    title: "Write-back completed",
-    body: "Sprint 13 assignments synced to Jira — 12 tickets updated (assignee + sprint field).",
-    time: "Yesterday",
-    read: true,
-  },
-  {
-    id: "5",
-    type: "info",
-    title: "Retrospective summary ready",
-    body: "Sprint 13 retro highlights: 3 action items, top theme was \"deployment pipeline delays\".",
-    time: "2 days ago",
-    read: true,
-  },
-];
-
 const TYPE_CONFIG: Record<
-  NotificationType,
+  string,
   { icon: typeof Bell; color: string; bg: string }
 > = {
-  approval: {
+  sprint_approval: {
     icon: CheckCircle2,
     color: "text-[var(--color-brand-secondary)]",
     bg: "bg-[var(--color-brand-secondary)]/10",
   },
-  blocker: {
+  blocker_alert: {
     icon: AlertTriangle,
     color: "text-[var(--color-rag-red)]",
     bg: "bg-[var(--color-rag-red)]/10",
   },
-  health: {
+  health_alert: {
     icon: HeartPulse,
     color: "text-[var(--color-rag-amber)]",
     bg: "bg-[var(--color-rag-amber)]/10",
   },
-  writeback: {
+  writeback_success: {
     icon: GitPullRequest,
     color: "text-[var(--color-rag-green)]",
     bg: "bg-[var(--color-rag-green)]/10",
   },
-  info: {
+  standup_report: {
+    icon: MessageSquareText,
+    color: "text-[var(--color-brand-secondary)]",
+    bg: "bg-[var(--color-brand-secondary)]/10",
+  },
+  standup_digest: {
+    icon: MessageSquareText,
+    color: "text-[var(--color-rag-green)]",
+    bg: "bg-[var(--color-rag-green)]/10",
+  },
+  sprint_assignment: {
+    icon: Zap,
+    color: "text-[var(--color-brand-secondary)]",
+    bg: "bg-[var(--color-brand-secondary)]/10",
+  },
+  ci_failure: {
+    icon: AlertTriangle,
+    color: "text-[var(--color-rag-red)]",
+    bg: "bg-[var(--color-rag-red)]/10",
+  },
+  retro_action: {
     icon: Info,
-    color: "text-[var(--text-secondary)]",
-    bg: "bg-[var(--bg-surface-raised)]",
+    color: "text-[var(--color-rag-amber)]",
+    bg: "bg-[var(--color-rag-amber)]/10",
+  },
+  // Agent notification types
+  agent_standup: {
+    icon: Bot,
+    color: "text-[var(--color-brand-secondary)]",
+    bg: "bg-[var(--color-brand-secondary)]/10",
+  },
+  agent_blocker: {
+    icon: ShieldAlert,
+    color: "text-[var(--color-rag-red)]",
+    bg: "bg-[var(--color-rag-red)]/10",
+  },
+  agent_health: {
+    icon: Activity,
+    color: "text-[var(--color-rag-amber)]",
+    bg: "bg-[var(--color-rag-amber)]/10",
+  },
+  agent_retro: {
+    icon: FileText,
+    color: "text-[var(--color-rag-green)]",
+    bg: "bg-[var(--color-rag-green)]/10",
   },
 };
+
+const defaultConfig = {
+  icon: Bell,
+  color: "text-[var(--text-secondary)]",
+  bg: "bg-[var(--bg-surface-raised)]",
+};
+
+/* -------------------------------------------------------------------------- */
+/*  HELPERS                                                                    */
+/* -------------------------------------------------------------------------- */
+
+function timeAgo(iso: string): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "Yesterday";
+  return `${days} days ago`;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  PO NOTIFICATIONS PAGE                                                       */
 /* -------------------------------------------------------------------------- */
 
 export default function PONotificationsPage() {
-  const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [loading, setLoading] = useState(true);
   const [slackConnected, setSlackConnected] = useState(false);
   const [teamsConnected, setTeamsConnected] = useState(false);
 
+  // Auto-refresh when WS notification events arrive
+  const refreshKey = useAutoRefresh([
+    "notification",
+    "standup_generated",
+    "blockers_detected",
+    "health_analysis_complete",
+    "retro_generated",
+    "standup_note_submitted",
+    "blocker_flagged",
+  ]);
+
   const unreadCount = notifications.filter((n) => !n.read).length;
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notifications?limit=50");
+      if (res.ok) {
+        const data = await res.json();
+        setNotifications(data.notifications ?? []);
+      }
+    } catch {
+      // API unavailable — keep existing state
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchNotifications();
+  }, [fetchNotifications, refreshKey]);
 
   // Check if Slack / Teams are connected
   useEffect(() => {
     let cancelled = false;
 
     async function checkConnections() {
-      // Check Slack
       try {
         const res = await fetch("/api/integrations/slack/status");
         if (res.ok) {
@@ -139,7 +189,6 @@ export default function PONotificationsPage() {
         // Ignore
       }
 
-      // Check Teams
       try {
         const res = await fetch("/api/integrations/teams/status");
         if (res.ok) {
@@ -155,14 +204,32 @@ export default function PONotificationsPage() {
     return () => { cancelled = true; };
   }, []);
 
-  function markAllRead() {
+  async function markAllRead() {
+    // Optimistic update
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    // Mark each unread notification as read via API
+    const unread = notifications.filter((n) => !n.read);
+    for (const n of unread) {
+      try {
+        await fetch(`/api/notifications/${n.id}/read`, { method: "PATCH" });
+      } catch {
+        // ignore
+      }
+    }
   }
 
-  function toggleRead(id: string) {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: !n.read } : n))
-    );
+  async function toggleRead(id: string) {
+    const notif = notifications.find((n) => n.id === id);
+    if (notif && !notif.read) {
+      try {
+        await fetch(`/api/notifications/${id}/read`, { method: "PATCH" });
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+        );
+      } catch {
+        // ignore
+      }
+    }
   }
 
   return (
@@ -199,66 +266,80 @@ export default function PONotificationsPage() {
 
         {/* Notification list */}
         <div className="space-y-2">
-          <AnimatePresence initial={false}>
-            {notifications.map((notification) => {
-              const config = TYPE_CONFIG[notification.type];
-              const Icon = config.icon;
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-8 gap-2">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--color-brand-secondary)] border-t-transparent" />
+              <span className="text-xs text-[var(--text-tertiary)]">Loading notifications...</span>
+            </div>
+          ) : notifications.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 gap-2">
+              <Bell size={20} className="text-[var(--text-tertiary)]" />
+              <span className="text-xs text-[var(--text-tertiary)]">
+                No notifications yet. Agent activity and team events will appear here.
+              </span>
+            </div>
+          ) : (
+            <AnimatePresence initial={false}>
+              {notifications.map((notification) => {
+                const config = TYPE_CONFIG[notification.type] ?? defaultConfig;
+                const Icon = config.icon;
 
-              return (
-                <motion.button
-                  key={notification.id}
-                  layout
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  onClick={() => toggleRead(notification.id)}
-                  className={cn(
-                    "w-full flex items-start gap-3 rounded-xl p-3.5 text-left",
-                    "transition-colors duration-200 cursor-pointer",
-                    notification.read
-                      ? "bg-transparent hover:bg-[var(--bg-surface-raised)]/50"
-                      : "bg-[var(--color-brand-secondary)]/[0.03] hover:bg-[var(--color-brand-secondary)]/[0.06]"
-                  )}
-                >
-                  {/* Icon */}
-                  <div
+                return (
+                  <motion.button
+                    key={notification.id}
+                    layout
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    onClick={() => toggleRead(notification.id)}
                     className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-lg shrink-0",
-                      config.bg
+                      "w-full flex items-start gap-3 rounded-xl p-3.5 text-left",
+                      "transition-colors duration-200 cursor-pointer",
+                      notification.read
+                        ? "bg-transparent hover:bg-[var(--bg-surface-raised)]/50"
+                        : "bg-[var(--color-brand-secondary)]/[0.03] hover:bg-[var(--color-brand-secondary)]/[0.06]"
                     )}
                   >
-                    <Icon size={16} className={config.color} />
-                  </div>
-
-                  {/* Content */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <p
-                        className={cn(
-                          "text-sm leading-snug",
-                          notification.read
-                            ? "text-[var(--text-secondary)] font-normal"
-                            : "text-[var(--text-primary)] font-medium"
-                        )}
-                      >
-                        {notification.title}
-                      </p>
-                      <span className="text-[11px] text-[var(--text-secondary)]/60 whitespace-nowrap shrink-0">
-                        {notification.time}
-                      </span>
+                    {/* Icon */}
+                    <div
+                      className={cn(
+                        "flex h-8 w-8 items-center justify-center rounded-lg shrink-0",
+                        config.bg
+                      )}
+                    >
+                      <Icon size={16} className={config.color} />
                     </div>
-                    <p className="text-xs text-[var(--text-secondary)] mt-0.5 leading-relaxed line-clamp-2">
-                      {notification.body}
-                    </p>
-                  </div>
 
-                  {/* Unread dot */}
-                  {!notification.read && (
-                    <span className="h-2 w-2 rounded-full bg-[var(--color-brand-secondary)] shrink-0 mt-2" />
-                  )}
-                </motion.button>
-              );
-            })}
-          </AnimatePresence>
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <p
+                          className={cn(
+                            "text-sm leading-snug",
+                            notification.read
+                              ? "text-[var(--text-secondary)] font-normal"
+                              : "text-[var(--text-primary)] font-medium"
+                          )}
+                        >
+                          {notification.title}
+                        </p>
+                        <span className="text-[11px] text-[var(--text-secondary)]/60 whitespace-nowrap shrink-0">
+                          {timeAgo(notification.time)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[var(--text-secondary)] mt-0.5 leading-relaxed line-clamp-2">
+                        {notification.message}
+                      </p>
+                    </div>
+
+                    {/* Unread dot */}
+                    {!notification.read && (
+                      <span className="h-2 w-2 rounded-full bg-[var(--color-brand-secondary)] shrink-0 mt-2" />
+                    )}
+                  </motion.button>
+                );
+              })}
+            </AnimatePresence>
+          )}
         </div>
       </DashboardPanel>
 

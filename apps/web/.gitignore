@@ -4,9 +4,6 @@ node_modules
 .env.local
 .env.docker
 
-# Generated code
-/src/generated/prisma
-
 # Build cache
 .next/
 tsconfig.tsbuildinfo

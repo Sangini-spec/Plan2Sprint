@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from .audit_log import AuditLogEntry
     from .activity import ActivityEvent
     from .tool_connection import ToolConnection
+    from .invitation import Invitation
 
 
 class Organization(Base):
@@ -92,5 +93,8 @@ class Organization(Base):
         back_populates="organization"
     )
     connections: Mapped[List["ToolConnection"]] = relationship(
+        back_populates="organization"
+    )
+    invitations: Mapped[List["Invitation"]] = relationship(
         back_populates="organization"
     )

@@ -22,7 +22,7 @@ function getSourceBadge(source: string) {
 }
 
 export function ProjectSelector() {
-  const { projects, selectedProject, loading, selectProject } =
+  const { projects, selectedProject, loading, switching, selectProject } =
     useSelectedProject();
   const { openModal } = useIntegrations();
   const [open, setOpen] = useState(false);
@@ -47,11 +47,13 @@ export function ProjectSelector() {
   // Determine button label
   const buttonLabel = loading
     ? "Loading..."
-    : selectedProject
-      ? selectedProject.name
-      : projects.length > 0
-        ? "All Projects"
-        : "No Projects";
+    : switching
+      ? "Switching project..."
+      : selectedProject
+        ? selectedProject.name
+        : projects.length > 0
+          ? "All Projects"
+          : "No Projects";
 
   return (
     <div ref={ref} className="relative">
@@ -66,7 +68,7 @@ export function ProjectSelector() {
           "max-w-[220px]"
         )}
       >
-        {loading ? (
+        {loading || switching ? (
           <Loader2
             size={14}
             className="shrink-0 text-[var(--text-secondary)] animate-spin"
