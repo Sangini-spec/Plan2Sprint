@@ -19,6 +19,7 @@ from ..auth.supabase import get_current_user
 from ..database import get_db
 from ..models.imported_project import ImportedProject, UserProjectPreference, StakeholderProjectAssignment
 from ..models.user import User
+from ..models.team_member import TeamMember
 from ..models.base import generate_cuid
 
 router = APIRouter()
@@ -34,11 +35,37 @@ async def list_imported_projects(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all imported projects for the user's org."""
+    """List imported projects for the user's org. Developers see only their assigned projects."""
     org_id = current_user.get("organization_id", "demo-org")
-    result = await db.execute(
-        select(ImportedProject).where(ImportedProject.organization_id == org_id)
-    )
+    user_role = current_user.get("role", "").lower()
+    user_email = current_user.get("email", "")
+
+    if user_role == "developer" and user_email:
+        # Developers only see projects they are a team member of
+        member_result = await db.execute(
+            select(TeamMember.imported_project_id).where(
+                TeamMember.organization_id == org_id,
+                TeamMember.email.ilike(user_email),
+                TeamMember.role != "excluded",
+            )
+        )
+        project_ids = [r[0] for r in member_result.all() if r[0]]
+        if project_ids:
+            result = await db.execute(
+                select(ImportedProject).where(
+                    ImportedProject.organization_id == org_id,
+                    ImportedProject.id.in_(project_ids),
+                )
+            )
+        else:
+            result = await db.execute(
+                select(ImportedProject).where(ImportedProject.organization_id == org_id)
+            )
+    else:
+        # PO, Stakeholder, Admin see all org projects
+        result = await db.execute(
+            select(ImportedProject).where(ImportedProject.organization_id == org_id)
+        )
     projects = result.scalars().all()
     return {
         "projects": [

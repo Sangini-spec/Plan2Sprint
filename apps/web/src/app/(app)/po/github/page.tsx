@@ -536,7 +536,7 @@ function GitHubConnectedView() {
               <option value="">All Developers</option>
               {projectDevs.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name}{!m.githubLinked ? " (not connected)" : ""}
+                  {m.name}
                 </option>
               ))}
             </select>
