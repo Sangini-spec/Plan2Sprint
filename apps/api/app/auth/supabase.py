@@ -31,8 +31,16 @@ async def _resolve_user_org(request: Request, payload: dict) -> dict:
 
     supabase_uid = payload.get("sub", "")
     email = payload.get("email", "")
+    # user_metadata may come from JWT (signup) or be empty (OAuth login)
     user_meta = payload.get("user_metadata", {})
-    full_name = user_meta.get("full_name", email.split("@")[0] if email else "User")
+    # Also check raw_user_meta_data from Supabase (different JWT versions)
+    if not user_meta:
+        user_meta = payload.get("raw_user_meta_data", {})
+    full_name = (
+        user_meta.get("full_name")
+        or user_meta.get("name")
+        or (email.split("@")[0] if email else "User")
+    )
     org_name_from_signup = user_meta.get("organization_name", "")
     role_from_signup = user_meta.get("role", "product_owner")
 

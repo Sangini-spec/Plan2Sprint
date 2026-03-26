@@ -11,8 +11,36 @@ import type {
   IntegrationAuditEntry,
 } from "./types";
 
+// Storage keys include user context to prevent cross-user data leakage
+function getUserStorageKey(base: string): string {
+  if (typeof window === "undefined") return base;
+  // Use supabase user id from cookie or session to scope storage
+  const cookies = document.cookie.split(";").map((c) => c.trim());
+  const sbCookie = cookies.find((c) => c.startsWith("sb-") && c.includes("auth-token"));
+  if (sbCookie) {
+    // Create a short hash from the cookie value for the key
+    const val = sbCookie.split("=")[1] || "";
+    const hash = val.slice(0, 16);
+    return `${base}_${hash}`;
+  }
+  return base;
+}
+
 const STORAGE_KEY = "plan2sprint_connections";
 const AUDIT_KEY = "plan2sprint_integration_audit";
+
+export function clearAllConnectionStorage(): void {
+  if (typeof window === "undefined") return;
+  // Clear all plan2sprint connection keys
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && (key.startsWith("plan2sprint_connections") || key.startsWith("plan2sprint_integration_audit"))) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach((k) => localStorage.removeItem(k));
+}
 
 // ============================================================================
 // PERSISTENCE

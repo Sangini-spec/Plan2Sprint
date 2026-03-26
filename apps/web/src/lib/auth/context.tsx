@@ -42,6 +42,26 @@ function getSupabase() {
   return _supabaseClient;
 }
 
+/** Clear all user-scoped localStorage to prevent cross-user data leakage */
+function _clearUserScopedStorage() {
+  if (typeof window === "undefined") return;
+  const prefixes = [
+    "plan2sprint_connections",
+    "plan2sprint_integration_audit",
+    "plan2sprint_selected_project",
+    "plan2sprint_demo_user",
+    "p2s_",
+  ];
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && prefixes.some((p) => key.startsWith(p))) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach((k) => localStorage.removeItem(k));
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [appUser, setAppUser] = useState<AppUser | null>(null);
@@ -128,9 +148,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      const prevUserId = user?.id;
+      const newUserId = session?.user?.id;
+
       setUser(session?.user ?? null);
       if (!session?.user) {
         setAppUser(null);
+        // Clear cached data on logout to prevent cross-user leakage
+        _clearUserScopedStorage();
+      } else if (prevUserId && newUserId && prevUserId !== newUserId) {
+        // Different user logged in — clear previous user's cached data
+        _clearUserScopedStorage();
       }
     });
 
@@ -142,6 +170,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    // Clear all user-scoped cached data to prevent cross-user leakage
+    _clearUserScopedStorage();
+
     if (isDemoMode) {
       localStorage.removeItem("plan2sprint_demo_user");
       setAppUser(null);
