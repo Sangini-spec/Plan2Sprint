@@ -321,6 +321,7 @@ async def get_github_activity(
     developer: Optional[str] = Q(None, description="TeamMember ID filter"),
     type: Optional[str] = Q(None, description="Event type filter"),
     timeRange: str = Q("7d", description="Time range: today | 7d | 30d | sprint"),
+    project_id: Optional[str] = Q(None, description="Filter by project"),
     limit: int = Q(50, ge=1, le=200),
     offset: int = Q(0, ge=0),
     current_user: dict = Depends(get_current_user),
@@ -347,10 +348,17 @@ async def get_github_activity(
     else:  # default "7d"
         since = now - timedelta(days=7)
 
-    # Team members for the developer dropdown + login→member mapping
+    # Team members scoped by project if project_id provided
+    member_filters = [
+        TeamMember.organization_id == org_id,
+        TeamMember.role != "excluded",
+    ]
+    if project_id:
+        member_filters.append(TeamMember.imported_project_id == project_id)
+
     members_result = await db.execute(
         select(TeamMember)
-        .where(TeamMember.organization_id == org_id)
+        .where(*member_filters)
         .order_by(TeamMember.display_name)
     )
     members = members_result.scalars().all()
@@ -651,6 +659,15 @@ async def get_github_activity(
                             })
                     except httpx.RequestError:
                         continue
+
+            # Filter events to only include project members when project_id is set
+            if project_id:
+                project_member_ids = {m.id for m in members}
+                all_events = [
+                    e for e in all_events
+                    if e.get("developerId") in project_member_ids
+                    or e.get("developerId") == "unknown"
+                ]
 
             # Sort by date descending
             all_events.sort(

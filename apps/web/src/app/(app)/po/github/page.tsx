@@ -335,6 +335,7 @@ function GitHubConnectedView() {
       if (filters.type) params.set("type", filters.type);
       params.set("timeRange", filters.timeRange);
       params.set("limit", "50");
+      if (selectedProject?.internalId) params.set("project_id", selectedProject.internalId);
 
       const res = await fetch(`/api/github/activity?${params.toString()}`);
       if (res.ok) {
