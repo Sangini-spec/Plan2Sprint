@@ -101,8 +101,8 @@ export function SignupForm() {
               email,
               full_name: fullName,
               username,
-              organization_name: "Organization",
-              role,
+              organization_name: organizationName,
+              role: "product_owner",
               onboarding_completed: false,
               created_at: new Date().toISOString(),
             })
