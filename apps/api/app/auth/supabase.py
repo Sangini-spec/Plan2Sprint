@@ -1,8 +1,10 @@
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError, jwk
+from sqlalchemy import select
 from ..config import settings
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
@@ -20,6 +22,97 @@ _SUPABASE_ES256_JWK = {
     "x": "bbpH29xNI809c_lWskKCIYOHAPu7dvl2qY5QyonVrLA",
     "y": "2Mo3hnvkFeYQoToD7TsQM-KtfOZWpriaHyPUBVXUoU4",
 }
+
+async def _resolve_user_org(request: Request, payload: dict) -> dict:
+    """Look up the user's organization from the DB. If not found, auto-create one."""
+    from ..database import AsyncSessionLocal
+    from ..models.user import User
+    from ..models.organization import Organization
+
+    supabase_uid = payload.get("sub", "")
+    email = payload.get("email", "")
+    user_meta = payload.get("user_metadata", {})
+    full_name = user_meta.get("full_name", email.split("@")[0] if email else "User")
+    org_name_from_signup = user_meta.get("organization_name", "")
+    role_from_signup = user_meta.get("role", "product_owner")
+
+    try:
+        async with AsyncSessionLocal() as db:
+            # 1. Look up existing user by supabase_user_id
+            result = await db.execute(
+                select(User).where(User.supabase_user_id == supabase_uid)
+            )
+            user = result.scalar_one_or_none()
+
+            if user:
+                # User exists — use their stored org
+                payload["organization_id"] = user.organization_id
+                payload["role"] = user.role
+                payload["full_name"] = user.full_name
+                return payload
+
+            # 2. Also check by email (for users created before supabase_user_id was set)
+            if email:
+                result = await db.execute(
+                    select(User).where(User.email == email)
+                )
+                user = result.scalar_one_or_none()
+                if user:
+                    # Link supabase_user_id and return
+                    user.supabase_user_id = supabase_uid
+                    await db.commit()
+                    payload["organization_id"] = user.organization_id
+                    payload["role"] = user.role
+                    payload["full_name"] = user.full_name
+                    return payload
+
+            # 3. New user — create org + user
+            new_org_id = uuid.uuid4().hex[:25]
+            new_user_id = uuid.uuid4().hex[:25]
+            org_display_name = org_name_from_signup or f"{full_name}'s Organization"
+
+            # Generate slug from org name
+            import re
+            slug = re.sub(r'[^a-z0-9]+', '-', org_display_name.lower()).strip('-')[:50]
+            slug = f"{slug}-{new_org_id[:8]}"  # Ensure uniqueness
+
+            new_org = Organization(
+                id=new_org_id,
+                name=org_display_name,
+                slug=slug,
+            )
+            db.add(new_org)
+
+            new_user = User(
+                id=new_user_id,
+                email=email,
+                full_name=full_name,
+                role=role_from_signup,
+                supabase_user_id=supabase_uid,
+                organization_id=new_org_id,
+                onboarding_completed=False,
+            )
+            db.add(new_user)
+            await db.commit()
+
+            logger.info(f"Auto-created org '{org_display_name}' ({new_org_id}) and user '{email}' ({new_user_id})")
+
+            payload["organization_id"] = new_org_id
+            payload["role"] = role_from_signup
+            payload["full_name"] = full_name
+            return payload
+
+    except Exception as e:
+        logger.error(f"Failed to resolve user org: {e}")
+        # If DB is unreachable and debug mode, allow demo fallback
+        if settings.debug:
+            payload["organization_id"] = "demo-org"
+            return payload
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resolve user organization",
+        )
+
 
 DEMO_USER = {
     "sub": "demo-user-1",
@@ -84,9 +177,9 @@ async def get_current_user(
                 options={"verify_signature": True},
             )
 
-        # Enrich with organization_id from our users table if not in JWT
-        if "organization_id" not in payload:
-            payload["organization_id"] = "demo-org"
+        # Enrich with organization_id from our users table
+        if "organization_id" not in payload or not payload["organization_id"]:
+            payload = await _resolve_user_org(request, payload)
         return payload
     except JWTError as e:
         logger.error(f"JWT decode failed: {e}, alg={token_alg}, token_start={token[:30]}...")

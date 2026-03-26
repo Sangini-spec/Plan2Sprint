@@ -10,21 +10,15 @@ import {
   AlertCircle,
   CheckCircle2,
 } from "lucide-react";
-import { ROLE_DASHBOARD_ROUTES, type UserRole } from "@/lib/types/auth";
+// Role is assigned post-signup by org admin; signup always creates as product_owner
 
 const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
-const ROLES: { value: UserRole; label: string }[] = [
-  { value: "product_owner", label: "Product Owner" },
-  { value: "developer", label: "Developer" },
-  { value: "stakeholder", label: "Stakeholder" },
-];
-
 export function SignupForm() {
   const router = useRouter();
-  const [role, setRole] = useState<UserRole>("product_owner");
+  const [organizationName, setOrganizationName] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [username, setUsername] = useState("");
@@ -61,13 +55,13 @@ export function SignupForm() {
           email,
           full_name: fullName,
           username,
-          organization_name: "Organization",
-          role,
+          organization_name: organizationName,
+          role: "product_owner",
           onboarding_completed: false,
           created_at: new Date().toISOString(),
         })
       );
-      const dashboardRoute = ROLE_DASHBOARD_ROUTES[role] ?? "/po";
+      const dashboardRoute = "/po";
       router.push(dashboardRoute);
       return;
     }
@@ -87,7 +81,8 @@ export function SignupForm() {
               first_name: firstName,
               last_name: lastName,
               username,
-              role,
+              organization_name: organizationName,
+              role: "product_owner",
             },
             emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
@@ -112,7 +107,7 @@ export function SignupForm() {
               created_at: new Date().toISOString(),
             })
           );
-          const dashboardRoute = ROLE_DASHBOARD_ROUTES[role] ?? "/po";
+          const dashboardRoute = "/po";
           router.push(dashboardRoute);
           return;
         }
@@ -131,13 +126,13 @@ export function SignupForm() {
           email,
           full_name: fullName,
           username,
-          organization_name: "Organization",
-          role,
+          organization_name: organizationName,
+          role: "product_owner",
           onboarding_completed: false,
           created_at: new Date().toISOString(),
         })
       );
-      const dashboardRoute = ROLE_DASHBOARD_ROUTES[role] ?? "/po";
+      const dashboardRoute = "/po";
       router.push(dashboardRoute);
     }
 
@@ -182,22 +177,20 @@ export function SignupForm() {
           </div>
         )}
 
-        {/* Role */}
+        {/* Organization Name */}
         <div>
-          <label htmlFor="role" className="block text-sm font-medium text-[var(--text-primary)] mb-1">
-            Role
+          <label htmlFor="orgName" className="block text-sm font-medium text-[var(--text-primary)] mb-1">
+            Organization Name
           </label>
-          <select
-            id="role"
-            value={role}
-            onChange={(e) => setRole(e.target.value as UserRole)}
-            className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] px-4 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-secondary)] focus:border-transparent transition-all appearance-none cursor-pointer"
-            style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 12px center" }}
-          >
-            {ROLES.map((r) => (
-              <option key={r.value} value={r.value}>{r.label}</option>
-            ))}
-          </select>
+          <input
+            id="orgName"
+            type="text"
+            value={organizationName}
+            onChange={(e) => setOrganizationName(e.target.value)}
+            placeholder="e.g., Acme Corp"
+            required
+            className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] px-4 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]/50 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-secondary)] focus:border-transparent transition-all"
+          />
         </div>
 
         {/* First name / Last name */}
