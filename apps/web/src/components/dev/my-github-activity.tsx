@@ -264,7 +264,7 @@ export function MyGithubActivity() {
       setToken(ghToken);
       setUser(userObj);
       saveGitHubState({ token: ghToken, user: userObj, linkedRepos: [] });
-      // Persist token to backend so PO can see activity
+      // Persist token to backend so PO can see activity (org-level)
       fetch("/api/integrations/github/save-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -274,6 +274,16 @@ export function MyGithubActivity() {
           userName: userObj.name,
           avatarUrl: userObj.avatarUrl,
           linkedRepos: [],
+        }),
+      }).catch(() => {});
+      // Also link to this developer's personal record
+      fetch("/api/integrations/github/link-developer-github", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessToken: ghToken,
+          userLogin: userObj.login,
+          userName: userObj.name,
         }),
       }).catch(() => {});
       window.history.replaceState({}, "", window.location.pathname);
@@ -311,7 +321,7 @@ export function MyGithubActivity() {
         setToken(data.accessToken);
         setUser(userObj);
         saveGitHubState({ token: data.accessToken, user: userObj, linkedRepos: [] });
-        // Persist token to backend so PO can see activity
+        // Persist token to backend so PO can see activity (org-level)
         fetch("/api/integrations/github/save-token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -321,6 +331,16 @@ export function MyGithubActivity() {
             userName: userObj.name,
             avatarUrl: userObj.avatarUrl,
             linkedRepos: [],
+          }),
+        }).catch(() => {});
+        // Also link to this developer's personal record
+        fetch("/api/integrations/github/link-developer-github", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accessToken: data.accessToken,
+            userLogin: userObj.login,
+            userName: userObj.name,
           }),
         }).catch(() => {});
         setShowRepoSelector(true);

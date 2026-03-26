@@ -261,6 +261,7 @@ function GitHubEmptyState() {
 
 function GitHubConnectedView() {
   const refreshKey = useAutoRefresh(["sync_complete", "github_event"]);
+  const { selectedProject } = useSelectedProject();
 
   // -- Existing state --
   const [repos, setRepos] = useState<GitHubRepo[]>([]);
@@ -271,25 +272,49 @@ function GitHubConnectedView() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // -- NEW: Overview strip state --
+  // -- Overview strip state --
   const [overview, setOverview] = useState<GitHubOverview | null>(null);
 
-  // -- NEW: Activity feed state --
+  // -- Activity feed state --
   const [activityEvents, setActivityEvents] = useState<ActivityEventItem[]>([]);
-  const [activityMembers, setActivityMembers] = useState<
-    ActivityTeamMember[]
-  >([]);
   const [activityFilters, setActivityFilters] = useState<ActivityFilters>({
     developer: "",
     type: "",
     timeRange: "7d",
   });
   const [activityLoading, setActivityLoading] = useState(false);
+  const [developerNotLinked, setDeveloperNotLinked] = useState(false);
 
-  // -- Fetch overview --
-  const fetchOverview = useCallback(async () => {
+  // -- Project-scoped developers --
+  interface ProjectDeveloper extends ActivityTeamMember {
+    githubLinked: boolean;
+    githubUsername: string | null;
+  }
+  const [projectDevs, setProjectDevs] = useState<ProjectDeveloper[]>([]);
+
+  // -- Fetch project developers --
+  const fetchProjectDevelopers = useCallback(async () => {
     try {
-      const res = await cachedFetch("/api/github/overview");
+      const params = new URLSearchParams();
+      if (selectedProject?.internalId) {
+        params.set("project_id", selectedProject.internalId);
+      }
+      const res = await fetch(`/api/github/project-developers?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setProjectDevs(data.developers ?? []);
+      }
+    } catch {
+      // swallow
+    }
+  }, [selectedProject]);
+
+  // -- Fetch overview (with optional developer) --
+  const fetchOverview = useCallback(async (developerId?: string) => {
+    try {
+      const params = new URLSearchParams();
+      if (developerId) params.set("developer", developerId);
+      const res = await cachedFetch(`/api/github/overview?${params.toString()}`);
       if (res.ok) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data = res.data as any;
@@ -303,6 +328,7 @@ function GitHubConnectedView() {
   // -- Fetch activity feed --
   const fetchActivity = useCallback(async (filters: ActivityFilters) => {
     setActivityLoading(true);
+    setDeveloperNotLinked(false);
     try {
       const params = new URLSearchParams();
       if (filters.developer) params.set("developer", filters.developer);
@@ -314,7 +340,9 @@ function GitHubConnectedView() {
       if (res.ok) {
         const data = await res.json();
         setActivityEvents(data.events ?? []);
-        setActivityMembers(data.teamMembers ?? []);
+        if (data.developerNotLinked) {
+          setDeveloperNotLinked(true);
+        }
       }
     } catch {
       // swallow
@@ -366,13 +394,20 @@ function GitHubConnectedView() {
     }
   }, [selectedRepo, repos]);
 
-  // Mount: fetch repos + overview + activity
+  // Mount: fetch repos + overview + activity + project developers
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchRepos(), fetchOverview()]).finally(() =>
+    Promise.all([fetchRepos(), fetchOverview(), fetchProjectDevelopers()]).finally(() =>
       setLoading(false)
     );
-  }, [fetchRepos, fetchOverview]);
+  }, [fetchRepos, fetchOverview, fetchProjectDevelopers]);
+
+  // Re-fetch project developers when project changes
+  useEffect(() => {
+    fetchProjectDevelopers();
+    // Reset developer filter when project changes
+    setActivityFilters((f) => ({ ...f, developer: "" }));
+  }, [selectedProject, fetchProjectDevelopers]);
 
   // Repo data on repo change
   useEffect(() => {
@@ -384,15 +419,18 @@ function GitHubConnectedView() {
   // Activity feed on filter change or refresh
   useEffect(() => {
     fetchActivity(activityFilters);
-  }, [activityFilters, fetchActivity, refreshKey]);
+    // Also refresh overview when developer filter changes
+    fetchOverview(activityFilters.developer || undefined);
+  }, [activityFilters, fetchActivity, fetchOverview, refreshKey]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     await Promise.all([
       fetchRepos(),
       fetchRepoData(),
-      fetchOverview(),
+      fetchOverview(activityFilters.developer || undefined),
       fetchActivity(activityFilters),
+      fetchProjectDevelopers(),
     ]);
     setRefreshing(false);
   };
@@ -496,9 +534,9 @@ function GitHubConnectedView() {
               )}
             >
               <option value="">All Developers</option>
-              {activityMembers.map((m) => (
+              {projectDevs.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name}
+                  {m.name}{!m.githubLinked ? " (not connected)" : ""}
                 </option>
               ))}
             </select>
@@ -569,6 +607,18 @@ function GitHubConnectedView() {
         {activityLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-[var(--text-secondary)]" />
+          </div>
+        ) : developerNotLinked ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--bg-surface-raised)] mb-4">
+              <Github size={24} className="text-[var(--text-secondary)]" />
+            </div>
+            <p className="text-sm font-medium text-[var(--text-primary)] mb-1">
+              {projectDevs.find((d) => d.id === activityFilters.developer)?.name ?? "This developer"} hasn&apos;t linked their GitHub yet
+            </p>
+            <p className="text-xs text-[var(--text-secondary)] max-w-sm">
+              Ask them to connect their GitHub account from the Developer Dashboard to see their activity here.
+            </p>
           </div>
         ) : activityEvents.length === 0 ? (
           <div className="text-center py-8 text-sm text-[var(--text-secondary)]">
@@ -896,26 +946,10 @@ function GitHubNoRepoState({ projectName }: { projectName: string }) {
 export default function GithubPage() {
   const { isConnected } = useIntegrations();
   const githubConnected = isConnected("github");
-  const { selectedProject } = useSelectedProject();
-
-  // If GitHub is connected but the selected project is from Jira/ADO (not GitHub-linked),
-  // show a message that no repos are linked to this project
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const projectSource = ((selectedProject as any)?.sourceTool ?? selectedProject?.source ?? "")?.toUpperCase();
-  const isGitHubProject = projectSource === "GITHUB";
-  // For Jira/ADO projects, we'd need a linked repo — for now, show no-repo state
-  // unless the project explicitly has repos linked
-  const hasNoLinkedRepo = githubConnected && selectedProject && !isGitHubProject;
 
   return (
     <div className="space-y-6">
-      {!githubConnected ? (
-        <GitHubEmptyState />
-      ) : hasNoLinkedRepo ? (
-        <GitHubNoRepoState projectName={selectedProject?.name || "This project"} />
-      ) : (
-        <GitHubConnectedView />
-      )}
+      {githubConnected ? <GitHubConnectedView /> : <GitHubEmptyState />}
     </div>
   );
 }

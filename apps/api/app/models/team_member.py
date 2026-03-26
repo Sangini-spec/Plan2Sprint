@@ -75,6 +75,12 @@ class TeamMember(Base):
     teams_user_id: Mapped[Optional[str]] = mapped_column(
         String, name="teams_user_id", nullable=True
     )
+    github_username: Mapped[Optional[str]] = mapped_column(
+        String, name="github_username", nullable=True
+    )
+    github_access_token: Mapped[Optional[str]] = mapped_column(
+        String, name="github_access_token", nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), name="created_at", server_default=func.now()
     )

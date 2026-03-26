@@ -397,6 +397,114 @@ async def update_linked_repos(
 
 
 # ===================================================================
+# PER-DEVELOPER GITHUB LINKING
+# ===================================================================
+
+@router.post("/link-developer-github")
+async def link_developer_github(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Link the current developer's personal GitHub account to their TeamMember record."""
+    from ..models.team_member import TeamMember
+
+    access_token = body.get("accessToken", "")
+    user_login = body.get("userLogin", "")
+    user_name = body.get("userName", "")
+
+    if not access_token or not user_login:
+        raise HTTPException(status_code=400, detail="accessToken and userLogin are required")
+
+    org_id = current_user.get("organization_id", "demo-org")
+    user_email = current_user.get("email", "")
+
+    # Find the TeamMember record for this user by email
+    result = await db.execute(
+        select(TeamMember).where(
+            TeamMember.organization_id == org_id,
+            TeamMember.email.ilike(user_email),
+        )
+    )
+    member = result.scalar_one_or_none()
+
+    if not member:
+        # Try matching by display name if email doesn't match
+        user_name_from_token = current_user.get("full_name", "")
+        if user_name_from_token:
+            result2 = await db.execute(
+                select(TeamMember).where(
+                    TeamMember.organization_id == org_id,
+                    TeamMember.display_name.ilike(user_name_from_token),
+                )
+            )
+            member = result2.scalar_one_or_none()
+
+    if not member:
+        raise HTTPException(
+            status_code=404,
+            detail="No team member record found for your account. Ask your PO to add you to a project first.",
+        )
+
+    member.github_username = user_login
+    member.github_access_token = access_token
+    await db.commit()
+
+    return {"ok": True, "githubUsername": user_login}
+
+
+@router.get("/developer-github-status")
+async def developer_github_status(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if the current developer has linked their GitHub account."""
+    from ..models.team_member import TeamMember
+
+    org_id = current_user.get("organization_id", "demo-org")
+    user_email = current_user.get("email", "")
+
+    result = await db.execute(
+        select(TeamMember).where(
+            TeamMember.organization_id == org_id,
+            TeamMember.email.ilike(user_email),
+        )
+    )
+    member = result.scalar_one_or_none()
+
+    if member and member.github_username:
+        return {"linked": True, "githubUsername": member.github_username}
+    return {"linked": False}
+
+
+@router.delete("/unlink-developer-github")
+async def unlink_developer_github(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Disconnect the current developer's GitHub account."""
+    from ..models.team_member import TeamMember
+
+    org_id = current_user.get("organization_id", "demo-org")
+    user_email = current_user.get("email", "")
+
+    result = await db.execute(
+        select(TeamMember).where(
+            TeamMember.organization_id == org_id,
+            TeamMember.email.ilike(user_email),
+        )
+    )
+    member = result.scalar_one_or_none()
+
+    if member:
+        member.github_username = None
+        member.github_access_token = None
+        await db.commit()
+
+    return {"ok": True}
+
+
+# ===================================================================
 # REPOS
 # ===================================================================
 

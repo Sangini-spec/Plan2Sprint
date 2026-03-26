@@ -106,11 +106,53 @@ def _format_event_description(event: ActivityEvent) -> str:
 
 
 # ---------------------------------------------------------------------------
+# GET /github/project-developers
+# ---------------------------------------------------------------------------
+
+@router.get("/github/project-developers")
+async def get_project_developers(
+    project_id: Optional[str] = Q(None, description="ImportedProject ID"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return developers for a project with their GitHub link status."""
+    org_id = current_user.get("organization_id", "demo-org")
+
+    filters = [
+        TeamMember.organization_id == org_id,
+        TeamMember.role != "excluded",
+    ]
+    if project_id:
+        filters.append(TeamMember.imported_project_id == project_id)
+
+    result = await db.execute(
+        select(TeamMember)
+        .where(*filters)
+        .order_by(TeamMember.display_name)
+    )
+    members = result.scalars().all()
+
+    developers = []
+    for m in members:
+        developers.append({
+            "id": m.id,
+            "name": m.display_name,
+            "avatarUrl": m.avatar_url,
+            "email": m.email,
+            "githubUsername": m.github_username,
+            "githubLinked": bool(m.github_username and m.github_access_token),
+        })
+
+    return {"developers": developers}
+
+
+# ---------------------------------------------------------------------------
 # GET /github/overview
 # ---------------------------------------------------------------------------
 
 @router.get("/github/overview")
 async def get_github_overview(
+    developer: Optional[str] = Q(None, description="TeamMember ID to scope stats to"),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -121,6 +163,18 @@ async def get_github_overview(
     now = datetime.now(timezone.utc)
 
     sprint_start, sprint_end, sprint_name = await _get_active_sprint_dates(db, org_id)
+
+    # Check for per-developer token
+    dev_token: str | None = None
+    dev_username: str | None = None
+    if developer:
+        dev_result = await db.execute(
+            select(TeamMember).where(TeamMember.id == developer)
+        )
+        dev_member = dev_result.scalar_one_or_none()
+        if dev_member and dev_member.github_access_token:
+            dev_token = dev_member.github_access_token
+            dev_username = dev_member.github_username
 
     # 1. Repos count (from DB)
     repo_count = (
@@ -144,9 +198,12 @@ async def get_github_overview(
     )
     gh_conn = conn_result.scalar_one_or_none()
 
-    if gh_conn and gh_conn.access_token:
-        config = gh_conn.config or {}
-        linked_repos: list[str] = config.get("linked_repos", [])
+    # Use per-developer token if available, else fall back to org-level
+    overview_token = dev_token or (gh_conn.access_token if gh_conn else None)
+
+    if overview_token:
+        config = gh_conn.config if gh_conn else {}
+        linked_repos: list[str] = (config or {}).get("linked_repos", [])
 
         # Fallback to Repository table
         if not linked_repos:
@@ -162,7 +219,7 @@ async def get_github_overview(
             repo_count = len(linked_repos)
             gh_headers = {
                 "Accept": "application/vnd.github.v3+json",
-                "Authorization": f"Bearer {gh_conn.access_token}",
+                "Authorization": f"Bearer {overview_token}",
             }
             seven_days_ago = now - timedelta(days=7)
 
@@ -311,16 +368,37 @@ async def get_github_activity(
             name_to_member[m.external_id.lower()] = m
         if m.email:
             name_to_member[m.email.lower()] = m
+        if getattr(m, "github_username", None):
+            name_to_member[m.github_username.lower()] = m
 
     # Get developer name filter if filtering by developer ID
     filter_dev_name = ""
+    selected_member: TeamMember | None = None
     if developer:
         for m in members:
             if m.id == developer:
                 filter_dev_name = (m.display_name or "").lower()
+                selected_member = m
+                # Also add github_username to the lookup
+                if m.github_username:
+                    name_to_member[m.github_username.lower()] = m
                 break
 
-    # ---- Try LIVE fetch from GitHub API ----
+    # Determine which token and repos to use:
+    # Priority: per-developer token > org-level token
+    use_token: str | None = None
+    linked_repos: list[str] = []
+    developer_not_linked = False
+
+    if selected_member and selected_member.github_access_token:
+        # Per-developer token — fetch their repos dynamically
+        use_token = selected_member.github_access_token
+        # We'll fetch repos from their account below
+    elif selected_member and not selected_member.github_access_token:
+        # Developer hasn't linked GitHub
+        developer_not_linked = True
+
+    # Fallback to org-level connection
     conn_result = await db.execute(
         select(ToolConnection).where(
             ToolConnection.organization_id == org_id,
@@ -329,10 +407,25 @@ async def get_github_activity(
     )
     gh_conn = conn_result.scalar_one_or_none()
 
-    if gh_conn and gh_conn.access_token:
-        # Get linked repos from config or from Repository table
+    if not use_token and gh_conn and gh_conn.access_token:
+        use_token = gh_conn.access_token
         config = gh_conn.config or {}
-        linked_repos: list[str] = config.get("linked_repos", [])
+        linked_repos = config.get("linked_repos", [])
+
+    # If specific developer selected but not linked, return early
+    if developer_not_linked and not use_token:
+        return {
+            "events": [],
+            "teamMembers": team_members_resp,
+            "totalCount": 0,
+            "developerNotLinked": True,
+        }
+
+    if use_token:
+        # Get linked repos from config or from Repository table
+        config = gh_conn.config if gh_conn else {}
+        if not linked_repos:
+            linked_repos = (config or {}).get("linked_repos", [])
 
         # Map GitHub login from ToolConnection to a team member
         gh_user_login = config.get("user_login", "")
@@ -354,13 +447,27 @@ async def get_github_activity(
             )
             linked_repos = [r[0] for r in repo_result.all() if r[0]]
 
+        # If using per-developer token and no linked repos, fetch their repos
+        if selected_member and selected_member.github_access_token and not linked_repos:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=15.0) as _client:
+                try:
+                    _resp = await _client.get(
+                        "https://api.github.com/user/repos",
+                        params={"per_page": 50, "affiliation": "owner,collaborator,organization_member"},
+                        headers={"Accept": "application/vnd.github.v3+json", "Authorization": f"Bearer {use_token}"},
+                    )
+                    if _resp.is_success:
+                        linked_repos = [r["full_name"] for r in _resp.json() if r.get("full_name")]
+                except Exception:
+                    pass
+
         if linked_repos:
             all_events: list[dict] = []
             seen_ids: set[str] = set()  # dedup between events + commits
-            access_token = gh_conn.access_token
             gh_headers = {
                 "Accept": "application/vnd.github.v3+json",
-                "Authorization": f"Bearer {access_token}",
+                "Authorization": f"Bearer {use_token}",
             }
 
             # Helper to resolve actor → developer info

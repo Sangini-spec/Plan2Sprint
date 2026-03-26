@@ -94,6 +94,13 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS ix_stakeholder_proj_user ON stakeholder_project_assignments(user_id)"
             ))
+            # Per-developer GitHub connection fields
+            await conn.execute(text(
+                "ALTER TABLE team_members ADD COLUMN IF NOT EXISTS github_username VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE team_members ADD COLUMN IF NOT EXISTS github_access_token VARCHAR"
+            ))
         print("Auto-migration complete.")
     except Exception as e:
         print(f"WARNING: DB migration skipped (DB unreachable): {e}")
