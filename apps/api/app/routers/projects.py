@@ -97,7 +97,7 @@ async def save_imported_project(
     """Save or upsert an imported project."""
     org_id = current_user.get("organization_id", "demo-org")
     external_id = body.get("id") or body.get("external_id")
-    source_tool = body.get("source")
+    source_tool = body.get("source") or body.get("sourceTool")
     name = body.get("name")
 
     if not external_id or not source_tool or not name:
