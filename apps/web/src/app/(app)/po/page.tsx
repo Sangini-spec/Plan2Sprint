@@ -41,7 +41,7 @@ function EmptyDashboard() {
       </p>
 
       <Button
-        variant="brand"
+        variant="primary"
         size="lg"
         onClick={() => openModal?.()}
         className="gap-2"
