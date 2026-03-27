@@ -486,14 +486,29 @@ export function ProjectHeroBanner() {
             <button
               onClick={async () => {
                 setRefreshing(true);
-                await fetchData();
+                try {
+                  // Trigger actual sync from ADO/Jira, not just re-read from DB
+                  const syncRes = await fetch("/api/integrations/sync", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ projectId }),
+                  });
+                  if (!syncRes.ok) {
+                    console.error("Sync failed:", await syncRes.text());
+                  }
+                  // Wait a moment for data to persist, then re-fetch dashboard data
+                  await new Promise((r) => setTimeout(r, 2000));
+                  await fetchData();
+                } catch (e) {
+                  console.error("Sync error:", e);
+                }
                 setRefreshing(false);
               }}
               disabled={refreshing}
               className="flex items-center gap-2 rounded-full bg-[var(--color-brand)] hover:bg-[var(--color-brand-secondary)] px-5 py-2.5 text-sm font-medium text-white transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-              {refreshing ? "Syncing..." : "Sync Project Data"}
+              {refreshing ? "Syncing from " + (source === "jira" ? "Jira" : "Azure DevOps") + "..." : "Sync Project Data"}
             </button>
           </div>
         </div>
@@ -522,14 +537,23 @@ export function ProjectHeroBanner() {
               <button
                 onClick={async () => {
                   setRefreshing(true);
-                  await fetchData();
+                  try {
+                    // Trigger actual sync from source tool
+                    await fetch("/api/integrations/sync", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ projectId }),
+                    }).catch(() => {});
+                    await new Promise((r) => setTimeout(r, 2000));
+                    await fetchData();
+                  } catch { /* swallow */ }
                   setRefreshing(false);
                 }}
                 disabled={refreshing}
                 className="ml-2 flex items-center gap-1.5 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-xs text-white/70 hover:text-white transition-colors disabled:opacity-50"
               >
                 <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
-                {refreshing ? "Refreshing..." : "Refresh"}
+                {refreshing ? "Syncing..." : "Refresh"}
               </button>
             </div>
           </div>
