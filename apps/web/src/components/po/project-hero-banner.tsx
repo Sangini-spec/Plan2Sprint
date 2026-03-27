@@ -480,7 +480,7 @@ export function ProjectHeroBanner() {
                   setRefreshing(true);
                   try {
                     // Trigger actual sync from source tool
-                    await fetch("/api/integrations/sync", {
+                    await fetch("/api/integrations/sync/auto", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ projectId }),
