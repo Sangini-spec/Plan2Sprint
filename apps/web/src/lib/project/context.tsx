@@ -221,10 +221,52 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     };
   }, [selectedProject, initialized]);
 
-  const selectProject = useCallback((project: ProjectItem | null) => {
+  const selectProject = useCallback(async (project: ProjectItem | null) => {
     // Clear all cached API responses so components re-fetch with the new projectId
     invalidateCache();
     setSwitching(true);
+
+    // Auto-import: if project comes from liveProjects (no internalId), save to DB first
+    if (project && !project.internalId) {
+      try {
+        const saveRes = await fetch("/api/projects/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: project.id,
+            name: project.name,
+            key: project.key,
+            description: project.description,
+            sourceTool: project.source,
+            boardId: project.boardId,
+          }),
+        });
+        if (saveRes.ok) {
+          const saved = await saveRes.json();
+          // Update the project with the DB-assigned internalId
+          if (saved.internalId) {
+            project = { ...project, internalId: saved.internalId };
+            // Update projects list with the new internalId
+            setProjects((prev) =>
+              prev.map((p) =>
+                String(p.id) === String(project!.id) && p.source === project!.source
+                  ? { ...p, internalId: saved.internalId }
+                  : p
+              )
+            );
+          }
+          // Trigger sync to import work items from ADO/Jira
+          fetch("/api/integrations/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: saved.internalId }),
+          }).catch(() => {});
+        }
+      } catch {
+        // Swallow — project will work without DB record, just no dashboard data
+      }
+    }
+
     setSelectedProject(project);
 
     // Clear switching flag after a short delay to allow components to re-fetch
