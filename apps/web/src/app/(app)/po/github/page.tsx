@@ -950,7 +950,25 @@ export default function GithubPage() {
 
   return (
     <div className="space-y-6">
-      {githubConnected ? <GitHubConnectedView /> : <GitHubEmptyState />}
+      {githubConnected ? (
+        <GitHubConnectedView />
+      ) : (
+        <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--bg-surface-raised)] mb-6">
+            <Github size={32} className="text-[var(--text-secondary)]" />
+          </div>
+          <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">
+            GitHub Monitoring
+          </h2>
+          <p className="text-sm text-[var(--text-secondary)] max-w-md mb-4">
+            GitHub activity will appear here once developers in your team connect
+            their GitHub accounts from the Developer Dashboard.
+          </p>
+          <p className="text-xs text-[var(--text-tertiary)]">
+            Developers can link their GitHub from Settings → Connect Tools → GitHub
+          </p>
+        </div>
+      )}
     </div>
   );
 }

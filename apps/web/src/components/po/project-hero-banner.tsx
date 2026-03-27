@@ -457,6 +457,50 @@ export function ProjectHeroBanner() {
     );
   }
 
+  // Unsynced project state — data fetched but no work items found
+  const isUnsynced = !loading && totalFeatures === 0 && totalStories === 0 && selectedProject;
+
+  if (isUnsynced && !planSummary?.hasPlan) {
+    return (
+      <div className="rounded-xl overflow-hidden">
+        <div className="bg-gradient-to-br from-[#1e293b] to-[#334155] px-6 py-6 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="space-y-2.5">
+              <h1 className="text-2xl font-bold text-white">
+                {selectedProject?.name ?? "Project Dashboard"}
+              </h1>
+              {selectedProject?.description && (
+                <p className="text-sm text-white/60 max-w-lg">
+                  {selectedProject.description}
+                </p>
+              )}
+              <LiveDataBadge source={source} />
+            </div>
+          </div>
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <RefreshCw className="h-10 w-10 text-white/30 mb-4" />
+            <h3 className="text-lg font-semibold text-white/80 mb-2">Project Data Not Synced Yet</h3>
+            <p className="text-sm text-white/50 max-w-md mb-4">
+              Click Refresh to fetch the latest work items, features, and sprint data from {source === "jira" ? "Jira" : "Azure DevOps"}.
+            </p>
+            <button
+              onClick={async () => {
+                setRefreshing(true);
+                await fetchData();
+                setRefreshing(false);
+              }}
+              disabled={refreshing}
+              className="flex items-center gap-2 rounded-full bg-[var(--color-brand)] hover:bg-[var(--color-brand-secondary)] px-5 py-2.5 text-sm font-medium text-white transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+              {refreshing ? "Syncing..." : "Sync Project Data"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-xl overflow-hidden">
       {/* ── Dark Gradient Hero Section ── */}
