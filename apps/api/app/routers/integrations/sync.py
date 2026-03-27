@@ -205,13 +205,11 @@ async def auto_sync_project(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Server-side auto-sync — fetches data from ADO/Jira using stored credentials
-    and imports into the database. No raw data needed from frontend.
+    Server-side auto-sync — calls existing ADO/Jira fetch functions internally
+    using stored credentials (OAuth or PAT). No raw data needed from frontend.
 
     Body: { "projectId": "internal-cuid" }
     """
-    import httpx
-
     org_id = current_user.get("organization_id", "demo-org")
     project_id = body.get("projectId")
 
@@ -230,88 +228,107 @@ async def auto_sync_project(
         raise HTTPException(status_code=404, detail="Project not found")
 
     source_tool = (project.source_tool or "ado").upper()
-
-    # Get the tool connection with credentials
-    conn_result = await db.execute(
-        select(ToolConnection).where(
-            ToolConnection.organization_id == org_id,
-            ToolConnection.source_tool == source_tool,
-        )
-    )
-    tool_conn = conn_result.scalar_one_or_none()
-    if not tool_conn or not tool_conn.access_token:
-        raise HTTPException(status_code=400, detail=f"No {source_tool} connection found. Connect tools first.")
-
-    config = tool_conn.config or {}
-    raw_iterations = []
-    raw_members = []
-    raw_work_items = []
+    project_name = project.name
+    project_key = getattr(project, "key", None) or project_name
 
     try:
+        raw_iterations = []
+        raw_members = []
+        raw_work_items = []
+
         if source_tool == "ADO":
-            org_url = config.get("org_url", "")
-            pat = tool_conn.access_token
-            project_name = project.name
-            import base64
-            auth_header = "Basic " + base64.b64encode(f":{pat}".encode()).decode()
-            headers = {"Authorization": auth_header, "Accept": "application/json"}
+            # Reuse existing ADO fetch functions
+            from .ado import (
+                _get_ado_connection, _get_ado_auth_info,
+                _get_valid_access_token, _ado_api,
+            )
 
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
-                # Fetch iterations
-                iter_res = await client.get(
-                    f"{org_url}/{project_name}/_apis/work/teamsettings/iterations",
-                    headers=headers, params={"api-version": "7.0"}
-                )
-                if iter_res.is_success:
-                    raw_iterations = iter_res.json().get("value", [])
+            conn = await _get_ado_connection(db, org_id)
+            if not conn:
+                raise HTTPException(status_code=400, detail="ADO not connected. Use Connect Tools first.")
 
-                # Fetch team members
-                teams_res = await client.get(
-                    f"{org_url}/_apis/projects/{project_name}/teams",
-                    headers=headers, params={"api-version": "7.0"}
-                )
-                if teams_res.is_success:
-                    teams = teams_res.json().get("value", [])
-                    for team in teams[:1]:  # First team
-                        members_res = await client.get(
-                            f"{org_url}/_apis/projects/{project_name}/teams/{team['id']}/members",
-                            headers=headers, params={"api-version": "7.0"}
-                        )
-                        if members_res.is_success:
-                            raw_members = members_res.json().get("value", [])
+            org_url, auth_header = _get_ado_auth_info(conn)
+            config = conn.config or {}
+            auth_method = config.get("auth_method", "oauth2")
+            access_token = ""
+            if auth_method == "oauth2":
+                access_token = await _get_valid_access_token(db, conn)
 
-                # Fetch work items via WIQL
-                wiql_body = {
-                    "query": f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{project_name}' ORDER BY [System.Id] ASC"
-                }
-                wiql_res = await client.post(
-                    f"{org_url}/{project_name}/_apis/wit/wiql",
-                    headers={**headers, "Content-Type": "application/json"},
-                    json=wiql_body, params={"api-version": "7.0"}
+            # Fetch iterations
+            try:
+                iter_data = await _ado_api(
+                    "GET",
+                    f"{org_url}/{project_name}/_apis/work/teamsettings/iterations?api-version=7.0",
+                    access_token, auth_header=auth_header,
                 )
-                if wiql_res.is_success:
-                    wi_ids = [item["id"] for item in wiql_res.json().get("workItems", [])]
-                    # Fetch details in batches of 200
-                    for i in range(0, len(wi_ids), 200):
-                        batch = wi_ids[i:i+200]
-                        ids_str = ",".join(str(x) for x in batch)
-                        detail_res = await client.get(
-                            f"{org_url}/_apis/wit/workitems",
-                            headers=headers,
-                            params={
-                                "ids": ids_str,
-                                "api-version": "7.0",
-                                "$expand": "relations",
-                                "fields": "System.Id,System.Title,System.State,System.WorkItemType,System.AssignedTo,System.IterationPath,Microsoft.VSTS.Scheduling.StoryPoints,System.Description,System.CreatedDate,System.ChangedDate,System.Parent"
-                            }
-                        )
-                        if detail_res.is_success:
-                            raw_work_items.extend(detail_res.json().get("value", []))
+                raw_iterations = iter_data.get("value", [])
+            except Exception as e:
+                logger.warning(f"Failed to fetch iterations: {e}")
+
+            # Fetch team members
+            try:
+                teams_data = await _ado_api(
+                    "GET",
+                    f"{org_url}/_apis/projects/{project_name}/teams?api-version=7.0",
+                    access_token, auth_header=auth_header,
+                )
+                teams = teams_data.get("value", [])
+                if teams:
+                    members_data = await _ado_api(
+                        "GET",
+                        f"{org_url}/_apis/projects/{project_name}/teams/{teams[0]['id']}/members?api-version=7.0",
+                        access_token, auth_header=auth_header,
+                    )
+                    raw_members = members_data.get("value", [])
+            except Exception as e:
+                logger.warning(f"Failed to fetch team members: {e}")
+
+            # Fetch work items via WIQL
+            try:
+                wiql_data = await _ado_api(
+                    "POST",
+                    f"{org_url}/{project_name}/_apis/wit/wiql?api-version=7.0",
+                    access_token,
+                    json_body={
+                        "query": (
+                            f"SELECT [System.Id], [System.Title], [System.State], "
+                            f"[System.WorkItemType], [System.AssignedTo], "
+                            f"[Microsoft.VSTS.Scheduling.StoryPoints] "
+                            f"FROM WorkItems "
+                            f"WHERE [System.TeamProject] = '{project_name}' "
+                            f"ORDER BY [System.WorkItemType] ASC, [System.Id] ASC"
+                        ),
+                    },
+                    auth_header=auth_header,
+                )
+                wi_ids = [wi["id"] for wi in wiql_data.get("workItems", [])]
+
+                # Fetch details in batches of 200
+                for i in range(0, len(wi_ids), 200):
+                    batch = wi_ids[i:i+200]
+                    ids_str = ",".join(str(x) for x in batch)
+                    details_data = await _ado_api(
+                        "GET",
+                        f"{org_url}/_apis/wit/workitems?ids={ids_str}&$expand=relations&api-version=7.0",
+                        access_token, auth_header=auth_header,
+                    )
+                    raw_work_items.extend(details_data.get("value", []))
+            except Exception as e:
+                logger.warning(f"Failed to fetch work items: {e}")
 
         elif source_tool == "JIRA":
-            # For Jira, use the stored OAuth token
-            access_token = tool_conn.access_token
+            # Reuse existing Jira fetch functions
+            from .jira import _get_jira_connection, _get_valid_access_token as _get_valid_jira_token
+            import httpx
+
+            conn = await _get_jira_connection(db, org_id)
+            if not conn:
+                raise HTTPException(status_code=400, detail="Jira not connected. Use Connect Tools first.")
+
+            access_token = await _get_valid_jira_token(db, conn)
+            config = conn.config or {}
             cloud_id = config.get("cloud_id", "")
+
             if not cloud_id:
                 raise HTTPException(status_code=400, detail="Jira cloud_id not configured")
 
@@ -320,7 +337,6 @@ async def auto_sync_project(
                 "Accept": "application/json",
             }
             base_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3"
-            project_key = project.key or project.name
 
             async with httpx.AsyncClient(timeout=30.0) as client:
                 # Fetch issues
@@ -362,12 +378,12 @@ async def auto_sync_project(
                         if sprints_res.is_success:
                             raw_iterations = sprints_res.json().get("values", [])
 
-        logger.info(f"Auto-sync fetched: {len(raw_iterations)} iterations, {len(raw_members)} members, {len(raw_work_items)} work items")
+        logger.info(f"Auto-sync fetched: {len(raw_iterations)} iterations, {len(raw_members)} members, {len(raw_work_items)} work items for {project_name}")
 
         if not raw_work_items:
-            return {"ok": True, "synced": {"workItems": 0, "iterations": 0, "members": 0}, "message": "No work items found"}
+            return {"ok": True, "synced": {"workItems": 0, "iterations": 0, "members": 0}, "message": "No work items found from API"}
 
-        # Now run the standard sync pipeline
+        # Run the standard sync pipeline
         counts = await sync_project_data(
             db=db,
             org_id=org_id,
@@ -378,7 +394,14 @@ async def auto_sync_project(
             raw_work_items=raw_work_items,
         )
 
-        # Update sync timestamp
+        # Update sync timestamp on tool connection
+        conn_result = await db.execute(
+            select(ToolConnection).where(
+                ToolConnection.organization_id == org_id,
+                ToolConnection.source_tool == source_tool,
+            )
+        )
+        tool_conn = conn_result.scalar_one_or_none()
         if tool_conn:
             tool_conn.sync_status = "idle"
             tool_conn.last_sync_at = datetime.now(timezone.utc)
@@ -391,9 +414,8 @@ async def auto_sync_project(
 
         return {"ok": True, "synced": counts}
 
-    except httpx.RequestError as e:
-        logger.exception(f"Auto-sync HTTP error: {e}")
-        raise HTTPException(status_code=502, detail=f"Failed to reach {source_tool} API: {str(e)}")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception(f"Auto-sync failed: {e}")
+        logger.exception(f"Auto-sync failed for {project_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
