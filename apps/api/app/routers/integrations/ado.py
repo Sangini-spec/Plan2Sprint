@@ -597,7 +597,27 @@ async def ado_status(
         "email": config.get("email", ""),
         "auth_method": config.get("auth_method", "pat"),
         "connected_at": conn.created_at.isoformat() if conn.created_at else None,
+        "selectedProjects": config.get("selectedProjects", []),
     }
+
+
+@router.post("/selected-projects")
+async def save_selected_projects(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /selected-projects — Persist user's selected ADO projects in connection config."""
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_ado_connection(db, org_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="ADO not connected")
+
+    config = dict(conn.config or {})
+    config["selectedProjects"] = body.get("projects", [])
+    conn.config = config
+    await db.commit()
+    return {"ok": True}
 
 
 @router.post("/disconnect")
@@ -1497,6 +1517,14 @@ async def receive_webhook(request: Request):
     """POST /webhooks — Receive Azure DevOps service hook events."""
     try:
         body_bytes = await request.body()
+
+        # Verify webhook shared secret if configured
+        webhook_secret = getattr(settings, "ado_webhook_secret", "") or ""
+        if webhook_secret:
+            hook_secret = request.headers.get("X-Hook-Secret", "")
+            if hook_secret != webhook_secret:
+                raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
         body_text = body_bytes.decode("utf-8")
 
         payload = json.loads(body_text)

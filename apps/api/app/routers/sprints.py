@@ -147,6 +147,8 @@ async def get_sprint_overview(
             "approvedAt": plan.approved_at.isoformat() if plan.approved_at else None,
             "syncedAt": plan.synced_at.isoformat() if plan.synced_at else None,
             "createdAt": plan.created_at.isoformat() if plan.created_at else None,
+            "isRebalanced": plan.is_rebalanced,
+            "rebalanceSourceId": plan.rebalance_source_id,
             "unplannedItems": plan.unplanned_items,
             "estimatedSprints": plan.estimated_sprints,
             "estimatedEndDate": plan.estimated_end_date.isoformat() if plan.estimated_end_date else None,
@@ -190,7 +192,10 @@ async def get_plan_details(
 
     # Find the plan — skip REJECTED plans so previous good plan surfaces
     if planId:
-        plan_q = select(SprintPlan).where(SprintPlan.id == planId)
+        plan_q = select(SprintPlan).where(
+            SprintPlan.id == planId,
+            SprintPlan.organization_id == org_id,
+        )
     elif projectId:
         # Latest non-rejected plan for this project
         plan_q = (
@@ -297,6 +302,8 @@ async def get_plan_details(
             "tool": plan.tool,
             "humanEdits": plan.human_edits,
             "rejectionFeedback": plan.rejection_feedback,
+            "isRebalanced": plan.is_rebalanced,
+            "rebalanceSourceId": plan.rebalance_source_id,
             "approvedById": plan.approved_by_id,
             "approvedAt": plan.approved_at.isoformat() if plan.approved_at else None,
             "syncedAt": plan.synced_at.isoformat() if plan.synced_at else None,
@@ -553,7 +560,10 @@ async def update_sprint_plan(
     if not plan_id:
         raise HTTPException(status_code=400, detail="planId is required")
 
-    plan_query = select(SprintPlan).where(SprintPlan.id == plan_id)
+    plan_query = select(SprintPlan).where(
+        SprintPlan.id == plan_id,
+        SprintPlan.organization_id == org_id,
+    )
     result = await db.execute(plan_query)
     plan = result.scalar_one_or_none()
 
@@ -803,4 +813,143 @@ async def get_excluded_members(
             }
             for m in members
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/sprints/rebalance — Generate a rebalancing proposal
+# ---------------------------------------------------------------------------
+
+@router.post("/sprints/rebalance")
+async def generate_rebalance(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate an AI-powered rebalancing proposal for an at-risk sprint plan."""
+    import sys, traceback as tb
+    print(f"[REBALANCE] Received request: {body}", file=sys.stderr, flush=True)
+
+    from ..services.sprint_rebalancer import generate_rebalance_proposal
+
+    org_id = current_user.get("organization_id", "demo-org")
+    plan_id = body.get("planId")
+    mode = body.get("mode", "PROTECT_TIMELINE")
+    target_date = body.get("targetDate")
+    po_guidance = body.get("poGuidance")
+
+    print(f"[REBALANCE] org={org_id}, plan={plan_id}, mode={mode}", file=sys.stderr, flush=True)
+
+    if not plan_id:
+        raise HTTPException(status_code=400, detail="planId is required")
+
+    if mode not in ("PROTECT_TIMELINE", "PROTECT_SCOPE", "CUSTOM_DATE"):
+        raise HTTPException(status_code=400, detail="mode must be PROTECT_TIMELINE, PROTECT_SCOPE, or CUSTOM_DATE")
+
+    try:
+        result = await generate_rebalance_proposal(
+            db, org_id, plan_id, mode, target_date, po_guidance
+        )
+        print(f"[REBALANCE] Result ok={result.get('ok')}", file=sys.stderr, flush=True)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Rebalancing failed"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[REBALANCE] EXCEPTION: {tb.format_exc()}", file=sys.stderr, flush=True)
+        logger.exception("Rebalance generation failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# POST /api/sprints/rebalance/approve — Approve proposal → new active plan
+# ---------------------------------------------------------------------------
+
+@router.post("/sprints/rebalance/approve")
+async def approve_rebalance_endpoint(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Approve a rebalance proposal — creates new plan, supersedes old one."""
+    from ..services.sprint_rebalancer import approve_rebalance
+
+    proposal_id = body.get("proposalId")
+    if not proposal_id:
+        raise HTTPException(status_code=400, detail="proposalId is required")
+
+    user_id = current_user.get("user_id")
+
+    try:
+        result = await approve_rebalance(db, proposal_id, user_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Approval failed"))
+
+        # Broadcast rebalance event
+        org_id = current_user.get("organization_id", "demo-org")
+        await ws_manager.broadcast(org_id, {
+            "type": "sprint_rebalanced",
+            "data": {
+                "newPlanId": result.get("newPlanId"),
+                "oldPlanId": result.get("oldPlanId"),
+            },
+        })
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Rebalance approval failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# GET /api/sprints/rebalance/latest — Fetch current proposal for a plan
+# ---------------------------------------------------------------------------
+
+@router.get("/sprints/rebalance/latest")
+async def get_latest_rebalance(
+    planId: str = Query(..., description="The sprint plan ID"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the most recent rebalance proposal for a given sprint plan."""
+    from ..models.sprint_plan import RebalanceProposal
+
+    org_id = current_user.get("organization_id", "demo-org")
+
+    from sqlalchemy import or_
+    result = await db.execute(
+        select(RebalanceProposal)
+        .where(
+            RebalanceProposal.organization_id == org_id,
+            or_(
+                RebalanceProposal.sprint_plan_id == planId,
+                RebalanceProposal.new_plan_id == planId,
+            ),
+        )
+        .order_by(RebalanceProposal.created_at.desc())
+        .limit(1)
+    )
+    proposal = result.scalar_one_or_none()
+
+    if not proposal:
+        return {"found": False}
+
+    return {
+        "found": True,
+        "proposalId": proposal.id,
+        "status": proposal.status,
+        "mode": proposal.mode,
+        "summary": proposal.summary,
+        "rationale": proposal.ai_rationale,
+        "originalSuccessProbability": proposal.original_success_probability,
+        "projectedSuccessProbability": proposal.projected_success_probability,
+        "originalEndDate": proposal.original_end_date.isoformat() if proposal.original_end_date else None,
+        "projectedEndDate": proposal.projected_end_date.isoformat() if proposal.projected_end_date else None,
+        "sprints": proposal.sprint_allocations,
+        "changesSummary": proposal.changes_summary,
+        "downstreamImpact": proposal.downstream_impact,
+        "createdAt": proposal.created_at.isoformat() if proposal.created_at else None,
     }

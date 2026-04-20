@@ -185,6 +185,30 @@ async def get_github_overview(
         )
     ).scalar() or 0
 
+    # Auto-sync: if no repos in DB but linked repos exist, trigger sync
+    if repo_count == 0:
+        import logging
+        _conn_check = await db.execute(
+            select(ToolConnection).where(
+                ToolConnection.organization_id == org_id,
+                ToolConnection.source_tool == "GITHUB",
+            )
+        )
+        _gh_check = _conn_check.scalar_one_or_none()
+        if _gh_check and (_gh_check.config or {}).get("linked_repos"):
+            logging.getLogger(__name__).info(f"Auto-triggering GitHub sync for org {org_id}")
+            try:
+                await _run_github_sync(db, org_id)
+                repo_count = (
+                    await db.execute(
+                        select(func.count())
+                        .select_from(Repository)
+                        .where(Repository.organization_id == org_id)
+                    )
+                ).scalar() or 0
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Auto-sync failed: {e}")
+
     # 2-4. Try live GitHub data for PRs + commits
     open_prs = 0
     merged_prs = 0
@@ -773,3 +797,265 @@ async def get_github_prs(
         })
 
     return {"pullRequests": pr_list}
+
+
+# ---------------------------------------------------------------------------
+# POST /github/sync  — Pull commits, PRs, repos from GitHub API → persist to DB
+# ---------------------------------------------------------------------------
+
+async def _run_github_sync(db: AsyncSession, org_id: str) -> dict:
+    """Core sync logic — fetch commits, PRs, repos from GitHub API → persist to DB."""
+    import httpx
+    import logging
+    from ..models.tool_connection import ToolConnection
+    from ..models.base import generate_cuid
+    from ..services.activity_engine import record_activity
+
+    logger = logging.getLogger(__name__)
+
+    conn_result = await db.execute(
+        select(ToolConnection).where(
+            ToolConnection.organization_id == org_id,
+            ToolConnection.source_tool == "GITHUB",
+        )
+    )
+    gh_conn = conn_result.scalar_one_or_none()
+    if not gh_conn or not gh_conn.access_token:
+        return {"ok": False, "error": "GitHub not connected"}
+
+    config = gh_conn.config or {}
+    linked_repos: list[str] = config.get("linked_repos", [])
+    if not linked_repos:
+        return {"ok": False, "error": "No repos linked"}
+
+    token = gh_conn.access_token
+    gh_headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"Bearer {token}",
+    }
+
+    members_result = await db.execute(
+        select(TeamMember).where(TeamMember.organization_id == org_id)
+    )
+    all_members = members_result.scalars().all()
+    gh_user_map: dict[str, TeamMember] = {}
+    name_map: dict[str, TeamMember] = {}
+    for m in all_members:
+        if m.github_username:
+            gh_user_map[m.github_username.lower()] = m
+        name_map[m.display_name.lower()] = m
+
+    stats = {"repos": 0, "commits": 0, "prs": 0, "events": 0}
+    now = datetime.now(timezone.utc)
+    since_date = now - timedelta(days=90)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for repo_full_name in linked_repos:
+            try:
+                # ── 1. Upsert Repository record ──
+                repo_api_res = await client.get(
+                    f"https://api.github.com/repos/{repo_full_name}",
+                    headers=gh_headers,
+                )
+                if not repo_api_res.is_success:
+                    logger.warning(f"GitHub sync: failed to fetch repo {repo_full_name}: {repo_api_res.status_code}")
+                    continue
+
+                repo_data = repo_api_res.json()
+                ext_id = str(repo_data["id"])
+
+                existing_repo = await db.execute(
+                    select(Repository).where(
+                        Repository.organization_id == org_id,
+                        Repository.external_id == ext_id,
+                    )
+                )
+                repo_record = existing_repo.scalar_one_or_none()
+                if not repo_record:
+                    repo_record = Repository(
+                        id=generate_cuid(),
+                        organization_id=org_id,
+                        external_id=ext_id,
+                        name=repo_data.get("name", repo_full_name.split("/")[-1]),
+                        full_name=repo_full_name,
+                        default_branch=repo_data.get("default_branch", "main"),
+                        url=repo_data.get("html_url", f"https://github.com/{repo_full_name}"),
+                    )
+                    db.add(repo_record)
+                    await db.flush()
+                stats["repos"] += 1
+
+                # ── 2. Fetch and persist commits ──
+                page = 1
+                while page <= 5:  # Max 5 pages (500 commits)
+                    commit_res = await client.get(
+                        f"https://api.github.com/repos/{repo_full_name}/commits",
+                        params={"since": since_date.isoformat(), "per_page": 100, "page": page},
+                        headers=gh_headers,
+                    )
+                    if not commit_res.is_success:
+                        break
+                    commits_data = commit_res.json()
+                    if not commits_data:
+                        break
+
+                    for c in commits_data:
+                        sha = c.get("sha", "")
+                        if not sha:
+                            continue
+
+                        # Check if commit already exists
+                        existing_commit = await db.execute(
+                            select(Commit).where(
+                                Commit.repository_id == repo_record.id,
+                                Commit.sha == sha,
+                            )
+                        )
+                        if existing_commit.scalar_one_or_none():
+                            continue  # Already synced
+
+                        # Match author to TeamMember
+                        author_login = (c.get("author") or {}).get("login", "")
+                        commit_info = c.get("commit", {})
+                        author_name = (commit_info.get("author") or {}).get("name", "")
+                        committed_at_str = (commit_info.get("author") or {}).get("date", "")
+
+                        member = gh_user_map.get(author_login.lower()) if author_login else None
+                        if not member and author_name:
+                            member = name_map.get(author_name.lower())
+
+                        try:
+                            committed_at = datetime.fromisoformat(committed_at_str.replace("Z", "+00:00"))
+                        except (ValueError, TypeError):
+                            committed_at = now
+
+                        commit_record = Commit(
+                            id=generate_cuid(),
+                            repository_id=repo_record.id,
+                            sha=sha,
+                            message=(commit_info.get("message") or "")[:500],
+                            author_id=member.id if member else None,
+                            branch=repo_record.default_branch,
+                            linked_ticket_ids=[],
+                            files_changed=0,
+                            committed_at=committed_at,
+                        )
+                        db.add(commit_record)
+                        stats["commits"] += 1
+
+                        # Create ActivityEvent for team health tracking
+                        if member:
+                            await record_activity(
+                                db=db,
+                                org_id=org_id,
+                                team_member_id=member.id,
+                                event_type="push",
+                                source_tool="github",
+                                occurred_at=committed_at,
+                                external_id=sha[:12],
+                                metadata={
+                                    "repo": repo_full_name,
+                                    "message": (commit_info.get("message") or "")[:200],
+                                    "author": author_login or author_name,
+                                },
+                            )
+                            stats["events"] += 1
+
+                    page += 1
+
+                # ── 3. Fetch and persist PRs ──
+                pr_res = await client.get(
+                    f"https://api.github.com/repos/{repo_full_name}/pulls",
+                    params={"state": "all", "per_page": 100, "sort": "updated", "direction": "desc"},
+                    headers=gh_headers,
+                )
+                if pr_res.is_success:
+                    for pr_data in pr_res.json():
+                        pr_ext_id = str(pr_data["id"])
+
+                        existing_pr = await db.execute(
+                            select(PullRequest).where(
+                                PullRequest.repository_id == repo_record.id,
+                                PullRequest.external_id == pr_ext_id,
+                            )
+                        )
+                        if existing_pr.scalar_one_or_none():
+                            continue
+
+                        pr_author_login = (pr_data.get("user") or {}).get("login", "")
+                        pr_member = gh_user_map.get(pr_author_login.lower()) if pr_author_login else None
+
+                        pr_state = pr_data.get("state", "open")
+                        merged_at = pr_data.get("merged_at")
+                        if merged_at:
+                            status = "MERGED"
+                        elif pr_state == "closed":
+                            status = "CLOSED"
+                        else:
+                            status = "OPEN"
+
+                        try:
+                            created_at = datetime.fromisoformat(pr_data["created_at"].replace("Z", "+00:00"))
+                        except (ValueError, TypeError):
+                            created_at = now
+
+                        try:
+                            merged_dt = datetime.fromisoformat(merged_at.replace("Z", "+00:00")) if merged_at else None
+                        except (ValueError, TypeError):
+                            merged_dt = None
+
+                        pr_record = PullRequest(
+                            id=generate_cuid(),
+                            repository_id=repo_record.id,
+                            external_id=pr_ext_id,
+                            number=pr_data.get("number", 0),
+                            title=(pr_data.get("title") or "")[:500],
+                            status=status,
+                            author_id=pr_member.id if pr_member else None,
+                            reviewers=[],
+                            ci_status="UNKNOWN",
+                            url=pr_data.get("html_url", ""),
+                            created_external_at=created_at,
+                            merged_at=merged_dt,
+                        )
+                        db.add(pr_record)
+                        stats["prs"] += 1
+
+                        # Create activity event for PR
+                        if pr_member:
+                            event_type = "pr_merged" if status == "MERGED" else "pull_request"
+                            await record_activity(
+                                db=db,
+                                org_id=org_id,
+                                team_member_id=pr_member.id,
+                                event_type=event_type,
+                                source_tool="github",
+                                occurred_at=merged_dt or created_at,
+                                external_id=pr_ext_id,
+                                metadata={
+                                    "repo": repo_full_name,
+                                    "title": (pr_data.get("title") or "")[:200],
+                                    "number": pr_data.get("number"),
+                                    "status": status,
+                                },
+                            )
+                            stats["events"] += 1
+
+            except httpx.RequestError as e:
+                logger.warning(f"GitHub sync: request error for {repo_full_name}: {e}")
+                continue
+
+    await db.commit()
+
+    logger.info(f"GitHub sync complete for org {org_id}: {stats}")
+    return {"ok": True, "stats": stats}
+
+
+@router.post("/github/sync")
+async def sync_github_data(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /github/sync — Pull commits, PRs, repos from GitHub API → persist to DB."""
+    org_id = current_user.get("organization_id", "demo-org")
+    return await _run_github_sync(db, org_id)

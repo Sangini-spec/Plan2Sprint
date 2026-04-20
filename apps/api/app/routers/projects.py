@@ -58,8 +58,13 @@ async def list_imported_projects(
                 )
             )
         else:
+            # Developer has no team member records — show empty, not everything
+            # They need to be added as a team member on a project first
             result = await db.execute(
-                select(ImportedProject).where(ImportedProject.organization_id == org_id)
+                select(ImportedProject).where(
+                    ImportedProject.organization_id == org_id,
+                    ImportedProject.id == "__none__",  # Returns empty
+                )
             )
     else:
         # PO, Stakeholder, Admin see all org projects
@@ -88,6 +93,7 @@ async def list_imported_projects(
     }
 
 
+@router.post("")
 @router.post("/")
 async def save_imported_project(
     body: dict,
@@ -229,9 +235,13 @@ async def get_selected_project(
     if not pref or not pref.selected_project_id:
         return {"selectedProject": None}
 
-    # Fetch the actual project details
+    # Fetch the actual project details — scoped to org for security
+    org_id = current_user.get("organization_id", "demo-org")
     proj_result = await db.execute(
-        select(ImportedProject).where(ImportedProject.id == pref.selected_project_id)
+        select(ImportedProject).where(
+            ImportedProject.id == pref.selected_project_id,
+            ImportedProject.organization_id == org_id,
+        )
     )
     project = proj_result.scalar_one_or_none()
     if not project:
@@ -321,7 +331,10 @@ async def list_stakeholder_assignments(
     projects_map = {}
     if project_ids:
         proj_result = await db.execute(
-            select(ImportedProject).where(ImportedProject.id.in_(project_ids))
+            select(ImportedProject).where(
+                ImportedProject.id.in_(project_ids),
+                ImportedProject.organization_id == org_id,
+            )
         )
         for p in proj_result.scalars().all():
             projects_map[p.id] = p

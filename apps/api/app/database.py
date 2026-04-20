@@ -3,14 +3,16 @@ from .config import settings
 
 engine = create_async_engine(
     settings.database_url,
-    echo=False,  # Never log SQL in hot path — use debug logging separately
-    pool_size=20,  # Increased from 10 to handle concurrent dashboard requests
-    max_overflow=30,  # Increased from 20 for burst traffic
+    echo=False,
+    pool_size=2,          # Minimal pool — Azure PostgreSQL basic tier has limited slots
+    max_overflow=3,       # Burst to 5 max
     pool_pre_ping=True,
-    pool_recycle=600,  # Recycle connections every 10 min to avoid stale connections
+    pool_recycle=120,     # Recycle every 2 min
+    pool_timeout=30,
+    pool_reset_on_return="rollback",
     connect_args={
-        "statement_cache_size": 200,  # Re-enable query plan caching (was 0 = disabled!)
-        "timeout": 10,  # Increased from 5s to avoid premature failures
+        "statement_cache_size": 0,   # Disable to avoid prepared statement conflicts
+        "timeout": 15,               # Connection timeout
     },
 )
 

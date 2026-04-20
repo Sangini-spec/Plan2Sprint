@@ -946,6 +946,7 @@ async def get_plan_summary(
         "projectCompletionSummary": plan.project_completion_summary,
         "approvedAt": plan.approved_at.isoformat() if plan.approved_at else None,
         "createdAt": plan.created_at.isoformat() if plan.created_at else None,
+        "isRebalanced": getattr(plan, 'is_rebalanced', False),
     }
 
 
@@ -1151,12 +1152,8 @@ async def get_project_plan_optimized(
         if sprints_for_feature:
             primary_sprint = min(sprints_for_feature)
 
-            # Completed features are already done — show them in the earliest
-            # sprint window (Sprint 1) so the timeline reflects reality: done
-            # work appears at the start, remaining work is planned forward.
-            if gantt_status == "complete" and all_sprint_nums:
-                primary_sprint = all_sprint_nums[0]
-
+            # Keep features in their assigned sprint regardless of completion status.
+            # This preserves the AI plan's distribution across sprints.
             phase_id = f"sprint-{primary_sprint}"
 
             # Use the primary sprint's date range for the Gantt bar.
@@ -1218,6 +1215,7 @@ async def get_project_plan_optimized(
         "hasPlan": True,
         "planId": plan.id,
         "planStatus": plan.status,
+        "isRebalanced": getattr(plan, 'is_rebalanced', False),
         "features": assigned_rows,
         "unassigned": unassigned_rows,
         "phases": clean_phases,
@@ -1226,3 +1224,96 @@ async def get_project_plan_optimized(
         "inProgress": in_progress_count,
         "estDurationWeeks": plan.estimated_weeks_total,
     }
+
+
+# ---------------------------------------------------------------------------
+# Admin repair endpoint — gated on DEBUG env. Removed in production via config.
+# ---------------------------------------------------------------------------
+@router.post("/_admin/repair-iteration-links")
+async def _debug_repair_iteration_links(
+    projectId: str = Q(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """One-shot repair: re-point orphaned work_items to current project's iterations
+    by matching iteration external_id.
+
+    Scenario: project was re-imported → new iteration rows created with new internal
+    IDs but same external_ids. work_items still point to old iteration_ids that
+    belong to a different project (or a deleted project).
+    """
+    from sqlalchemy import text as _text
+    # Orphan iteration_ids: any iteration_id on work_items in this project that
+    # doesn't exist in this project's iterations table.
+    r = await db.execute(_text("""
+        SELECT DISTINCT wi.iteration_id, old_i.external_id as old_ext, old_i.name as old_name
+        FROM work_items wi
+        LEFT JOIN iterations old_i ON old_i.id = wi.iteration_id
+        WHERE wi.imported_project_id = :p
+          AND wi.iteration_id IS NOT NULL
+          AND (old_i.imported_project_id IS NULL OR old_i.imported_project_id != :p)
+    """), {"p": projectId})
+    orphans = [dict(row._mapping) for row in r.all()]
+
+    # Load current iterations for this project (for matching)
+    r2 = await db.execute(_text(
+        "SELECT id, name, external_id FROM iterations WHERE imported_project_id = :p"
+    ), {"p": projectId})
+    current_iters = [dict(row._mapping) for row in r2.all()]
+
+    def find_match(old_ext, old_name, old_id):
+        """Try to find a current iteration matching by ext, then by name, then by position."""
+        if old_ext:
+            for it in current_iters:
+                if it["external_id"] == old_ext:
+                    return it["id"]
+        if old_name:
+            for it in current_iters:
+                if it["name"] == old_name:
+                    return it["id"]
+        # Last resort: peek at another Plan2Sprint-ish project holding that iteration
+        return None
+
+    repairs = []
+    unrepaired = []
+    for orphan in orphans:
+        old_iter_id = orphan["iteration_id"]
+        old_ext = orphan["old_ext"]
+        old_name = orphan["old_name"]
+
+        # If old iteration was deleted (old_ext and old_name both NULL), try to
+        # infer which iteration it was via another surviving import.
+        if not old_name:
+            r3 = await db.execute(_text(
+                "SELECT name, external_id FROM iterations WHERE id = :id"
+            ), {"id": old_iter_id})
+            row = r3.first()
+            if row:
+                old_name = row[0]
+                old_ext = row[1]
+
+        new_id = find_match(old_ext, old_name, old_iter_id)
+        if not new_id:
+            unrepaired.append({"old_iteration_id": old_iter_id, "old_name": old_name, "old_ext": old_ext})
+            continue
+
+        upd = await db.execute(_text("""
+            UPDATE work_items
+            SET iteration_id = :new_id
+            WHERE imported_project_id = :p AND iteration_id = :old_id
+        """), {"new_id": new_id, "old_id": old_iter_id, "p": projectId})
+        repairs.append({
+            "old_iteration_id": old_iter_id,
+            "old_name": old_name,
+            "new_iteration_id": new_id,
+            "rows_updated": upd.rowcount,
+        })
+
+    await db.commit()
+    return {
+        "orphansFound": len(orphans),
+        "repairs": repairs,
+        "unrepaired": unrepaired,
+        "currentIterations": current_iters,
+    }
+
+

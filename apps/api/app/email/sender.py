@@ -6,6 +6,7 @@ import logging
 import smtplib
 import ssl
 from concurrent.futures import ThreadPoolExecutor
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -43,6 +44,46 @@ async def send_invite_email(
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, _smtp_send, msg, to_email)
+
+
+async def send_report_email(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    pdf_bytes: bytes,
+    pdf_filename: str = "weekly-report.pdf",
+) -> bool:
+    """Send an HTML email with a PDF attachment. Used by the Friday stakeholder report."""
+    import asyncio
+
+    if not settings.smtp_host or not settings.smtp_user:
+        log.warning("SMTP not configured — cannot send report to %s", to_email)
+        return False
+
+    msg = MIMEMultipart("mixed")
+    msg["From"] = settings.email_from_address
+    msg["To"] = to_email
+    msg["Subject"] = subject
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(_html_to_plain(html_body), "plain"))
+    alt.attach(MIMEText(html_body, "html"))
+    msg.attach(alt)
+
+    attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+    attachment.add_header("Content-Disposition", "attachment", filename=pdf_filename)
+    msg.attach(attachment)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_executor, _smtp_send, msg, to_email)
+
+
+def _html_to_plain(html: str) -> str:
+    """Very rough HTML → text fallback for the multipart alt body."""
+    import re
+    s = re.sub(r"<[^>]+>", " ", html)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def _smtp_send(msg: MIMEMultipart, to_email: str) -> bool:

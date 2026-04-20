@@ -128,6 +128,13 @@ class SprintPlan(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    # Rebalancing fields
+    is_rebalanced: Mapped[bool] = mapped_column(
+        Boolean, name="is_rebalanced", nullable=False, default=False
+    )
+    rebalance_source_id: Mapped[Optional[str]] = mapped_column(
+        String(25), name="rebalance_source_id", nullable=True
+    )
 
     # -- relationships --
     organization: Mapped["Organization"] = relationship(
@@ -202,3 +209,88 @@ class PlanAssignment(Base):
     team_member: Mapped["TeamMember"] = relationship(
         back_populates="plan_assignments"
     )
+
+
+class RebalanceProposal(Base):
+    __tablename__ = "rebalance_proposals"
+
+    id: Mapped[str] = mapped_column(
+        String(25), primary_key=True, default=generate_cuid
+    )
+    organization_id: Mapped[str] = mapped_column(
+        String(25),
+        ForeignKey("organizations.id"),
+        name="organization_id",
+        nullable=False,
+    )
+    sprint_plan_id: Mapped[str] = mapped_column(
+        String(25),
+        ForeignKey("sprint_plans.id"),
+        name="sprint_plan_id",
+        nullable=False,
+    )
+    project_id: Mapped[Optional[str]] = mapped_column(
+        String(25),
+        ForeignKey("imported_projects.id"),
+        name="project_id",
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="GENERATING"
+    )
+    mode: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="PROTECT_TIMELINE"
+    )
+    target_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), name="target_date", nullable=True
+    )
+    summary: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True
+    )
+    ai_rationale: Mapped[Optional[Any]] = mapped_column(
+        JSON, name="ai_rationale", nullable=True
+    )
+    po_guidance: Mapped[Optional[str]] = mapped_column(
+        String, name="po_guidance", nullable=True
+    )
+    original_success_probability: Mapped[Optional[int]] = mapped_column(
+        Integer, name="original_success_probability", nullable=True
+    )
+    projected_success_probability: Mapped[Optional[int]] = mapped_column(
+        Integer, name="projected_success_probability", nullable=True
+    )
+    original_end_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), name="original_end_date", nullable=True
+    )
+    projected_end_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), name="projected_end_date", nullable=True
+    )
+    sprint_allocations: Mapped[Optional[Any]] = mapped_column(
+        JSON, name="sprint_allocations", nullable=True
+    )
+    changes_summary: Mapped[Optional[Any]] = mapped_column(
+        JSON, name="changes_summary", nullable=True
+    )
+    downstream_impact: Mapped[Optional[Any]] = mapped_column(
+        JSON, name="downstream_impact", nullable=True
+    )
+    new_plan_id: Mapped[Optional[str]] = mapped_column(
+        String(25), name="new_plan_id", nullable=True
+    )
+    ai_model_used: Mapped[Optional[str]] = mapped_column(
+        String, name="ai_model_used", nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), name="created_at", server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        name="updated_at",
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    # -- relationships --
+    organization: Mapped["Organization"] = relationship()
+    sprint_plan: Mapped["SprintPlan"] = relationship()
+    project: Mapped[Optional["ImportedProject"]] = relationship()

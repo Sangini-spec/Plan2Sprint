@@ -601,7 +601,27 @@ async def jira_status(
         "cloud_id": config.get("cloud_id", ""),
         "auth_method": config.get("auth_method", "basic"),
         "connected_at": conn.created_at.isoformat() if conn.created_at else None,
+        "selectedProjects": config.get("selectedProjects", []),
     }
+
+
+@router.post("/selected-projects")
+async def save_selected_projects_jira(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /selected-projects — Persist user's selected Jira projects in connection config."""
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_jira_connection(db, org_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Jira not connected")
+
+    config = dict(conn.config or {})
+    config["selectedProjects"] = body.get("projects", [])
+    conn.config = config
+    await db.commit()
+    return {"ok": True}
 
 
 @router.post("/disconnect")
@@ -1098,10 +1118,23 @@ async def fetch_board_columns(
 async def receive_webhook(request: Request):
     """
     POST /webhooks
-    Receive Jira webhook events.
+    Receive Jira webhook events. Validates webhook signature if configured.
     """
     try:
         body_bytes = await request.body()
+
+        # Verify webhook signature if a secret is configured
+        webhook_secret = getattr(settings, "jira_webhook_secret", "") or ""
+        if webhook_secret:
+            import hmac
+            import hashlib
+            signature = request.headers.get("X-Atlassian-Webhook-Signature", "")
+            expected = hmac.new(
+                webhook_secret.encode(), body_bytes, hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(signature, expected):
+                raise HTTPException(status_code=403, detail="Invalid webhook signature")
+
         body_text = body_bytes.decode("utf-8")
 
         import json

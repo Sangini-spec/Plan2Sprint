@@ -51,6 +51,23 @@ async def _get_github_connection(db: AsyncSession, org_id: str):
     return result.scalar_one_or_none()
 
 
+async def _resolve_github_token(db: AsyncSession, org_id: str, body_token: str | None = None) -> str:
+    """Get GitHub token from DB (preferred) or fallback to body token.
+
+    Security: always prefer DB-stored token to prevent cross-org token injection.
+    """
+    from ...services.encryption import decrypt_token
+    conn = await _get_github_connection(db, org_id)
+    if conn and conn.access_token:
+        try:
+            return decrypt_token(conn.access_token)
+        except Exception:
+            pass
+    if body_token:
+        return body_token
+    return ""
+
+
 async def _save_github_connection(
     db: AsyncSession, org_id: str, access_token: str,
     user_login: str = "", user_name: str = "", avatar_url: str = "",
@@ -144,12 +161,21 @@ async def github_status(
     org_id = current_user.get("organization_id", "")
     conn = await _get_github_connection(db, org_id)
     if conn and conn.access_token:
+        from ...services.encryption import decrypt_token
         cfg = conn.config or {}
+        # Decrypt token so frontend can use it for GitHub API calls
+        try:
+            decrypted_token = decrypt_token(conn.access_token)
+        except Exception:
+            # Token may be stored unencrypted (legacy) — use as-is
+            decrypted_token = conn.access_token or ""
         return {
             "connected": True,
             "user_login": cfg.get("user_login", ""),
             "user_name": cfg.get("user_name", ""),
             "avatar_url": cfg.get("avatar_url", ""),
+            "linked_repos": cfg.get("linked_repos", []),
+            "access_token": decrypted_token,
             "connected_at": conn.created_at.isoformat() if conn.created_at else None,
         }
     return {"connected": False}
@@ -436,9 +462,21 @@ async def link_developer_github(
                 select(TeamMember).where(
                     TeamMember.organization_id == org_id,
                     TeamMember.display_name.ilike(user_name_from_token),
+                    TeamMember.role == "developer",
                 )
             )
             member = result2.scalar_one_or_none()
+
+    if not member:
+        # Last resort: find any developer team member in the org without a GitHub link
+        result3 = await db.execute(
+            select(TeamMember).where(
+                TeamMember.organization_id == org_id,
+                TeamMember.role == "developer",
+                TeamMember.github_username.is_(None),
+            ).limit(1)
+        )
+        member = result3.scalar_one_or_none()
 
     if not member:
         raise HTTPException(
@@ -471,6 +509,19 @@ async def developer_github_status(
         )
     )
     member = result.scalar_one_or_none()
+
+    # Fallback: try matching by full_name
+    if not member:
+        full_name = current_user.get("full_name", "")
+        if full_name:
+            result2 = await db.execute(
+                select(TeamMember).where(
+                    TeamMember.organization_id == org_id,
+                    TeamMember.display_name.ilike(full_name),
+                    TeamMember.role == "developer",
+                )
+            )
+            member = result2.scalar_one_or_none()
 
     if member and member.github_username:
         return {"linked": True, "githubUsername": member.github_username}
@@ -520,9 +571,11 @@ async def list_repos_demo(current_user: dict = Depends(get_current_user)):
 async def fetch_repos(
     body: dict,
     current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """POST /repos -- fetch real repos using OAuth access token."""
-    access_token = body.get("accessToken")
+    org_id = current_user.get("organization_id", "demo-org")
+    access_token = await _resolve_github_token(db, org_id, body.get("accessToken"))
     if not access_token:
         raise HTTPException(status_code=400, detail="Missing access token")
 
@@ -590,9 +643,11 @@ async def fetch_repos(
 async def create_repo(
     body: dict,
     current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """POST /repos/create -- create a new GitHub repository."""
-    access_token = body.get("accessToken")
+    org_id = current_user.get("organization_id", "demo-org")
+    access_token = await _resolve_github_token(db, org_id, body.get("accessToken"))
     name = (body.get("name") or "").strip()
     description = (body.get("description") or "").strip()
     is_private = body.get("isPrivate", True)
@@ -697,9 +752,11 @@ async def list_pulls_demo(
 async def fetch_pulls(
     body: dict,
     current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """POST /pulls -- fetch real PRs for linked repos using OAuth access token."""
-    access_token = body.get("accessToken")
+    org_id = current_user.get("organization_id", "demo-org")
+    access_token = await _resolve_github_token(db, org_id, body.get("accessToken"))
     repos = body.get("repos", [])
 
     if not access_token or not repos:
@@ -826,9 +883,11 @@ async def list_commits_demo(
 async def fetch_commits(
     body: dict,
     current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """POST /commits -- fetch real commits for linked repos."""
-    access_token = body.get("accessToken")
+    org_id = current_user.get("organization_id", "demo-org")
+    access_token = await _resolve_github_token(db, org_id, body.get("accessToken"))
     repos = body.get("repos", [])
 
     if not access_token or not repos:
@@ -888,9 +947,11 @@ async def fetch_commits(
 async def fetch_events(
     body: dict,
     current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """POST /events -- fetch recent activity events for linked repos."""
-    access_token = body.get("accessToken")
+    org_id = current_user.get("organization_id", "demo-org")
+    access_token = await _resolve_github_token(db, org_id, body.get("accessToken"))
     repos = body.get("repos", [])
 
     if not access_token or not repos:

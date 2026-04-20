@@ -28,6 +28,7 @@ from ..models.activity import ActivityEvent
 from ..models.analytics import HealthSignal, BurnoutAlert, VelocityProfile
 from ..models.work_item import WorkItem
 from ..models.team_member import TeamMember
+from ..models.organization import Organization
 from .ws_manager import ws_manager
 from ..models.repository import PullRequest
 
@@ -49,6 +50,29 @@ BLOCKER_STALE_HOURS = 24
 
 BURNOUT_AFTER_HOURS_THRESHOLD = 0.3    # > 30% of events are after hours
 BURNOUT_CONSECUTIVE_SPRINTS = 2         # overloaded for 2+ sprints
+
+
+async def _get_org_hours(db: AsyncSession, org_id: str) -> tuple[int, int]:
+    """Return (start_hour, end_hour) from org settings, falling back to 9-18.
+    Uses integer hours for SQL comparisons. Half-hours round: start down, end up."""
+    result = await db.execute(
+        select(Organization.working_hours_start, Organization.working_hours_end)
+        .where(Organization.id == org_id)
+    )
+    row = result.one_or_none()
+    if row and row[0] is not None and row[1] is not None:
+        try:
+            s_parts = str(row[0]).split(":")
+            e_parts = str(row[1]).split(":")
+            start = int(s_parts[0])
+            end_h = int(e_parts[0])
+            end_m = int(e_parts[1]) if len(e_parts) > 1 else 0
+            end = end_h + (1 if end_m > 0 else 0)  # round up
+            if 0 <= start <= 23 and start < end <= 24:
+                return start, end
+        except (ValueError, IndexError):
+            pass
+    return WORKING_HOURS_START, WORKING_HOURS_END
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +298,9 @@ async def evaluate_all_signals(
     Run all signal evaluators for all team members in the org.
     Typically called periodically (e.g. every hour) or after a sync.
     """
+    # Load org-specific working hours for after-hours detection
+    org_start, org_end = await _get_org_hours(db, org_id)
+
     # Get all team members
     result = await db.execute(
         select(TeamMember).where(TeamMember.organization_id == org_id)

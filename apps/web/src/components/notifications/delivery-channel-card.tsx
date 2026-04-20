@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -10,6 +11,9 @@ import {
   MessageSquare,
   Video,
   Phone,
+  Copy,
+  Check,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui";
@@ -405,9 +409,120 @@ export function DeliveryChannelCard({
             <p className="text-[11px] text-[var(--text-secondary)]/60">
               {config.adminNote}
             </p>
+            {platform === "teams" && <TeamsAdminConsentHint />}
           </>
         )}
       </div>
     </motion.div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  TEAMS ADMIN CONSENT HINT                                                  */
+/*                                                                            */
+/*  Microsoft's user-consent flow hits an "Approval required" wall for admin- */
+/*  only scopes (User.Read.All, Team.ReadBasic.All, Channel.Create). Give the */
+/*  user an explicit path: open the Microsoft admin-consent URL (opens cold,  */
+/*  no Plan2Sprint login needed) or copy it to send to their IT admin.        */
+/* -------------------------------------------------------------------------- */
+
+function TeamsAdminConsentHint() {
+  const [expanded, setExpanded] = useState(false);
+  const [url, setUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!expanded || url) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/integrations/teams/admin-consent-url");
+        if (res.ok) {
+          const data = await res.json();
+          setUrl(data.url ?? null);
+        }
+      } catch { /* ignore */ }
+    })();
+  }, [expanded, url]);
+
+  const copy = async () => {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* ignore */ }
+  };
+
+  if (!expanded) {
+    return (
+      <button
+        onClick={() => setExpanded(true)}
+        className="text-[11px] text-[var(--color-brand-secondary)] hover:underline cursor-pointer"
+      >
+        Seeing &ldquo;Approval required&rdquo;? →
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 w-full max-w-[320px] rounded-lg bg-[var(--bg-surface-raised)] border border-[var(--border-subtle)] p-3 space-y-2.5 text-left">
+      <div className="flex items-start gap-2">
+        <ShieldCheck size={14} className="shrink-0 text-[var(--color-brand-secondary)] mt-0.5" />
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-semibold text-[var(--text-primary)] leading-snug">
+            Needs IT admin approval
+          </p>
+          <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+            Three of the Microsoft scopes are admin-only. Send the link below
+            to a Microsoft tenant admin (Global / Application / Cloud Application
+            Administrator). When they open it in any browser and click{" "}
+            <span className="font-medium">Accept</span>, consent is granted
+            tenant-wide — every user can then Connect without individual
+            approval requests.
+          </p>
+        </div>
+      </div>
+
+      {url ? (
+        <div className="flex items-center gap-1.5 rounded-md bg-[var(--bg-surface)] border border-[var(--border-subtle)] px-2 py-1.5">
+          <code className="flex-1 text-[10px] text-[var(--text-secondary)] truncate font-mono">
+            {url}
+          </code>
+          <button
+            onClick={copy}
+            title="Copy link"
+            className="shrink-0 p-1 rounded hover:bg-[var(--bg-surface-raised)] cursor-pointer"
+          >
+            {copied ? (
+              <Check size={12} className="text-[var(--color-rag-green)]" />
+            ) : (
+              <Copy size={12} className="text-[var(--text-secondary)]" />
+            )}
+          </button>
+        </div>
+      ) : (
+        <p className="text-[11px] text-[var(--text-tertiary)]">Loading link…</p>
+      )}
+
+      {url && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--color-brand-secondary)] hover:underline"
+        >
+          Open it now (I am the IT admin) →
+        </a>
+      )}
+
+      <p className="text-[10px] text-[var(--text-tertiary)] leading-relaxed">
+        Heads up: Plan2Sprint isn&apos;t Microsoft-verified yet, so the consent
+        screen shows an &ldquo;Unverified app&rdquo; banner. That&apos;s a
+        label, not a block — the admin can still click Accept. Only Global /
+        Application / Cloud Application Administrators in your tenant can
+        grant consent; a regular user clicking this link will be denied by
+        Microsoft.
+      </p>
+    </div>
   );
 }

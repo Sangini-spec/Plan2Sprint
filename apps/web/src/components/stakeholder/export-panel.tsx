@@ -93,7 +93,7 @@ export function ExportPanel() {
     }
   };
 
-  // Export PDF (HTML report that can be printed as PDF)
+  // Export PDF report (downloads as HTML file — open in browser and Ctrl+P to save as PDF)
   const handleExportPDF = async () => {
     setPdfStatus("loading");
     try {
@@ -103,8 +103,13 @@ export function ExportPanel() {
       if (!res.ok) throw new Error("Export failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      // Open in new tab so user can use browser Print > Save as PDF
-      window.open(url, "_blank");
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Plan2Sprint-Report.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
       setPdfStatus("success");
       setLastExported(new Date().toLocaleDateString());
       setTimeout(() => setPdfStatus("idle"), 3000);
@@ -238,46 +243,88 @@ export function ExportPanel() {
       </DashboardPanel>
 
       {/* Weekly Report Section */}
-      <DashboardPanel title="Weekly Report" icon={CalendarClock}>
-        <div className="space-y-4">
-          <p className="text-sm text-[var(--text-secondary)]">
-            Weekly project summary reports are generated automatically. Configure email
-            delivery in your{" "}
-            <a
-              href="/settings/notifications"
-              className="text-[var(--color-brand-secondary)] hover:underline"
-            >
-              notification settings
-            </a>
-            .
-          </p>
+      <WeeklyReportSection projectId={selectedProject?.internalId} />
+    </div>
+  );
+}
 
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/10">
-                  <CalendarClock size={20} className="text-blue-400" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-[var(--text-primary)]">
-                    No weekly report yet
-                  </p>
-                  <p className="text-xs text-[var(--text-secondary)]">
-                    Reports are generated every Monday at 9:00 AM
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="secondary"
-                onClick={handleExportPDF}
-                disabled={pdfStatus === "loading" || !overview}
-              >
-                Generate Now
-              </Button>
+
+// ---------------------------------------------------------------------------
+// Weekly Report Sub-Component
+// Clicks "Generate Now" → downloads the same one-page PDF that gets emailed
+// to stakeholders every Friday at 5:00 PM IST via the backend scheduler.
+// ---------------------------------------------------------------------------
+
+function WeeklyReportSection({ projectId }: { projectId: string | undefined }) {
+  const [status, setStatus] = useState<ExportStatus>("idle");
+
+  // "Generate Now" triggers a browser download of the one-page weekly PDF —
+  // the same PDF that's emailed to stakeholders every Friday at 5:00 PM IST.
+  const handleGenerate = async () => {
+    if (!projectId) return;
+    setStatus("loading");
+    try {
+      const res = await fetch(`/api/reports/weekly?projectId=${projectId}`);
+      if (!res.ok) throw new Error("Failed to generate report");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `plan2sprint-weekly-report.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setStatus("success");
+      setTimeout(() => setStatus("idle"), 3000);
+    } catch {
+      setStatus("error");
+      setTimeout(() => setStatus("idle"), 3000);
+    }
+  };
+
+  const buttonLabel = () => {
+    if (status === "loading") return "Generating...";
+    if (status === "success") return "Downloaded";
+    if (status === "error") return "Try again";
+    return "Generate Now";
+  };
+
+  return (
+    <DashboardPanel title="Weekly Report" icon={CalendarClock}>
+      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] p-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/10">
+              <CalendarClock size={20} className="text-blue-400" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-[var(--text-primary)]">
+                Weekly stakeholder PDF
+              </p>
+              <p className="text-xs text-[var(--text-secondary)]">
+                Reports are generated every Friday at 5:00 PM IST
+              </p>
             </div>
           </div>
+          <Button
+            variant="primary"
+            onClick={handleGenerate}
+            disabled={status === "loading" || !projectId}
+          >
+            {status === "loading" ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : status === "success" ? (
+              <CheckCircle2 size={14} />
+            ) : status === "error" ? (
+              <AlertCircle size={14} />
+            ) : (
+              <FileDown size={14} />
+            )}
+            {buttonLabel()}
+          </Button>
         </div>
-      </DashboardPanel>
-    </div>
+      </div>
+    </DashboardPanel>
   );
 }

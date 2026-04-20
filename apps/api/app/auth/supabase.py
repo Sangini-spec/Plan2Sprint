@@ -149,7 +149,8 @@ async def get_current_user(
         token = request.cookies.get("sb-access-token")
 
     if not token:
-        if settings.debug:
+        # SECURITY: Only explicit demo_mode bypasses auth, not debug flag
+        if settings.is_demo_mode:
             return DEMO_USER
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -192,11 +193,8 @@ async def get_current_user(
     except JWTError as e:
         logger.error(f"JWT decode failed: {e}, alg={token_alg}, token_start={token[:30]}...")
 
-        # In debug mode, fall back to demo user even if token is invalid
-        if settings.debug:
-            logger.warning("Debug mode: falling back to demo user despite invalid token")
-            return DEMO_USER
-
+        # SECURITY: Never fall back to demo user on JWT failure.
+        # Only settings.is_demo_mode (explicit opt-in) bypasses auth.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid or expired token: {str(e)}",

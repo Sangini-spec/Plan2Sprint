@@ -63,7 +63,6 @@ const DEV_NAV: NavItem[] = [
   { label: "Standup", href: "/dev/standup", icon: MessageSquareText, iconColor: "#34d399" },
   { label: "GitHub", href: "/dev/github", icon: GitPullRequest, iconColor: "#e879f9" },
   { label: "Projects", href: "/dev/projects", icon: FolderKanban, iconColor: "#a78bfa" },
-  { label: "Velocity", href: "/dev/velocity", icon: TrendingUp, iconColor: "#fb923c" },
   { label: "Channels", href: "/dev/notifications", icon: Inbox, iconColor: "#fbbf24" },
 ];
 

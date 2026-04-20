@@ -358,7 +358,7 @@ PROJECT ANALYSIS:
 Respond with ONLY a JSON object (no markdown, no explanation outside JSON) matching this schema:
 
 {{
-  "overall_rationale": "string — 2-3 sentence summary including how many sprints needed and why",
+  "overall_rationale": "string — 4-6 sentence detailed explanation: how features are grouped into sprints, why this grouping makes sense (related features together), what the sprint capacity looks like, any risks or trade-offs, and what the PO should pay attention to. Be specific about which features go into which sprints and why.",
   "goal_attainment_confidence": 0.85,
   "risk_level": "LOW | MODERATE | HIGH",
   "estimated_sprints": 3,

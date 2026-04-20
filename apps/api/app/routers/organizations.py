@@ -157,15 +157,9 @@ async def list_members(
     )
     team_members = tm_result.scalars().all()
 
-    # 3) Check Supabase auth.users to determine who has ever logged in
-    active_emails: set[str] = set()
-    try:
-        auth_result = await db.execute(
-            text("SELECT email FROM auth.users WHERE last_sign_in_at IS NOT NULL")
-        )
-        active_emails = {row[0].lower() for row in auth_result.all()}
-    except Exception:
-        pass  # If auth.users is inaccessible, fall back to users table
+    # 3) Determine active status — users in the users table are considered active.
+    #    (auth.users is Supabase-only and not available on Azure PostgreSQL)
+    active_emails: set[str] = {u.email.lower() for u in users}
 
     # 4) Fetch project assignments: member_id -> list of project names
     #    Sources: WorkItem assignees + StakeholderProjectAssignment (manual assigns)

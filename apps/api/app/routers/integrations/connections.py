@@ -97,7 +97,11 @@ async def get_connection(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(ToolConnection).where(ToolConnection.id == connection_id)
+    org_id = current_user.get("organization_id", "demo-org")
+    query = select(ToolConnection).where(
+        ToolConnection.id == connection_id,
+        ToolConnection.organization_id == org_id,
+    )
     result = await db.execute(query)
     conn = result.scalar_one_or_none()
 
@@ -121,7 +125,11 @@ async def update_connection(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(ToolConnection).where(ToolConnection.id == connection_id)
+    org_id = current_user.get("organization_id", "demo-org")
+    query = select(ToolConnection).where(
+        ToolConnection.id == connection_id,
+        ToolConnection.organization_id == org_id,
+    )
     result = await db.execute(query)
     conn = result.scalar_one_or_none()
 
@@ -143,7 +151,11 @@ async def delete_connection(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(ToolConnection).where(ToolConnection.id == connection_id)
+    org_id = current_user.get("organization_id", "demo-org")
+    query = select(ToolConnection).where(
+        ToolConnection.id == connection_id,
+        ToolConnection.organization_id == org_id,
+    )
     result = await db.execute(query)
     conn = result.scalar_one_or_none()
 

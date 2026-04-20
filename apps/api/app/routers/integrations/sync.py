@@ -229,6 +229,8 @@ async def auto_sync_project(
 
     source_tool = (project.source_tool or "ado").upper()
     project_name = project.name
+    # ADO: prefer external_id (GUID) for API calls — more reliable than name
+    project_ado_ref = project.external_id or project_name
     project_key = getattr(project, "key", None) or project_name
 
     try:
@@ -254,11 +256,11 @@ async def auto_sync_project(
             if auth_method == "oauth2":
                 access_token = await _get_valid_access_token(db, conn)
 
-            # Fetch iterations
+            # Fetch iterations (use GUID ref for reliability)
             try:
                 iter_data = await _ado_api(
                     "GET",
-                    f"{org_url}/{project_name}/_apis/work/teamsettings/iterations?api-version=7.0",
+                    f"{org_url}/{project_ado_ref}/_apis/work/teamsettings/iterations?api-version=7.0",
                     access_token, auth_header=auth_header,
                 )
                 raw_iterations = iter_data.get("value", [])
@@ -269,25 +271,25 @@ async def auto_sync_project(
             try:
                 teams_data = await _ado_api(
                     "GET",
-                    f"{org_url}/_apis/projects/{project_name}/teams?api-version=7.0",
+                    f"{org_url}/_apis/projects/{project_ado_ref}/teams?api-version=7.0",
                     access_token, auth_header=auth_header,
                 )
                 teams = teams_data.get("value", [])
                 if teams:
                     members_data = await _ado_api(
                         "GET",
-                        f"{org_url}/_apis/projects/{project_name}/teams/{teams[0]['id']}/members?api-version=7.0",
+                        f"{org_url}/_apis/projects/{project_ado_ref}/teams/{teams[0]['id']}/members?api-version=7.0",
                         access_token, auth_header=auth_header,
                     )
                     raw_members = members_data.get("value", [])
             except Exception as e:
                 logger.warning(f"Failed to fetch team members: {e}")
 
-            # Fetch work items via WIQL
+            # Fetch work items via WIQL (use project name in WHERE clause — ADO requires it)
             try:
                 wiql_data = await _ado_api(
                     "POST",
-                    f"{org_url}/{project_name}/_apis/wit/wiql?api-version=7.0",
+                    f"{org_url}/{project_ado_ref}/_apis/wit/wiql?api-version=7.0",
                     access_token,
                     json_body={
                         "query": (

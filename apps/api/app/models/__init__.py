@@ -28,7 +28,7 @@ from .iteration import Iteration
 from .repository import Repository, PullRequest, Commit
 from .activity import ActivityEvent
 from .standup import StandupReport, TeamStandupDigest, BlockerFlag
-from .sprint_plan import SprintPlan, PlanAssignment
+from .sprint_plan import SprintPlan, PlanAssignment, RebalanceProposal
 from .analytics import VelocityProfile, HealthSignal, BurnoutAlert
 from .retrospective import Retrospective, RetroActionItem
 from .audit_log import AuditLogEntry
@@ -38,6 +38,7 @@ from .imported_project import ImportedProject, UserProjectPreference, Stakeholde
 from .sprint_constraint import SprintConstraint
 from .project_phase import ProjectPhase, PhaseAssignmentRule
 from .invitation import Invitation
+from .note import Note
 
 __all__ = [
     "Base",
@@ -70,6 +71,7 @@ __all__ = [
     "BlockerFlag",
     "SprintPlan",
     "PlanAssignment",
+    "RebalanceProposal",
     "VelocityProfile",
     "HealthSignal",
     "BurnoutAlert",
@@ -85,4 +87,5 @@ __all__ = [
     "ProjectPhase",
     "PhaseAssignmentRule",
     "Invitation",
+    "Note",
 ]

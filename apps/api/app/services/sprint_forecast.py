@@ -146,6 +146,39 @@ async def calculate_success_probability(
     done_row = done_result.one()
     done_sp = float(done_row[1])
 
+    # --- Fallback: if iteration has 0 items, use project-level data ---
+    # Many ADO/Jira projects don't assign items to iterations, so the
+    # iteration-scoped query returns empty. Fall back to all project items.
+    using_project_fallback = False
+    if total_items == 0 and project_id:
+        proj_filters = [
+            WorkItem.organization_id == org_id,
+            WorkItem.imported_project_id == project_id,
+        ]
+        proj_result = await db.execute(
+            select(
+                func.count().label("total"),
+                func.coalesce(func.sum(WorkItem.story_points), 0).label("total_sp"),
+            ).where(*proj_filters)
+        )
+        proj_row = proj_result.one()
+        total_items = proj_row[0]
+        total_sp = float(proj_row[1])
+
+        proj_done = await db.execute(
+            select(
+                func.count().label("done"),
+                func.coalesce(func.sum(WorkItem.story_points), 0).label("done_sp"),
+            ).where(
+                *proj_filters,
+                WorkItem.status.in_(["DONE", "CLOSED"]),
+            )
+        )
+        proj_done_row = proj_done.one()
+        done_sp = float(proj_done_row[1])
+        using_project_fallback = True
+        logger.info(f"Forecast using project-level fallback: {total_items} items, {done_sp}/{total_sp} SP done")
+
     # Pacing score: how far along are we vs how far we should be
     expected_sp_by_now = total_sp * elapsed_pct if total_sp > 0 else 0
     pacing_score = (done_sp / expected_sp_by_now) if expected_sp_by_now > 0 else 1.0
@@ -233,12 +266,18 @@ async def calculate_success_probability(
         historical_base = 0.75  # Default if no history
 
     # --- Final calculation ---
-    raw_probability = (
-        historical_base * pacing_score * 100
-        - blocker_penalty * 100
-        - review_lag_penalty * 100
-        - ci_penalty * 100
-    )
+    # Base score from historical completion rate and current pacing
+    base_score = historical_base * pacing_score * 100  # 0-150 range
+
+    # Cap penalties to reasonable ranges (percentage points deducted)
+    # Blockers: max 30% penalty regardless of count
+    blocker_deduction = min(blocker_penalty * 15, 30)
+    # PR review lag: max 15% penalty
+    review_deduction = min(review_lag_penalty * 15, 15)
+    # CI failures: max 10% penalty
+    ci_deduction = min(ci_penalty * 100, 10)
+
+    raw_probability = base_score - blocker_deduction - review_deduction - ci_deduction
     success_probability = max(0, min(100, round(raw_probability)))
 
     return {
@@ -352,6 +391,21 @@ async def calculate_spillover_risk(
         .where(*wi_filters)
     )
     work_items = list(wi_result.scalars().all())
+
+    # Fallback: if iteration has 0 active items, use project-level items
+    if not work_items and project_id:
+        proj_wi_filters = [
+            WorkItem.organization_id == org_id,
+            WorkItem.imported_project_id == project_id,
+            WorkItem.status.in_(["BACKLOG", "TODO", "IN_PROGRESS", "IN_REVIEW"]),
+        ]
+        proj_wi_result = await db.execute(
+            select(WorkItem)
+            .options(selectinload(WorkItem.assignee))
+            .where(*proj_wi_filters)
+        )
+        work_items = list(proj_wi_result.scalars().all())
+
     if not work_items:
         return {"items": [], "totalSpilloverSP": 0}
 

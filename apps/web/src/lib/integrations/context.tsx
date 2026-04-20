@@ -88,8 +88,10 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
                 syncMode: "manual" as const,
                 connectedAt: data.connected_at || existingJira?.connectedAt,
                 lastSyncedAt: existingJira?.lastSyncedAt || data.connected_at,
-                // Preserve selected projects and credentials from stored connection
-                selectedProjects: existingJira?.selectedProjects,
+                // Restore selected projects from backend config, fallback to localStorage
+                selectedProjects: data.selectedProjects?.length
+                  ? data.selectedProjects
+                  : existingJira?.selectedProjects,
                 projectCount: existingJira?.projectCount,
                 credentials: existingJira?.credentials,
               },
@@ -136,8 +138,10 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
                 syncMode: "manual" as const,
                 connectedAt: data.connected_at || existingAdo?.connectedAt,
                 lastSyncedAt: existingAdo?.lastSyncedAt || data.connected_at,
-                // Preserve selected projects and credentials from stored connection
-                selectedProjects: existingAdo?.selectedProjects,
+                // Restore selected projects from backend config, fallback to localStorage
+                selectedProjects: data.selectedProjects?.length
+                  ? data.selectedProjects
+                  : existingAdo?.selectedProjects,
                 credentials: existingAdo?.credentials,
               },
             ];
@@ -495,7 +499,7 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
     [connections]
   );
 
-  /** Save selected projects for a tool */
+  /** Save selected projects for a tool (localStorage + backend) */
   const selectProjects = useCallback(
     (tool: ToolType, projects: SelectedProject[]) => {
       setConnections((prev) =>
@@ -505,6 +509,18 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
             : c
         )
       );
+      // Persist to backend so selection survives across browsers/sessions
+      const endpoint =
+        tool === "ado" ? "/api/integrations/ado/selected-projects"
+        : tool === "jira" ? "/api/integrations/jira/selected-projects"
+        : null;
+      if (endpoint) {
+        fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projects }),
+        }).catch(() => {});
+      }
     },
     []
   );

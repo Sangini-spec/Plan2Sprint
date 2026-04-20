@@ -4,7 +4,12 @@ import { createClient } from "@/lib/supabase/server";
 export async function GET(request: Request) {
   const { searchParams, origin: rawOrigin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/dashboard";
+  const rawNext = searchParams.get("next") ?? "/dashboard";
+
+  // Prevent open redirect: only allow internal paths starting with /
+  // Block protocol-relative URLs (//evil.com) and absolute URLs
+  const SAFE_PREFIXES = ["/dashboard", "/po", "/dev", "/stakeholder", "/settings", "/onboarding"];
+  const next = SAFE_PREFIXES.some((p) => rawNext.startsWith(p)) ? rawNext : "/dashboard";
 
   // Use X-Forwarded-Host header (set by Azure Container Apps / reverse proxy)
   // to get the real public URL, not the container's internal 0.0.0.0:3000

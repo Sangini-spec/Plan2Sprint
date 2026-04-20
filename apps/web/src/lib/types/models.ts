@@ -444,6 +444,7 @@ export interface ProjectPlanData {
   hasPlan?: boolean;
   planId?: string;
   planStatus?: SprintPlanStatus;
+  isRebalanced?: boolean;
 }
 
 export interface PlanSummaryData {
@@ -460,4 +461,5 @@ export interface PlanSummaryData {
   projectCompletionSummary?: string;
   approvedAt?: string;
   createdAt?: string;
+  isRebalanced?: boolean;
 }

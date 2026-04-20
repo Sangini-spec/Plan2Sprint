@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Loader2, Check, Calendar, Sparkles, AlertTriangle, RefreshCw } from "lucide-react";
 import { useSelectedProject } from "@/lib/project/context";
 import { useAutoRefresh } from "@/lib/ws/context";
-import { cachedFetch } from "@/lib/fetch-cache";
+import { cachedFetch, invalidateCache } from "@/lib/fetch-cache";
 import { cn } from "@/lib/utils";
 import type {
   FeatureProgressData,
@@ -45,7 +45,15 @@ function LiveDataBadge({ source }: { source: string }) {
 
 // ── Plan Source Badge ──
 
-function PlanSourceBadge({ isOptimized }: { isOptimized: boolean }) {
+function PlanSourceBadge({ isOptimized, isRebalanced }: { isOptimized: boolean; isRebalanced?: boolean }) {
+  if (isRebalanced) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-500/20 border border-orange-500/30 px-2.5 py-0.5 text-[10px] font-semibold text-orange-400 uppercase tracking-wide">
+        <Sparkles className="h-3 w-3" />
+        Rebalanced Plan
+      </span>
+    );
+  }
   if (isOptimized) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-rag-green)]/20 border border-[var(--color-rag-green)]/30 px-2.5 py-0.5 text-[10px] font-semibold text-[var(--color-rag-green)] uppercase tracking-wide">
@@ -186,7 +194,7 @@ function ProjectTimelineStepper({
 function deriveTargetLaunch(
   planData: ProjectPlanData | null,
   planSummary: PlanSummaryData | null,
-): { date: Date | null; formatted: string; isOptimized: boolean } {
+): { date: Date | null; formatted: string; isOptimized: boolean; isRebalanced: boolean } {
   // If an approved plan exists, use the AI-computed end date
   if (
     planSummary?.hasPlan &&
@@ -198,7 +206,7 @@ function deriveTargetLaunch(
       month: "short",
       day: "numeric",
     });
-    return { date: d, formatted, isOptimized: true };
+    return { date: d, formatted, isOptimized: true, isRebalanced: planSummary.isRebalanced ?? false };
   }
 
   // Fallback: derive from raw ADO feature dates
@@ -207,7 +215,7 @@ function deriveTargetLaunch(
     ...(planData?.unassigned ?? []),
   ];
   if (allFeatures.length === 0) {
-    return { date: null, formatted: "TBD", isOptimized: false };
+    return { date: null, formatted: "TBD", isOptimized: false, isRebalanced: false };
   }
 
   let latest: Date | null = null;
@@ -218,13 +226,13 @@ function deriveTargetLaunch(
     }
   }
 
-  if (!latest) return { date: null, formatted: "TBD", isOptimized: false };
+  if (!latest) return { date: null, formatted: "TBD", isOptimized: false, isRebalanced: false };
 
   const formatted = latest.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
   });
-  return { date: latest, formatted, isOptimized: false };
+  return { date: latest, formatted, isOptimized: false, isRebalanced: false };
 }
 
 function deriveWeeksLeft(targetDate: Date | null): number {
@@ -393,6 +401,8 @@ export function ProjectHeroBanner() {
   ]);
 
   const projectId = selectedProject?.internalId;
+  // Track whether we've already attempted an auto-sync for this project
+  const autoSyncAttempted = useRef<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -415,6 +425,56 @@ export function ProjectHeroBanner() {
       if (summaryRes.ok && summaryRes.data) {
         setPlanSummary(summaryRes.data);
       }
+
+      // Auto-sync: if we have a project but data came back empty, trigger a
+      // server-side sync automatically (once per project per session).
+      const hasNoData =
+        progressRes.ok &&
+        progressRes.data &&
+        progressRes.data.totalFeatures === 0 &&
+        progressRes.data.totalStories === 0;
+
+      if (hasNoData && projectId && autoSyncAttempted.current !== projectId) {
+        autoSyncAttempted.current = projectId;
+        // Fire-and-forget: trigger sync (may timeout via proxy, but backend completes it)
+        fetch("/api/integrations/sync/auto", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId }),
+        }).catch(() => {});
+
+        // Poll for data every 5 seconds until it appears (max 6 attempts = 30s)
+        let attempts = 0;
+        const pollInterval = setInterval(async () => {
+          attempts++;
+          if (attempts > 6) {
+            clearInterval(pollInterval);
+            setLoading(false);
+            return;
+          }
+          try {
+            invalidateCache("/api/dashboard/");
+            const q2 = `?projectId=${projectId}`;
+            const pRes = await cachedFetch<FeatureProgressData>(
+              `/api/dashboard/feature-progress${q2}`
+            );
+            if (pRes.ok && pRes.data && (pRes.data.totalFeatures > 0 || pRes.data.totalStories > 0)) {
+              // Data arrived! Fetch all endpoints and stop polling
+              clearInterval(pollInterval);
+              const [plRes, sRes] = await Promise.all([
+                cachedFetch<ProjectPlanData>(`/api/dashboard/project-plan${q2}`),
+                cachedFetch<PlanSummaryData>(`/api/dashboard/plan-summary${q2}`),
+              ]);
+              setProgressData(pRes.data);
+              if (plRes.ok && plRes.data) setPlanData(plRes.data);
+              if (sRes.ok && sRes.data) setPlanSummary(sRes.data);
+              setLoading(false);
+            }
+          } catch {
+            // Keep polling
+          }
+        }, 5000);
+      }
     } catch {
       // fail silently
     } finally {
@@ -423,10 +483,19 @@ export function ProjectHeroBanner() {
   }, [projectId]);
 
   useEffect(() => {
-    // Don't fetch until a project is selected — avoids fetching ALL data
-    if (!projectId) return;
+    // If no project at all, stop loading
+    if (!selectedProject) {
+      setLoading(false);
+      return;
+    }
+    // If project exists but has no internalId yet (auto-import in progress),
+    // wait briefly — the context will update internalId once saved to DB.
+    if (!projectId) {
+      const timer = setTimeout(() => setLoading(false), 5000);
+      return () => clearTimeout(timer);
+    }
     fetchData();
-  }, [fetchData, refreshKey, projectId]);
+  }, [fetchData, refreshKey, projectId, selectedProject]);
 
   // Derived values
   const targetLaunch = deriveTargetLaunch(planData, planSummary);
@@ -474,7 +543,7 @@ export function ProjectHeroBanner() {
             )}
             <div className="flex items-center gap-2 flex-wrap">
               <LiveDataBadge source={source} />
-              <PlanSourceBadge isOptimized={targetLaunch.isOptimized} />
+              <PlanSourceBadge isOptimized={targetLaunch.isOptimized} isRebalanced={targetLaunch.isRebalanced} />
               <button
                 onClick={async () => {
                   setRefreshing(true);
@@ -531,7 +600,7 @@ export function ProjectHeroBanner() {
             highlight={completePct >= 40}
           />
           {hasApprovedPlan && confidence !== null ? (
-            <KpiCard label="Confidence" value={`${Math.round(confidence)}%`} />
+            <KpiCard label="Confidence" value={`${Math.round(confidence <= 1 ? confidence * 100 : confidence)}%`} />
           ) : (
             <KpiCard label="Ready for Test" value={readyForTest} />
           )}

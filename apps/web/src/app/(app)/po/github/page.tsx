@@ -426,6 +426,12 @@ function GitHubConnectedView() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    // Trigger server-side GitHub sync to persist commits/PRs to DB
+    try {
+      await fetch("/api/github/sync", { method: "POST" });
+    } catch {
+      // swallow — sync is best-effort
+    }
     await Promise.all([
       fetchRepos(),
       fetchRepoData(),

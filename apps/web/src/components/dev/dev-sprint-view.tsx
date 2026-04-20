@@ -594,31 +594,60 @@ export function DevSprintView() {
         </div>
       ) : viewMode === "source" ? (
         /* ── Source View ── */
-        sortedSprints.length > 0 ? (
-          <div className="space-y-3">
-            {sortedSprints.map((sprint, idx) => {
-              const items = filterItems(itemsBySprint.get(sprint.id) || []);
-              return (
+        (() => {
+          const unassignedItems = filterItems(itemsBySprint.get("__unassigned__") || []);
+          const hasSprintItems = sortedSprints.some((s) => (itemsBySprint.get(s.id) || []).length > 0);
+          const hasAnyItems = hasSprintItems || unassignedItems.length > 0;
+
+          return hasAnyItems || sortedSprints.length > 0 ? (
+            <div className="space-y-3">
+              {sortedSprints.map((sprint, idx) => {
+                const items = filterItems(itemsBySprint.get(sprint.id) || []);
+                return (
+                  <SprintGroup
+                    key={sprint.id}
+                    sprint={{ ...sprint, totalItems: items.length }}
+                    items={items}
+                    defaultOpen={idx === 0 && items.length > 0}
+                  />
+                );
+              })}
+              {/* Show unassigned items (not linked to any iteration) */}
+              {unassignedItems.length > 0 && (
                 <SprintGroup
-                  key={sprint.id}
-                  sprint={{ ...sprint, totalItems: items.length }}
-                  items={items}
-                  defaultOpen={idx === 0}
+                  key="__backlog__"
+                  sprint={{
+                    id: "__backlog__",
+                    name: "Backlog",
+                    state: "active",
+                    sourceTool: "",
+                    startDate: null,
+                    endDate: null,
+                    totalItems: unassignedItems.length,
+                    completedItems: unassignedItems.filter((i) => i.status === "DONE").length,
+                    totalStoryPoints: unassignedItems.reduce((s, i) => s + (i.storyPoints || 0), 0),
+                    completedStoryPoints: unassignedItems.filter((i) => i.status === "DONE").reduce((s, i) => s + (i.storyPoints || 0), 0),
+                    completionPct: Math.round(
+                      (unassignedItems.filter((i) => i.status === "DONE").length / unassignedItems.length) * 100
+                    ),
+                  }}
+                  items={unassignedItems}
+                  defaultOpen={!hasSprintItems}
                 />
-              );
-            })}
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <CalendarClock size={32} className="text-[var(--text-tertiary)] mb-3" />
-            <p className="text-sm font-medium text-[var(--text-primary)] mb-1">
-              No sprints found
-            </p>
-            <p className="text-xs text-[var(--text-secondary)] max-w-xs">
-              Connect your project tools (ADO/Jira) and sync data to see sprint iterations here.
-            </p>
-          </div>
-        )
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <CalendarClock size={32} className="text-[var(--text-tertiary)] mb-3" />
+              <p className="text-sm font-medium text-[var(--text-primary)] mb-1">
+                No sprints found
+              </p>
+              <p className="text-xs text-[var(--text-secondary)] max-w-xs">
+                Connect your project tools (ADO/Jira) and sync data to see sprint iterations here.
+              </p>
+            </div>
+          );
+        })()
       ) : (
         /* ── AI Optimized View ── */
         planData?.plan ? (

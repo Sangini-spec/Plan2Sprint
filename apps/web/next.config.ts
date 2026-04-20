@@ -30,12 +30,18 @@ const nextConfig: NextConfig = {
   /* ── Proxy /api/* to FastAPI backend ── */
   async rewrites() {
     const apiUrl = process.env.API_URL || "http://localhost:8000";
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${apiUrl}/api/:path*`,
-      },
-    ];
+    return {
+      // beforeFiles rewrites run before Next.js API routes
+      beforeFiles: [],
+      // afterFiles rewrites run AFTER Next.js API routes (so local routes take priority)
+      afterFiles: [
+        {
+          source: "/api/:path*",
+          destination: `${apiUrl}/api/:path*`,
+        },
+      ],
+      fallback: [],
+    };
   },
 };
 

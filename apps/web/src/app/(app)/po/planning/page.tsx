@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Zap, Loader2 } from "lucide-react";
+import { Zap, Loader2, Scale } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, Tabs } from "@/components/ui";
 import { MetricStrip, type MetricItem } from "@/components/ui/metric-strip";
 import { SprintForecastPanel } from "@/components/po/sprint-forecast-panel";
+import { SprintRebalanceTab } from "@/components/po/sprint-rebalance-tab";
 import { SprintWorkspaceToolbar } from "@/components/po/sprint-workspace-toolbar";
 import { SprintTimelineTable } from "@/components/po/sprint-timeline-table";
 import { AIInsightsPanel } from "@/components/po/ai-insights-panel";
@@ -41,6 +42,8 @@ interface PlanOverview {
     summary: string;
   } | null;
   tool: string | null;
+  isRebalanced?: boolean;
+  rebalanceSourceId?: string | null;
 }
 
 interface Assignment {
@@ -82,8 +85,9 @@ interface TeamMemberData {
 // ---------------------------------------------------------------------------
 
 const TAB_ITEMS = [
-  { id: "planning", label: "Sprint Planning" },
-  { id: "forecast", label: "Sprint Forecast" },
+  { id: "planning", label: "Planning" },
+  { id: "forecast", label: "Forecast" },
+  { id: "rebalance", label: "Rebalance" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -181,19 +185,62 @@ export default function PlanningPage() {
   const fetchExcludedMembers = useCallback(async () => {
     if (!projectId) { setExcludedMembers([]); return; }
     try {
-      const res = await fetch(`/api/sprints/excluded-members?projectId=${projectId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setExcludedMembers(data.members || []);
+      // Fetch ALL org members (from Team page API) + explicitly excluded members
+      const [orgRes, exclRes] = await Promise.all([
+        fetch("/api/organizations/current/members"),
+        fetch(`/api/sprints/excluded-members?projectId=${projectId}`),
+      ]);
+
+      // Build set of IDs already in the plan's teamMembers
+      const planMemberIds = new Set(teamMembers.map((tm) => tm.id));
+      const planMemberEmails = new Set(teamMembers.map((tm) => tm.email.toLowerCase()));
+
+      const available: TeamMemberData[] = [];
+
+      // Add explicitly excluded members
+      if (exclRes.ok) {
+        const exclData = await exclRes.json();
+        for (const m of exclData.members || []) {
+          if (!planMemberIds.has(m.id)) {
+            available.push(m);
+          }
+        }
       }
+
+      // Add org members not in plan (from Team page data)
+      if (orgRes.ok) {
+        const orgData = await orgRes.json();
+        for (const m of orgData.members || []) {
+          // Skip if already in plan or already in available list
+          const email = (m.email || "").toLowerCase();
+          if (planMemberEmails.has(email)) continue;
+          if (available.some((a) => a.email?.toLowerCase() === email)) continue;
+          available.push({
+            id: m.teamMemberId || m.id,
+            displayName: m.displayName,
+            email: m.email,
+            avatarUrl: m.avatarUrl,
+            skillTags: [],
+            defaultCapacity: 40,
+          });
+        }
+      }
+
+      setExcludedMembers(available);
     } catch { setExcludedMembers([]); }
-  }, [projectId]);
+  }, [projectId, teamMembers]);
 
   useEffect(() => {
     setLoading(true);
     fetchPlanData();
-    fetchExcludedMembers();
   }, [fetchPlanData, refreshKey]);
+
+  // Fetch available-to-add members after plan data loads (needs teamMembers)
+  useEffect(() => {
+    if (teamMembers.length > 0 || !loading) {
+      fetchExcludedMembers();
+    }
+  }, [teamMembers, fetchExcludedMembers, loading]);
 
   // -----------------------------------------------------------------------
   // Actions
@@ -441,6 +488,28 @@ export default function PlanningPage() {
       {/* ── Sprint Planning Tab ── */}
       {activeTab === "planning" && (
         <div className="flex flex-col h-[calc(100vh-180px)]">
+          {/* Rebalance shift banner */}
+          {plan.isRebalanced && (
+            <div className="mb-3 flex items-center gap-3 p-3 rounded-lg bg-orange-500/5 border border-orange-500/20">
+              <Scale size={18} className="text-orange-400 shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-[var(--text-primary)]">
+                  Plan has been shifted to Rebalance
+                </p>
+                <p className="text-xs text-[var(--text-secondary)]">
+                  This sprint plan was created from a rebalancing proposal. View details in the Rebalance tab.
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setActiveTab("rebalance")}
+                className="text-orange-400 text-xs shrink-0"
+              >
+                View Rebalance
+              </Button>
+            </div>
+          )}
           {/* Toolbar */}
           <SprintWorkspaceToolbar
             status={plan.status}
@@ -508,7 +577,19 @@ export default function PlanningPage() {
       {/* ── Sprint Forecast Tab ── */}
       {activeTab === "forecast" && (
         <div className="space-y-4">
-          <SprintForecastPanel />
+          <SprintForecastPanel onRebalance={() => setActiveTab("rebalance")} />
+        </div>
+      )}
+
+      {/* ── Sprint Rebalance Tab ── */}
+      {activeTab === "rebalance" && (
+        <div className="space-y-4">
+          <SprintRebalanceTab
+            planId={plan?.id || null}
+            rebalancingRecommended={(plan?.successProbability ?? 100) < 65}
+            successProbability={plan?.successProbability ?? 0}
+            isRebalanced={plan?.isRebalanced ?? false}
+          />
         </div>
       )}
     </div>

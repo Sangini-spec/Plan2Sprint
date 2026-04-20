@@ -423,6 +423,30 @@ async def mark_notification_read(
 
 
 # ---------------------------------------------------------------------------
+# DELETE /api/notifications/clear — delete all notifications for user's org
+# ---------------------------------------------------------------------------
+
+@router.delete("/notifications/clear")
+async def clear_all_notifications(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete all in-app notifications for the user's organization."""
+    from ..models.in_app_notification import InAppNotification
+    from sqlalchemy import delete as sa_delete
+
+    org_id = current_user.get("organization_id", "demo-org")
+
+    await db.execute(
+        sa_delete(InAppNotification).where(
+            InAppNotification.organization_id == org_id,
+        )
+    )
+    await db.commit()
+    return {"success": True, "cleared": True}
+
+
+# ---------------------------------------------------------------------------
 # GET PO EMAIL for org (helper for internal use)
 # ---------------------------------------------------------------------------
 
@@ -453,3 +477,57 @@ async def get_po_email(db: AsyncSession, org_id: str) -> str | None:
     )
     member = result.scalar_one_or_none()
     return member.email if member else None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/notifications/test-digest — Manual trigger for daily digest
+# ---------------------------------------------------------------------------
+
+@router.post("/notifications/test-digest")
+async def test_daily_digest(
+    body: dict = {},
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually trigger morning digest for testing. Sends to the PO's Slack/Teams DM."""
+    from ..services.notification_scheduler import trigger_morning_digest_now
+
+    org_id = current_user.get("organization_id", "demo-org")
+    digest_type = body.get("type", "morning")  # "morning" or "evening"
+
+    try:
+        if digest_type == "evening":
+            from ..services.daily_digest import (
+                get_org_projects, get_po_email, generate_evening_summary,
+            )
+            from ..services.card_builders import slack_evening_summary, teams_evening_summary
+            from ..services.delivery_queue import enqueue_notification
+
+            po_email = await get_po_email(db, org_id)
+            if not po_email:
+                return {"ok": False, "error": "No PO email found"}
+
+            projects = await get_org_projects(db, org_id)
+            results = []
+            for proj in projects:
+                data = await generate_evening_summary(db, org_id, proj["id"], proj["name"])
+                await enqueue_notification(
+                    org_id=org_id,
+                    recipient_email=po_email,
+                    notification_type="daily_digest",
+                    slack_payload=slack_evening_summary(data),
+                    teams_payload=teams_evening_summary(data),
+                    in_app_payload={
+                        "title": f"📋 {proj['name']} — End of Day",
+                        "body": f"{data['completedToday']} stories completed today",
+                        "type": "daily_digest",
+                    },
+                )
+                results.append({"project": proj["name"], "status": "sent"})
+            return {"ok": True, "type": "evening", "results": results}
+        else:
+            results = await trigger_morning_digest_now(org_id)
+            return {"ok": True, "type": "morning", "results": results}
+    except Exception as e:
+        logger.exception("Test digest failed")
+        return {"ok": False, "error": str(e)}

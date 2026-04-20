@@ -22,7 +22,6 @@ const APP_ROUTES = [
   "/dev/sprint",
   "/dev/github",
   "/dev/projects",
-  "/dev/velocity",
   "/dev/notifications",
   "/stakeholder",
   "/stakeholder/health",

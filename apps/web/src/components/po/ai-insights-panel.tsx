@@ -125,7 +125,7 @@ export function AIInsightsPanel({
         : "bg-[var(--color-rag-red)]";
 
   // Truncate rationale
-  const RATIONALE_LIMIT = 120;
+  const RATIONALE_LIMIT = 300;
   const rationaleText = overallRationale || "";
   const isRationaleLong = rationaleText.length > RATIONALE_LIMIT;
   const displayRationale =
@@ -262,31 +262,37 @@ export function AIInsightsPanel({
                   <Users className="h-3.5 w-3.5" />
                   Team Capacity
                 </div>
-                {onIncludeMember && excludedMembers.length > 0 && (
+                {onIncludeMember && (
                   <div className="relative">
                     <button
                       onClick={() => setShowExcluded(!showExcluded)}
-                      className="flex items-center gap-1 text-[10px] text-[var(--color-brand)] hover:text-[var(--color-brand-hover)] transition-colors"
-                      title="Add excluded developer back"
+                      className="flex items-center gap-1 text-[10px] text-[var(--color-brand)] hover:text-[var(--color-brand-hover)] transition-colors cursor-pointer"
+                      title="Add developer to sprint plan"
                     >
                       <UserPlus className="h-3 w-3" />
-                      <span>Add ({excludedMembers.length})</span>
+                      <span>{excludedMembers.length > 0 ? `Add (${excludedMembers.length})` : "Add"}</span>
                     </button>
                     {showExcluded && (
-                      <div className="absolute right-0 top-full mt-1 z-10 w-48 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-lg py-1">
-                        {excludedMembers.map((tm) => (
-                          <button
-                            key={tm.id}
-                            onClick={() => {
-                              onIncludeMember(tm.id, tm.displayName);
-                              setShowExcluded(false);
-                            }}
-                            className="w-full px-3 py-1.5 text-left text-[11px] text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] flex items-center justify-between"
-                          >
-                            <span className="truncate">{tm.displayName}</span>
-                            <span className="text-[var(--color-rag-green)] text-[10px]">+ Include</span>
-                          </button>
-                        ))}
+                      <div className="absolute right-0 top-full mt-1 z-10 w-52 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-lg py-1 max-h-48 overflow-y-auto">
+                        {excludedMembers.length > 0 ? (
+                          excludedMembers.map((tm) => (
+                            <button
+                              key={tm.id}
+                              onClick={() => {
+                                onIncludeMember(tm.id, tm.displayName);
+                                setShowExcluded(false);
+                              }}
+                              className="w-full px-3 py-1.5 text-left text-[11px] text-[var(--text-primary)] hover:bg-[var(--bg-surface-hover)] flex items-center justify-between cursor-pointer"
+                            >
+                              <span className="truncate">{tm.displayName}</span>
+                              <span className="text-[var(--color-rag-green)] text-[10px] shrink-0">+ Include</span>
+                            </button>
+                          ))
+                        ) : (
+                          <p className="px-3 py-2 text-[11px] text-[var(--text-secondary)]">
+                            All org members are included in the plan.
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

@@ -974,3 +974,130 @@ def teams_retro_action(
 """.strip()
 
     return {"content": content, "content_type": "html"}
+
+
+# =====================================================================
+# DAILY DIGEST — Slack Block Kit
+# =====================================================================
+
+FRONTEND_BASE = "https://plan2sprint-web.purplebeach-150945ee.westus3.azurecontainerapps.io"
+
+
+def slack_morning_digest(data: dict) -> dict:
+    project = data["projectName"]
+    completion = data.get("completionPct", 0)
+    success = data.get("successProbability")
+    risk = data.get("riskLabel", "NO DATA")
+    blockers = data.get("blockerCount", 0)
+    unacked = data.get("unackedBlockers", 0)
+    health = data.get("healthScore", 0)
+    attention = data.get("attentionItems", [])
+    link = data.get("link", FRONTEND_BASE)
+    risk_emoji = "🟢" if risk == "ON TRACK" else ("🟡" if risk == "AT RISK" else "🔴")
+    health_emoji = "💚" if health >= 70 else ("💛" if health >= 40 else "❤️")
+    stats = f"🔵 Sprint Progress: {completion}% complete"
+    if success is not None:
+        stats += f"\n⚡ Success Probability: {success}% {risk_emoji} {risk}"
+    stats += f"\n🚧 Blockers: {blockers}"
+    if unacked > 0:
+        stats += f" ({unacked} unacknowledged)"
+    stats += f"\n{health_emoji} Team Health: {health}/100"
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"📋 {project} — Morning Status"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": stats}},
+    ]
+    if attention:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "⚠️ *Needs Attention:*\n" + "\n".join(f"• {a}" for a in attention)}})
+    blocks.append({"type": "divider"})
+    blocks.append({"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "View on Plan2Sprint →"}, "url": link, "style": "primary"}]})
+    return {"text": f"📋 {project} — {completion}% complete, {risk}", "blocks": blocks}
+
+
+def slack_evening_summary(data: dict) -> dict:
+    project = data["projectName"]
+    completed = data.get("completedToday", 0)
+    prs_opened = data.get("prsOpened", 0)
+    prs_merged = data.get("prsMerged", 0)
+    stalled = data.get("stalledPrs", 0)
+    blockers = data.get("unresolvedBlockers", 0)
+    standups_sub = data.get("standupsSubmitted", 0)
+    total_devs = data.get("totalDevs", 0)
+    completion = data.get("completionPct", 0)
+    link = data.get("link", FRONTEND_BASE)
+    progress = f"✅ *Today's Progress:*\n• {completed} stories completed"
+    if prs_merged > 0 or prs_opened > 0:
+        progress += f"\n• {prs_merged} PR(s) merged, {prs_opened} opened"
+    progress += f"\n• Sprint at {completion}% overall"
+    open_items = []
+    if blockers > 0:
+        open_items.append(f"{blockers} blocker(s) unresolved")
+    if stalled > 0:
+        open_items.append(f"{stalled} PR(s) awaiting review (>48h)")
+    if open_items:
+        progress += "\n⚠️ *Still Open:*\n" + "\n".join(f"• {i}" for i in open_items)
+    progress += f"\n📝 Standups: {standups_sub}/{total_devs} devs submitted"
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"📋 {project} — End of Day Summary"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": progress}},
+        {"type": "divider"},
+        {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "View on Plan2Sprint →"}, "url": link, "style": "primary"}]},
+    ]
+    return {"text": f"📋 {project} — {completed} stories completed today", "blocks": blocks}
+
+
+def slack_nudge_message(data: dict) -> dict:
+    greeting = data["greeting"]
+    highlights = data.get("highlights", [])
+    tone = data.get("tone", "friendly")
+    link = data.get("link", FRONTEND_BASE)
+    emoji = "👋" if tone == "friendly" else ("⚠️" if tone == "direct" else "🚨")
+    body = f"{emoji} {greeting}\n\n"
+    if highlights:
+        body += "Here's what you might be missing:\n" + "\n".join(f"• {h}" for h in highlights)
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": body}},
+        {"type": "divider"},
+        {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Open Plan2Sprint →"}, "url": link, "style": "primary"}]},
+    ]
+    return {"text": f"{emoji} {greeting}", "blocks": blocks}
+
+
+# =====================================================================
+# DAILY DIGEST — Teams HTML
+# =====================================================================
+
+def teams_morning_digest(data: dict) -> dict:
+    p = data["projectName"]
+    c = data.get("completionPct", 0)
+    s = data.get("successProbability")
+    r = data.get("riskLabel", "NO DATA")
+    b = data.get("blockerCount", 0)
+    h = data.get("healthScore", 0)
+    att = data.get("attentionItems", [])
+    link = data.get("link", FRONTEND_BASE)
+    attn = "".join(f"<li>{a}</li>" for a in att) if att else ""
+    attn_html = f"<p><b>⚠ Needs Attention:</b></p><ul>{attn}</ul>" if attn else ""
+    content = f'<div><h3>📋 {p} — Morning Status</h3><table><tr><td>🔵 Sprint</td><td><b>{c}%</b></td></tr><tr><td>⚡ Success</td><td><b>{s or "N/A"}%</b> — {r}</td></tr><tr><td>🚧 Blockers</td><td><b>{b}</b></td></tr><tr><td>❤️ Health</td><td><b>{h}/100</b></td></tr></table>{attn_html}<hr/><p><a href="{link}">View on Plan2Sprint →</a></p></div>'
+    return {"content": content, "content_type": "html"}
+
+
+def teams_evening_summary(data: dict) -> dict:
+    p = data["projectName"]
+    comp = data.get("completedToday", 0)
+    pm = data.get("prsMerged", 0)
+    po = data.get("prsOpened", 0)
+    b = data.get("unresolvedBlockers", 0)
+    ss = data.get("standupsSubmitted", 0)
+    td = data.get("totalDevs", 0)
+    link = data.get("link", FRONTEND_BASE)
+    content = f'<div><h3>📋 {p} — End of Day</h3><ul><li>{comp} stories completed</li><li>{pm} PR merged, {po} opened</li></ul><p>⚠ {b} blocker(s) open</p><p>📝 Standups: {ss}/{td}</p><hr/><p><a href="{link}">View on Plan2Sprint →</a></p></div>'
+    return {"content": content, "content_type": "html"}
+
+
+def teams_nudge_message(data: dict) -> dict:
+    g = data["greeting"]
+    hl = data.get("highlights", [])
+    link = data.get("link", FRONTEND_BASE)
+    items = "".join(f"<li>{h}</li>" for h in hl)
+    content = f'<div><p><b>👋 {g}</b></p><ul>{items}</ul><p><a href="{link}">Open Plan2Sprint →</a></p></div>'
+    return {"content": content, "content_type": "html"}

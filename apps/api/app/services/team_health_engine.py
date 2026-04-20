@@ -23,7 +23,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
-from sqlalchemy import select, func, case, and_, distinct
+from sqlalchemy import select, func, case, and_, distinct, extract, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import TeamMember, WorkItem, Iteration, HealthSignal
@@ -38,7 +38,68 @@ XAI_BASE = "https://api.x.ai/v1"
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _parse_time_str(time_str: str, default: float = 9.0) -> float:
+    """Parse '09:30' → 9.5, '17:00' → 17.0"""
+    try:
+        parts = (time_str or "").split(":")
+        h = int(parts[0])
+        m = int(parts[1]) if len(parts) > 1 else 0
+        return h + m / 60.0
+    except (ValueError, IndexError):
+        return default
+
+
+async def _get_org_working_hours(db: AsyncSession, org_id: str) -> Dict[str, Any]:
+    """Get org's configured working hours and derive weekly thresholds."""
+    from ..models.organization import Organization
+    result = await db.execute(
+        select(Organization).where(Organization.id == org_id)
+    )
+    org = result.scalar_one_or_none()
+
+    # Parse hours with minute granularity (e.g. "09:30" → 9.5)
+    start_decimal = _parse_time_str(org.working_hours_start if org else "09:00", 9.0)
+    end_decimal = _parse_time_str(org.working_hours_end if org else "17:00", 17.0)
+
+    # Integer hours for SQL extract(hour) comparisons
+    start_hour = int(start_decimal)
+    end_hour = int(end_decimal) + (1 if end_decimal % 1 > 0 else 0)  # round up for after-hours
+
+    daily_hours = max(end_decimal - start_decimal, 0.5)
+    weekly_hours = round(daily_hours * 5, 1)
+
+    # Store the original time strings for display
+    start_str = org.working_hours_start if org else "09:00"
+    end_str = org.working_hours_end if org else "17:00"
+
+    return {
+        "start_hour": start_hour,
+        "end_hour": end_hour,
+        "start_str": start_str,
+        "end_str": end_str,
+        "daily_hours": daily_hours,
+        "weekly_hours": weekly_hours,
+        # Dynamic burnout thresholds based on org's standard hours
+        "green_max": weekly_hours,              # Up to standard = GREEN
+        "amber_max": round(weekly_hours * 1.2, 1), # +20% = AMBER
+        "red_max": round(weekly_hours * 1.5, 1),   # +50% = RED
+        # Above red_max = CRITICAL
+    }
+
+
+def _severity_from_hours_dynamic(hours: float, thresholds: Dict[str, Any]) -> str:
+    """Determine severity based on org's customized working hour thresholds."""
+    if hours <= thresholds["green_max"]:
+        return "GREEN"
+    if hours <= thresholds["amber_max"]:
+        return "AMBER"
+    if hours <= thresholds["red_max"]:
+        return "RED"
+    return "CRITICAL"
+
+
 def _severity_from_hours(hours: float) -> str:
+    """Legacy fallback with hardcoded thresholds."""
     if hours < 45:
         return "GREEN"
     if hours < 50:
@@ -96,6 +157,7 @@ async def compute_work_hours(
     org_id: str,
     project_id: Optional[str] = None,
     weeks: int = 4,
+    org_thresholds: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Estimate weekly work hours per developer from activity events."""
     members = await _get_project_members(db, org_id, project_id)
@@ -129,6 +191,20 @@ async def compute_work_hours(
     )
     wi_result = await db.execute(wi_q)
     wi_rows = wi_result.all()
+
+    # Count currently-active WIP items per member (tertiary signal for when
+    # neither activity events nor recent work-item updates exist — e.g. dev
+    # has assigned in-progress items but hasn't synced recently).
+    active_q = (
+        select(WorkItem.assignee_id, func.count(WorkItem.id))
+        .where(
+            WorkItem.assignee_id.in_(member_ids),
+            WorkItem.status.in_(["IN_PROGRESS", "IN_REVIEW"]),
+        )
+        .group_by(WorkItem.assignee_id)
+    )
+    active_result = await db.execute(active_q)
+    active_wip_by_member: Dict[str, int] = {r[0]: r[1] for r in active_result.all() if r[0]}
 
     # Group activity events by member -> day
     # events_by_member_day[member_id][date] = [timestamps]
@@ -171,7 +247,7 @@ async def compute_work_hours(
                     total_day_hours += 4.0  # single event -> assume half-day
                     days_counted += 1
 
-            # Fallback: estimate from work-item activity if no events
+            # Fallback 1: estimate from work-item activity if no events
             if days_counted == 0:
                 wi_days_in_week = 0
                 for d in range(7):
@@ -180,6 +256,16 @@ async def compute_work_hours(
                     if day_key in wi_days_by_member.get(mid, set()):
                         wi_days_in_week += 1
                 total_day_hours = wi_days_in_week * 6.0  # 6h per active day
+
+            # Fallback 2 (only for THIS week): if still 0 but the dev has
+            # currently-active WIP items, estimate from WIP count. Progress is
+            # visibly being made on those tickets even if the events/timestamps
+            # didn't land in this week.
+            if w == 0 and total_day_hours == 0:
+                active_wip = active_wip_by_member.get(mid, 0)
+                if active_wip > 0:
+                    # ~5 hours per active WIP item per week, capped at 40h
+                    total_day_hours = float(min(40, active_wip * 5))
 
             weekly_hours.append(round(total_day_hours, 1))
 
@@ -193,11 +279,75 @@ async def compute_work_hours(
             "thisWeek": this_week,
             "lastWeek": last_week,
             "trend": _trend(this_week, last_week),
-            "severity": _severity_from_hours(this_week),
+            "severity": _severity_from_hours_dynamic(this_week, org_thresholds) if org_thresholds else _severity_from_hours(this_week),
             "weeklyHistory": list(reversed(weekly_hours)),  # oldest first
         })
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# 1b. Per-Developer Sprint Velocity (Completion Rate)
+# ---------------------------------------------------------------------------
+
+async def compute_developer_velocity(
+    db: AsyncSession,
+    org_id: str,
+    project_id: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """For each team member, return their most-recent sprint completion rate.
+
+    completionPct = completed_sp / committed_sp * 100
+
+    "Most recent sprint" = the latest iteration (by end_date) that overlaps or
+    precedes today, where the dev had at least one assigned work item. If no
+    such iteration exists, returns empty for that dev.
+    """
+    from ..models.iteration import Iteration
+
+    members = await _get_project_members(db, org_id, project_id)
+    if not members:
+        return {}
+
+    member_ids = [m.id for m in members]
+
+    # Pull all iterations for the org (or project) in descending end_date order
+    iter_q = select(Iteration).where(Iteration.organization_id == org_id)
+    if project_id:
+        iter_q = iter_q.where(Iteration.imported_project_id == project_id)
+    iter_q = iter_q.order_by(Iteration.end_date.desc()).limit(10)
+    iters = list((await db.execute(iter_q)).scalars().all())
+
+    result: Dict[str, Dict[str, Any]] = {}
+
+    # For each member, walk iterations newest-first until we find one where
+    # they had commitments, then compute completion for that sprint.
+    for mid in member_ids:
+        for it in iters:
+            wi_q = select(WorkItem).where(
+                WorkItem.assignee_id == mid,
+                WorkItem.iteration_id == it.id,
+            )
+            items = list((await db.execute(wi_q)).scalars().all())
+            if not items:
+                continue
+
+            committed = sum(float(w.story_points or 0) for w in items)
+            completed = sum(
+                float(w.story_points or 0) for w in items
+                if (w.status or "").upper() in ("DONE", "CLOSED", "RESOLVED")
+            )
+            pct = int(round((completed / committed) * 100)) if committed > 0 else 0
+
+            result[mid] = {
+                "committedSp": round(committed, 1),
+                "completedSp": round(completed, 1),
+                "completionPct": min(pct, 200),  # cap at 200% for display sanity
+                "sprintName": it.name or f"Sprint ({it.start_date.date()})",
+            }
+            break  # Found the most recent sprint with commitment — stop
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +358,7 @@ async def compute_burnout_risk_index(
     db: AsyncSession,
     org_id: str,
     project_id: Optional[str] = None,
+    org_thresholds: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Composite burnout risk per developer (0-100, higher = worse)."""
     members = await _get_project_members(db, org_id, project_id)
@@ -218,16 +369,22 @@ async def compute_burnout_risk_index(
     member_map = {m.id: m for m in members}
     cutoff = datetime.now(timezone.utc) - timedelta(weeks=4)
 
-    # Pre-fetch work hours
-    work_hours_data = await compute_work_hours(db, org_id, project_id, weeks=4)
+    # Pre-fetch work hours (pass org_thresholds for dynamic severity)
+    work_hours_data = await compute_work_hours(db, org_id, project_id, weeks=4, org_thresholds=org_thresholds)
     hours_by_id = {d["id"]: d["thisWeek"] for d in work_hours_data}
 
-    # Activity totals per member
+    # Activity totals per member — compute after-hours dynamically from org hours
+    start_h = org_thresholds["start_hour"] if org_thresholds else 9
+    end_h = org_thresholds["end_hour"] if org_thresholds else 18
+    hour_col = extract("hour", ActivityEvent.occurred_at)
+    after_hours_case = case(
+        (or_(hour_col < start_h, hour_col >= end_h), 1),
+    )
     totals_q = (
         select(
             ActivityEvent.team_member_id,
             func.count(ActivityEvent.id).label("total"),
-            func.count(case((ActivityEvent.is_after_hours == True, 1))).label("after_hours"),
+            func.count(after_hours_case).label("after_hours"),
             func.count(case((ActivityEvent.is_weekend == True, 1))).label("weekend"),
         )
         .where(
@@ -292,7 +449,10 @@ async def compute_burnout_risk_index(
     results = []
     for mid, member in member_map.items():
         hours = hours_by_id.get(mid, 0)
-        work_hours_score = _normalize(hours, 45, 60)
+        # Use org-specific thresholds for burnout normalization
+        amber = org_thresholds["amber_max"] if org_thresholds else 45
+        red = org_thresholds["red_max"] if org_thresholds else 60
+        work_hours_score = _normalize(hours, amber, red)
 
         stats = activity_stats.get(mid, {"total": 0, "after_hours": 0, "weekend": 0})
         total_events = max(stats["total"], 1)
@@ -562,7 +722,16 @@ async def compute_bus_factor(
                 "itemCount": c["itemCount"],
             })
 
-    return results
+    # Build matrix: { featureName: { developerName: itemCount } }
+    matrix: Dict[str, Dict[str, int]] = {}
+    for entry in matrix_data:
+        fname = entry["feature"]
+        dname = entry["developer"]
+        if fname not in matrix:
+            matrix[fname] = {}
+        matrix[fname][dname] = entry["itemCount"]
+
+    return {"features": results, "matrix": matrix}
 
 
 # ---------------------------------------------------------------------------
@@ -700,7 +869,8 @@ async def compute_team_resilience(
 
     # Cross-training: average bus factor across features
     bus_data = await compute_bus_factor(db, org_id, project_id)
-    bus_factors = [f["busFactor"] for f in bus_data] if bus_data else [1]
+    bus_features = bus_data.get("features", []) if isinstance(bus_data, dict) else bus_data
+    bus_factors = [f["busFactor"] for f in bus_features] if bus_features else [1]
     cross_training_index = statistics.mean(bus_factors) if bus_factors else 1
 
     # Attrition risk: developers with burnout > 60
@@ -884,20 +1054,30 @@ async def get_full_health_dashboard(
     import asyncio
     from ..database import AsyncSessionLocal
 
+    # Load org working hours for dynamic burnout thresholds
+    org_thresholds = await _get_org_working_hours(db, org_id)
+
     async def _run(fn, *args):
         """Run a pillar computation in its own DB session for parallel execution."""
         async with AsyncSessionLocal() as sess:
             return await fn(sess, *args)
 
-    # Run all 6 pillars concurrently — ~13s instead of ~47s sequential
-    work_hours, burnout, sustainability, bus_factor, flow, resilience = await asyncio.gather(
-        _run(compute_work_hours, org_id, project_id),
-        _run(compute_burnout_risk_index, org_id, project_id),
+    # Run all pillars + velocity concurrently
+    work_hours, burnout, sustainability, bus_factor, flow, resilience, dev_velocity = await asyncio.gather(
+        _run(compute_work_hours, org_id, project_id, 4, org_thresholds),
+        _run(compute_burnout_risk_index, org_id, project_id, org_thresholds),
         _run(compute_sprint_sustainability, org_id, project_id),
         _run(compute_bus_factor, org_id, project_id),
         _run(compute_flow_health, org_id, project_id),
         _run(compute_team_resilience, org_id, project_id),
+        _run(compute_developer_velocity, org_id, project_id),
     )
+
+    # Attach velocity info to each work-hours developer row (by member id)
+    for dev in work_hours:
+        vel = dev_velocity.get(dev.get("id"))
+        if vel:
+            dev["velocity"] = vel
 
     # Derive pillar-level scores for the summary
     avg_burnout = statistics.mean([d["score"] for d in burnout]) if burnout else 0
@@ -905,12 +1085,17 @@ async def get_full_health_dashboard(
 
     avg_flow = statistics.mean([d["flowScore"] for d in flow]) if flow else 50
 
-    bus_factors = [f["busFactor"] for f in bus_factor] if bus_factor else [1]
+    bus_features = bus_factor.get("features", []) if isinstance(bus_factor, dict) else bus_factor
+    bus_matrix = bus_factor.get("matrix", {}) if isinstance(bus_factor, dict) else {}
+    bus_factors = [f["busFactor"] for f in bus_features] if bus_features else [1]
     avg_bus = statistics.mean(bus_factors)
     bus_pillar_score = _clamp(_normalize(avg_bus, 1, 4) * 100 / 100)
 
-    avg_hours = statistics.mean([d["thisWeek"] for d in work_hours]) if work_hours else 40
-    hours_pillar_score = _clamp(100 - _normalize(avg_hours, 40, 60) * 1.0)
+    weekly_std = org_thresholds["weekly_hours"] if org_thresholds else 40
+    amber_h = org_thresholds["amber_max"] if org_thresholds else 48
+    red_h = org_thresholds["red_max"] if org_thresholds else 60
+    avg_hours = statistics.mean([d["thisWeek"] for d in work_hours]) if work_hours else weekly_std
+    hours_pillar_score = _clamp(100 - _normalize(avg_hours, amber_h, red_h) * 1.0)
 
     pillars = {
         "workHours": {
@@ -934,8 +1119,8 @@ async def get_full_health_dashboard(
         "busFactor": {
             "score": round(bus_pillar_score, 1),
             "severity": "GREEN" if bus_pillar_score >= 70 else ("AMBER" if bus_pillar_score >= 40 else "RED"),
-            "features": bus_factor,
-            "matrix": {},  # Build matrix from bus_factor data
+            "features": bus_features,
+            "matrix": bus_matrix,
         },
         "flowHealth": {
             "score": round(avg_flow, 1),
@@ -983,4 +1168,11 @@ async def get_full_health_dashboard(
         "pillars": pillars,
         "workHours": {"developers": work_hours},
         "recommendations": recommendations,
+        "orgWorkingHours": {
+            "start": org_thresholds.get("start_str", f"{org_thresholds['start_hour']:02d}:00"),
+            "end": org_thresholds.get("end_str", f"{org_thresholds['end_hour']:02d}:00"),
+            "weeklyHours": org_thresholds["weekly_hours"],
+            "amberThreshold": org_thresholds["amber_max"],
+            "redThreshold": org_thresholds["red_max"],
+        } if org_thresholds else None,
     }

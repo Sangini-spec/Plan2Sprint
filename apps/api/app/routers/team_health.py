@@ -128,6 +128,7 @@ async def get_health_dashboard(
     org_id = current_user.get("organization_id", "demo-org")
     try:
         result = await get_full_health_dashboard(db, org_id, projectId)
+        logger.info(f"Health dashboard keys: {list(result.keys())}, orgWorkingHours: {result.get('orgWorkingHours')}")
         return result
     except Exception as e:
         logger.exception("Health dashboard computation failed")

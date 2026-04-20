@@ -1,0 +1,28 @@
+# ============================================================================
+# Plan2Sprint Web — Builder Cache Image
+# Run ONCE to create a base with node_modules + .next/cache.
+# Dockerfile.patch builds on top of this for fast incremental deploys.
+# ============================================================================
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+
+COPY . .
+
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG API_URL=http://localhost:8000
+
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV API_URL=$API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN npm run build
+
+# Keep everything: node_modules, source, .next (including cache)
+# This image is NOT for running — it's a build cache for Dockerfile.patch

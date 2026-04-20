@@ -211,15 +211,16 @@ export function MyGithubActivity() {
 
   const isConnected = Boolean(token);
 
-  // ---------- Load from localStorage ----------
+  // ---------- Load from localStorage, fallback to backend ----------
   useEffect(() => {
     const saved = loadGitHubState();
-    if (saved.token) setToken(saved.token);
-    if (saved.user) setUser(saved.user);
-    if (saved.linkedRepos?.length) setLinkedRepos(saved.linkedRepos);
-
-    // Bootstrap: persist existing localStorage token to backend (one-time)
     if (saved.token && saved.user) {
+      // Restore from localStorage
+      setToken(saved.token);
+      setUser(saved.user);
+      if (saved.linkedRepos?.length) setLinkedRepos(saved.linkedRepos);
+
+      // Bootstrap: persist to backend (one-time per session)
       const key = "plan2sprint_github_synced";
       if (!sessionStorage.getItem(key)) {
         sessionStorage.setItem(key, "1");
@@ -235,6 +236,41 @@ export function MyGithubActivity() {
           }),
         }).catch(() => {});
       }
+    } else {
+      // No localStorage data — try restoring from backend
+      fetch("/api/integrations/github/status")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.connected && data.access_token) {
+            const restoredUser: GitHubUser = {
+              login: data.user_login || "",
+              name: data.user_name || "",
+              avatarUrl: data.avatar_url || "",
+            };
+            setToken(data.access_token);
+            setUser(restoredUser);
+            // Restore linked repos from backend
+            if (data.linked_repos?.length) {
+              const repos: LinkedRepo[] = data.linked_repos.map((fullName: string) => ({
+                fullName,
+                name: fullName.split("/").pop() || fullName,
+              }));
+              setLinkedRepos(repos);
+            }
+            // Save to localStorage for future loads
+            saveGitHubState({
+              token: data.access_token,
+              user: restoredUser,
+              linkedRepos: data.linked_repos?.length
+                ? data.linked_repos.map((fullName: string) => ({
+                    fullName,
+                    name: fullName.split("/").pop() || fullName,
+                  }))
+                : [],
+            });
+          }
+        })
+        .catch(() => {});
     }
   }, []);
 

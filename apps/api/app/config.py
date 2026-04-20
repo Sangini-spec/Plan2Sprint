@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     slack_client_secret: str = ""
     slack_signing_secret: str = ""
     slack_redirect_uri: str = "http://localhost:8000/api/integrations/slack/callback"
-    slack_bot_scopes: str = "chat:write,im:write,channels:read,users:read,users:read.email"
+    slack_bot_scopes: str = "chat:write,im:write,channels:read,channels:manage,channels:write.invites,groups:write,users:read,users:read.email"
 
     # Microsoft Teams Integration
     teams_client_id: str = ""
@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     # AI — Azure AI Foundry (Grok)
     azure_ai_api_key: str = ""
+    azure_ai_key: str = ""  # alias used in Azure Container Apps
     azure_ai_endpoint: str = ""
     azure_ai_model: str = "grok-4-fast-reasoning"
 

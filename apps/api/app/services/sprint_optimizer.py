@@ -182,13 +182,25 @@ async def generate_sprint_plan(
 
     # 11b. Compute project-level insight fields (deterministic estimates)
     plan.estimated_weeks_total = max(1, int(math.ceil(max_sprint_number * sprint_days / 7.0)))
+    total_capacity = sum(capacity_map.values())
+    utilization_pct = int(round((total_sp / max(total_capacity * max_sprint_number, 1)) * 100))
+    team_count = len(capacity_map)
+
+    plan.overall_rationale = (
+        f"The backlog of {len(assignments)} items ({int(total_sp)} story points) is distributed across "
+        f"{max_sprint_number} sprint(s) over ~{plan.estimated_weeks_total} weeks. "
+        f"A team of {team_count} developer{'s' if team_count != 1 else ''} is assigned using capacity-aware "
+        f"greedy allocation, with team utilization at {utilization_pct}%. "
+        + (f"The team is near full capacity — consider adding more developers to reduce risk. "
+           if utilization_pct > 90
+           else f"Team capacity is adequate for the current backlog size. ")
+        + f"Items are prioritized by story points and assigned to developers with available capacity in each sprint."
+    )
     plan.project_completion_summary = (
         f"Deterministic plan: {len(assignments)} items across {max_sprint_number} sprint(s), "
         f"~{plan.estimated_weeks_total} weeks total. "
         f"Team utilization based on capacity-aware greedy assignment."
     )
-    total_capacity = sum(capacity_map.values())
-    utilization_pct = int(round((total_sp / max(total_capacity * max_sprint_number, 1)) * 100))
     plan.capacity_recommendations = {
         "team_utilization_pct": min(utilization_pct, 100),
         "understaffed": utilization_pct > 90,

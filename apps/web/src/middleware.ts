@@ -2,6 +2,23 @@ import { type NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { updateSession } from "@/lib/supabase/middleware";
 
+// ── Security headers applied to all responses ──
+function _addSecurityHeaders(response: NextResponse): NextResponse {
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  response.headers.set("X-Frame-Options", "DENY");
+  response.headers.set("X-XSS-Protection", "1; mode=block");
+  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  // HSTS — only in production (not localhost)
+  if (process.env.NODE_ENV === "production") {
+    response.headers.set(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains"
+    );
+  }
+  return response;
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -10,13 +27,13 @@ export async function middleware(request: NextRequest) {
   if (pathname.startsWith("/api/")) {
     // Skip if Authorization header already present
     if (request.headers.get("authorization")) {
-      return NextResponse.next();
+      return _addSecurityHeaders(NextResponse.next());
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (!supabaseUrl || !supabaseKey) {
-      return NextResponse.next();
+      return _addSecurityHeaders(NextResponse.next());
     }
 
     // Read Supabase session from cookies
@@ -37,16 +54,17 @@ export async function middleware(request: NextRequest) {
       // Clone request headers and add Authorization
       const requestHeaders = new Headers(request.headers);
       requestHeaders.set("Authorization", `Bearer ${session.access_token}`);
-      return NextResponse.next({
-        request: { headers: requestHeaders },
-      });
+      return _addSecurityHeaders(
+        NextResponse.next({ request: { headers: requestHeaders } })
+      );
     }
 
-    return NextResponse.next();
+    return _addSecurityHeaders(NextResponse.next());
   }
 
-  // For page routes: run the existing session check
-  return await updateSession(request);
+  // For page routes: run the existing session check + security headers
+  const response = await updateSession(request);
+  return _addSecurityHeaders(response);
 }
 
 export const config = {

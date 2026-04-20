@@ -1,0 +1,56 @@
+# ============================================================================
+# Plan2Sprint Web — Fast Incremental Deploy (Dockerfile.patch)
+#
+# Uses the pre-built builder-cache image (node_modules + .next/cache)
+# so only changed source files trigger a fast incremental Next.js rebuild.
+#
+# Typical build time: ~15-30s (vs ~3min for full Dockerfile)
+# ============================================================================
+
+# --- Stage 1: Incremental rebuild on cached base ---
+FROM plan2sprintacr.azurecr.io/plan2sprint-web-builder:latest AS builder
+
+WORKDIR /app
+
+# Env vars must match the cache base
+ENV NEXT_PUBLIC_SUPABASE_URL=https://obmbpfoormxbbizudrrp.supabase.co
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ibWJwZm9vcm14YmJpenVkcnJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2NTg0NjAsImV4cCI6MjA4NzIzNDQ2MH0.weAMr4zip5JyY49GfJ70nqjie6ka_QkYzRp4Zsev9B8
+ENV API_URL=https://plan2sprint-api.purplebeach-150945ee.westus3.azurecontainerapps.io
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Overlay the whole src tree in ONE layer. Copying 30+ individual files
+# triggers a BuildKit "failed to get layer ... does not exist" export bug
+# during the layer-by-layer export phase, so we batch them.
+COPY src ./src
+
+# Incremental rebuild — .next/cache from base makes this fast
+RUN npm run build
+
+# --- Stage 2: Production runtime (lean) ---
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_SUPABASE_URL=https://obmbpfoormxbbizudrrp.supabase.co
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ibWJwZm9vcm14YmJpenVkcnJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2NTg0NjAsImV4cCI6MjA4NzIzNDQ2MH0.weAMr4zip5JyY49GfJ70nqjie6ka_QkYzRp4Zsev9B8
+
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/app ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
+
+CMD ["node", "server.js"]

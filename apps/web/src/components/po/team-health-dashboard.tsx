@@ -17,7 +17,9 @@ import {
   Minus,
   Brain,
   RefreshCw,
+  Settings,
 } from "lucide-react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { StatCard } from "@/components/dashboard/stat-card";
@@ -84,6 +86,13 @@ interface WorkloadEntry {
   pctOfTotal: number;
 }
 
+interface DeveloperVelocity {
+  committedSp: number;
+  completedSp: number;
+  completionPct: number;
+  sprintName: string;
+}
+
 interface WorkHoursDeveloper {
   name: string;
   id: string;
@@ -93,6 +102,7 @@ interface WorkHoursDeveloper {
   severity: string;
   weeklyHistory: number[];
   afterHoursRatio: number;
+  velocity?: DeveloperVelocity;
 }
 
 interface Recommendation {
@@ -146,6 +156,13 @@ interface HealthDashboardData {
     developers: WorkHoursDeveloper[];
   };
   recommendations: Recommendation[];
+  orgWorkingHours?: {
+    start: string;
+    end: string;
+    weeklyHours: number;
+    amberThreshold: number;
+    redThreshold: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +324,44 @@ function TrendArrow({ trend }: { trend: "up" | "down" | "stable" }) {
 }
 
 // ---------------------------------------------------------------------------
+// VelocityCell — inline progress bar for sprint completion rate
+// ---------------------------------------------------------------------------
+
+function VelocityCell({ velocity }: { velocity?: DeveloperVelocity }) {
+  if (!velocity || velocity.committedSp <= 0) {
+    return <span className="text-xs text-[var(--text-tertiary)]">—</span>;
+  }
+
+  const pct = velocity.completionPct;
+  // RAG thresholds: >=90% green, 60-89% amber, <60% red. >=100% shows green, capped bar at 100.
+  const barColor =
+    pct >= 90
+      ? "var(--color-rag-green)"
+      : pct >= 60
+        ? "var(--color-rag-amber)"
+        : "var(--color-rag-red)";
+  const barWidth = Math.min(pct, 100);
+  const tooltip = `${velocity.completedSp} of ${velocity.committedSp} SP completed · ${velocity.sprintName}`;
+
+  return (
+    <div className="flex items-center gap-2" title={tooltip}>
+      <div className="flex-1 h-2 rounded-full bg-[var(--bg-surface-raised)] overflow-hidden max-w-[120px]">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{ width: `${barWidth}%`, backgroundColor: barColor }}
+        />
+      </div>
+      <span
+        className="text-xs font-medium tabular-nums w-9 text-right"
+        style={{ color: barColor }}
+      >
+        {pct}%
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // DeveloperHealthRow
 // ---------------------------------------------------------------------------
 
@@ -386,6 +441,9 @@ function DeveloperHealthRow({
             {flow?.avgWip ?? "--"}
           </span>
         </td>
+        <td className="py-2.5 px-3">
+          <VelocityCell velocity={dev.velocity} />
+        </td>
         <td className="py-2.5 px-3 text-center">
           <span className="text-xs tabular-nums text-[var(--text-secondary)]">
             {dev.afterHoursRatio != null
@@ -411,7 +469,7 @@ function DeveloperHealthRow({
       {/* Expanded detail row */}
       {expanded && (
         <tr className="bg-[var(--bg-surface-raised)]/40">
-          <td colSpan={8} className="px-6 py-3">
+          <td colSpan={9} className="px-6 py-3">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
               <div>
                 <span className="text-[var(--text-tertiary)] block mb-0.5">
@@ -778,22 +836,37 @@ export function TeamHealthDashboard() {
         title="Team Health Score"
         icon={HeartPulse}
         actions={
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleRefresh();
-            }}
-            className="p-1.5 rounded-md hover:bg-[var(--bg-surface-raised)] transition-colors"
-            aria-label="Refresh health data"
-          >
-            <RefreshCw
-              size={14}
-              className={cn(
-                "text-[var(--text-secondary)]",
-                refreshing && "animate-spin"
-              )}
-            />
-          </button>
+          <div className="flex items-center gap-3">
+            {data.orgWorkingHours && (
+              <Link
+                href="/settings"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-[var(--bg-surface-raised)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--color-brand-secondary)] hover:text-[var(--color-brand-secondary)] transition-colors"
+              >
+                <Clock size={11} />
+                {data.orgWorkingHours.start} – {data.orgWorkingHours.end}
+                <span className="text-[var(--text-tertiary)]">
+                  ({data.orgWorkingHours.weeklyHours}h/wk)
+                </span>
+                <Settings size={10} className="opacity-50" />
+              </Link>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRefresh();
+              }}
+              className="p-1.5 rounded-md hover:bg-[var(--bg-surface-raised)] transition-colors"
+              aria-label="Refresh health data"
+            >
+              <RefreshCw
+                size={14}
+                className={cn(
+                  "text-[var(--text-secondary)]",
+                  refreshing && "animate-spin"
+                )}
+              />
+            </button>
+          </div>
         }
       >
         <div className="flex flex-col sm:flex-row items-center gap-6">
@@ -904,6 +977,9 @@ export function TeamHealthDashboard() {
                   </th>
                   <th className="text-center py-2 px-3 text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">
                     WIP
+                  </th>
+                  <th className="text-left py-2 px-3 text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">
+                    Velocity
                   </th>
                   <th className="text-center py-2 px-3 text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">
                     After-Hrs

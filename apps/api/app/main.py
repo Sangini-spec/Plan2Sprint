@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 
 # Import routers
-from .routers import analytics, dashboard, github, sprints, standups, team_health, notifications, projects, writeback, ws, retrospectives, phases, organizations, profile, agents, export
+from .routers import analytics, dashboard, github, sprints, standups, team_health, notifications, projects, writeback, ws, retrospectives, phases, organizations, profile, agents, export, notes, reports
 from .routers.integrations import connections, sync, audit_log
 from .routers.integrations import jira as jira_router
 from .routers.integrations import ado as ado_router
@@ -116,9 +116,14 @@ async def lifespan(app: FastAPI):
     ws_relay_task = await start_ws_relay()
     sync_scheduler_task = await start_sync_scheduler()
 
+    # Start notification scheduler (daily digests, nudges)
+    from .services.notification_scheduler import start_notification_scheduler, stop_notification_scheduler
+    await start_notification_scheduler()
+
     yield
 
     # Shutdown — stop background tasks
+    await stop_notification_scheduler()
     if sync_scheduler_task:
         sync_scheduler_task.cancel()
         try:
@@ -152,16 +157,16 @@ app = FastAPI(
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
-# CORS
+# CORS — restrict to safe methods only
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Health check
+# Health check — minimal info to prevent config leakage
 @app.get("/health")
 async def health_check():
     redis_status = "disabled"
@@ -179,10 +184,7 @@ async def health_check():
 
     return {
         "status": "ok",
-        "demo_mode": settings.is_demo_mode,
-        "debug": settings.debug,
         "redis": redis_status,
-        "sync_scheduler": settings.sync_scheduler_enabled,
     }
 
 # Mount routers
@@ -208,5 +210,7 @@ app.include_router(ws.router, prefix="/api", tags=["websocket"])
 app.include_router(phases.router, prefix="/api", tags=["phases"])
 app.include_router(organizations.router, prefix="/api/organizations", tags=["organizations"])
 app.include_router(profile.router, prefix="/api", tags=["profile"])
+app.include_router(notes.router, prefix="/api", tags=["notes"])
+app.include_router(reports.router, prefix="/api", tags=["reports"])
 app.include_router(agents.router, prefix="/api", tags=["agents"])
 app.include_router(export.router, prefix="/api", tags=["export"])

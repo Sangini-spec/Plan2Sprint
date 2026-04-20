@@ -28,6 +28,10 @@ class ImportedProject(Base):
     board_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Jira board ID or ADO team project
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     cached_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # work items, team members, iterations
+    slack_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)  # Slack channel ID for project
+    slack_channel_name: Mapped[str | None] = mapped_column(String, nullable=True)  # e.g. "proj-medicare"
+    teams_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)  # MS Teams channel ID
+    teams_channel_name: Mapped[str | None] = mapped_column(String, nullable=True)  # e.g. "proj-medicare"
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -25,15 +25,15 @@ const TIMEZONES = [
   "Pacific/Auckland",
 ];
 
-const HOUR_OPTIONS = [
-  "06:00", "06:30", "07:00", "07:30", "08:00", "08:30",
-  "09:00", "09:30", "10:00", "10:30", "11:00",
-];
+// Generate hour options from 00:00 to 23:30 in 30-min increments
+const ALL_HOURS = Array.from({ length: 48 }, (_, i) => {
+  const h = String(Math.floor(i / 2)).padStart(2, "0");
+  const m = i % 2 === 0 ? "00" : "30";
+  return `${h}:${m}`;
+});
 
-const END_HOUR_OPTIONS = [
-  "16:00", "16:30", "17:00", "17:30", "18:00", "18:30",
-  "19:00", "19:30", "20:00",
-];
+const HOUR_OPTIONS = ALL_HOURS;
+const END_HOUR_OPTIONS = ALL_HOURS;
 
 export default function GeneralSettingsPage() {
   const { role } = useAuth();

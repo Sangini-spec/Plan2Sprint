@@ -1,0 +1,17 @@
+FROM plan2sprintacr.azurecr.io/plan2sprint-api:v1776625230
+
+# Install additional deps introduced after the base image was built.
+# The base image runs as non-root `appuser`; switch to root to install to the
+# shared site-packages dir, then switch back.
+USER root
+# Tesseract OCR system binary — required for scanned / image-based PDFs
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tesseract-ocr \
+ && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir "pymupdf>=1.25.0" "python-docx>=1.1.0" "pytesseract>=0.3.13" "Pillow>=11.0.0" "reportlab>=4.2.0"
+USER appuser
+
+# Overlay the whole app tree + alembic migrations in ONE layer each.
+# Single COPY avoids the per-file layer-export bug we hit with 40+ COPYs.
+COPY app /app/app
+COPY alembic /app/alembic

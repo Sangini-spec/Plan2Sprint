@@ -591,9 +591,11 @@ export function ProjectPlanGantt() {
     fetchData();
   }, [fetchData, refreshKey]);
 
-  // Reset collapsed phases when switching view modes
+  // Reset state when switching view modes to prevent stale data crashes
   useEffect(() => {
     setCollapsedPhases(new Set());
+    setData(null);          // Clear stale data so loading state shows
+    setLoading(true);       // Show loader while fetching new view
   }, [viewMode]);
 
   const handleDragStart = useCallback((e: React.DragEvent, itemId: string) => {
@@ -773,7 +775,9 @@ export function ProjectPlanGantt() {
             </h2>
             <p className="text-sm text-[var(--text-secondary)] mt-0.5">
               {isOptimized
-                ? "AI-optimized sprint plan — features grouped by sprint"
+                ? (data?.isRebalanced
+                  ? "Showing Rebalanced Plan — features regrouped by AI rescue strategy"
+                  : "AI-optimized sprint plan — features grouped by sprint")
                 : "Feature timeline — Planned vs Actual progress"}
             </p>
           </div>

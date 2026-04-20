@@ -18,6 +18,7 @@ import { ROLE_LABELS } from "@/lib/types/auth";
 import { NotificationBell } from "@/components/dashboard/notification-bell";
 import { ProjectSelector } from "@/components/layout/project-selector";
 import { StakeholderProjectSelector } from "@/components/layout/stakeholder-project-selector";
+import { NotesButton } from "@/components/notes/notes-button";
 
 
 /* -------------------------------------------------------------------------- */
@@ -230,8 +231,11 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
         {isAppRoute && !isStakeholderRoute && <ProjectSelector />}
       </div>
 
-      {/* Right: connect tools + notifications + user */}
+      {/* Right: notes + connect tools + notifications + user */}
       <div className="flex items-center gap-2">
+        {/* Smart Notes — PO + dev only, not stakeholders */}
+        {isAppRoute && !isStakeholderRoute && <NotesButton />}
+
         {/* Connect Tools button — PO routes only, positioned near notifications */}
         {showConnectTools && (
           <button

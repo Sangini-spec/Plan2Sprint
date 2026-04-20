@@ -37,6 +37,10 @@ import httpx
 
 router = APIRouter()
 
+# Include channel management sub-router
+from ._slack_channels import router as _channel_router
+router.include_router(_channel_router)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------

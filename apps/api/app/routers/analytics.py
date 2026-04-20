@@ -149,12 +149,96 @@ async def get_analytics(
     pct_estimated = int((estimated_count / total_items) * 100)
     pct_with_ac = int((ac_count / total_items) * 100)
 
-    # -- Predictability
-    total_planned = sum(t["planned"] for t in trend) or 1
+    # -- Predictability (from real sprint data)
+    # Use velocity profiles if available, otherwise fall back to iteration completion
+    total_planned = sum(t["planned"] for t in trend) or 0
     total_completed = sum(t["completed"] for t in trend)
-    estimate_accuracy = int((total_completed / total_planned) * 100) if total_planned else 72
 
-    overall_predictability = min(int((estimate_accuracy + 80) / 2), 100)
+    if total_planned > 0:
+        estimate_accuracy = min(int((total_completed / total_planned) * 100), 100)
+    else:
+        # Fallback: calculate from iteration completion rates
+        iter_query = (
+            select(Iteration)
+            .where(Iteration.organization_id == org_id)
+        )
+        if projectId:
+            iter_query = iter_query.where(Iteration.imported_project_id == projectId)
+        iter_result = await db.execute(
+            iter_query.where(Iteration.state.in_(["completed", "active"]))
+        )
+        iterations = iter_result.scalars().all()
+
+        if iterations:
+            completion_rates = []
+            for it in iterations:
+                it_total = await db.execute(
+                    select(func.count()).select_from(WorkItem).where(
+                        WorkItem.organization_id == org_id,
+                        WorkItem.iteration_id == it.id,
+                    )
+                )
+                it_done = await db.execute(
+                    select(func.count()).select_from(WorkItem).where(
+                        WorkItem.organization_id == org_id,
+                        WorkItem.iteration_id == it.id,
+                        WorkItem.status.in_(["DONE", "CLOSED"]),
+                    )
+                )
+                total_count = it_total.scalar() or 0
+                done_count = it_done.scalar() or 0
+                if total_count > 0:
+                    completion_rates.append(done_count / total_count)
+            estimate_accuracy = int((sum(completion_rates) / len(completion_rates)) * 100) if completion_rates else 0
+        else:
+            # Last fallback: use project-level completion
+            wi_base_filters = _wi_base_filters(org_id, projectId)
+            proj_total = await db.execute(
+                select(func.count()).select_from(WorkItem).where(*wi_base_filters)
+            )
+            proj_done = await db.execute(
+                select(func.count()).select_from(WorkItem).where(
+                    *wi_base_filters, WorkItem.status.in_(["DONE", "CLOSED"])
+                )
+            )
+            t = proj_total.scalar() or 1
+            d = proj_done.scalar() or 0
+            estimate_accuracy = int((d / t) * 100)
+
+    # Sprint goal attainment: % of completed iterations where >80% items were done
+    goal_attainment = 80  # default
+    completed_iters_q = (
+        select(Iteration).where(
+            Iteration.organization_id == org_id,
+            Iteration.state == "completed",
+        )
+    )
+    if projectId:
+        completed_iters_q = completed_iters_q.where(Iteration.imported_project_id == projectId)
+    completed_iters_result = await db.execute(completed_iters_q)
+    completed_iters = completed_iters_result.scalars().all()
+    if completed_iters:
+        goals_met = 0
+        for it in completed_iters:
+            it_t = await db.execute(
+                select(func.count()).select_from(WorkItem).where(
+                    WorkItem.organization_id == org_id, WorkItem.iteration_id == it.id
+                )
+            )
+            it_d = await db.execute(
+                select(func.count()).select_from(WorkItem).where(
+                    WorkItem.organization_id == org_id, WorkItem.iteration_id == it.id,
+                    WorkItem.status.in_(["DONE", "CLOSED"])
+                )
+            )
+            total_c = it_t.scalar() or 0
+            done_c = it_d.scalar() or 0
+            if total_c > 0 and (done_c / total_c) >= 0.8:
+                goals_met += 1
+        goal_attainment = int((goals_met / len(completed_iters)) * 100)
+
+    carry_forward = max(0, 100 - estimate_accuracy)
+    overall_predictability = min(int((estimate_accuracy + goal_attainment) / 2), 100)
 
     return {
         "velocity": {
@@ -164,9 +248,9 @@ async def get_analytics(
         },
         "predictability": {
             "overall": overall_predictability,
-            "sprintGoalAttainment": 80,
+            "sprintGoalAttainment": goal_attainment,
             "estimateAccuracy": estimate_accuracy,
-            "carryForwardRate": max(0, 100 - estimate_accuracy),
+            "carryForwardRate": carry_forward,
         },
         "backlogHealth": {
             "overall": int((pct_estimated + pct_with_ac) / 2),

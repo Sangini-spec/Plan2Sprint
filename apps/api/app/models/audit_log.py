@@ -45,11 +45,11 @@ class AuditLogEntry(Base):
         name="organization_id",
         nullable=False,
     )
-    actor_id: Mapped[str] = mapped_column(
+    actor_id: Mapped[str | None] = mapped_column(
         String(25),
         ForeignKey("users.id"),
         name="actor_id",
-        nullable=False,
+        nullable=True,  # Nullable for system-initiated events (daily digests, nudges)
     )
     actor_role: Mapped[str] = mapped_column(
         String(50), name="actor_role", nullable=False

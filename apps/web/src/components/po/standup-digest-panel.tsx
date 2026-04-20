@@ -85,6 +85,16 @@ export function StandupDigestPanel() {
   const [loading, setLoading] = useState(true);
   const refreshKey = useAutoRefresh(["standup_generated", "standup_note_submitted", "sync_complete"]);
 
+  // Auto-expand developer row from ?developer=X URL param (e.g., from Slack link)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const devId = params.get("developer");
+    if (devId) {
+      setExpandedIds(prev => new Set([...prev, devId]));
+    }
+  }, []);
+
   const fetchDigest = useCallback(async () => {
     setLoading(true);
     try {

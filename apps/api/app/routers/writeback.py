@@ -294,21 +294,39 @@ async def get_writeback_log(
         ]),
     ]
 
-    # If projectId is provided, only return entries for work items in that project
+    # Try project-scoped first, fall back to org-wide if no results
     if projectId:
         from ..models.work_item import WorkItem
-        sub = select(WorkItem.id).where(
-            WorkItem.imported_project_id == projectId,
-        ).scalar_subquery()
-        filters.append(AuditLogEntry.resource_id.in_(sub))
-
-    result = await db.execute(
-        select(AuditLogEntry)
-        .where(*filters)
-        .order_by(AuditLogEntry.created_at.desc())
-        .limit(limit)
-    )
-    entries = result.scalars().all()
+        project_filters = [
+            *filters,
+            AuditLogEntry.resource_id.in_(
+                select(WorkItem.id).where(WorkItem.imported_project_id == projectId).scalar_subquery()
+            ),
+        ]
+        result = await db.execute(
+            select(AuditLogEntry)
+            .where(*project_filters)
+            .order_by(AuditLogEntry.created_at.desc())
+            .limit(limit)
+        )
+        entries = result.scalars().all()
+        # If project filter returns nothing, show org-wide entries
+        if not entries:
+            result = await db.execute(
+                select(AuditLogEntry)
+                .where(*filters)
+                .order_by(AuditLogEntry.created_at.desc())
+                .limit(limit)
+            )
+            entries = result.scalars().all()
+    else:
+        result = await db.execute(
+            select(AuditLogEntry)
+            .where(*filters)
+            .order_by(AuditLogEntry.created_at.desc())
+            .limit(limit)
+        )
+        entries = result.scalars().all()
 
     return {
         "entries": [

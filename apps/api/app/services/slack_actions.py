@@ -380,6 +380,18 @@ async def _handle_acknowledge_blocker(
     }
 
 
+async def _broadcast_blocker_change(org_id: str, blocker_id: str, status: str) -> None:
+    """Push a WS event so the dev's Plan2Sprint UI refreshes the blocker history."""
+    try:
+        from .ws_manager import ws_manager
+        await ws_manager.broadcast(org_id, {
+            "type": "blocker_status_changed",
+            "data": {"blockerId": blocker_id, "status": status},
+        })
+    except Exception:
+        pass  # WS is best-effort, never block the action
+
+
 async def _handle_escalate_blocker(
     db: AsyncSession,
     payload: dict,
@@ -387,57 +399,116 @@ async def _handle_escalate_blocker(
     action_data: dict,
     user: dict,
 ) -> dict:
-    """
-    PO clicks "Escalate" on a blocker. Marks status → ESCALATED.
-    """
+    """PO clicks 'Escalate' on a blocker. Marks status → ESCALATED and broadcasts."""
     blocker_id = action_data.get("blocker_id")
     ticket_key = action_data.get("ticket_key", "")
     org_id = action_data.get("org_id", "demo-org")
 
-    if blocker_id:
-        result = await db.execute(
-            select(BlockerFlag).where(BlockerFlag.id == blocker_id)
-        )
-        blocker = result.scalar_one_or_none()
+    if not blocker_id:
+        return {"replace_original": False, "text": "Blocker not found."}
 
-        if blocker and blocker.status in ("OPEN", "ACKNOWLEDGED"):
-            blocker.status = "ESCALATED"
+    result = await db.execute(select(BlockerFlag).where(BlockerFlag.id == blocker_id))
+    blocker = result.scalar_one_or_none()
 
-            audit = AuditLogEntry(
-                organization_id=org_id,
-                actor_id=user.get("id", "slack-user"),
-                actor_role="product_owner",
-                event_type="blocker.escalated_via_slack",
-                resource_type="blocker_flag",
-                resource_id=blocker_id,
-                source_channel="SLACK",
-                success=True,
-                metadata_={"slack_user_id": user.get("id"), "ticket_key": ticket_key},
-            )
-            db.add(audit)
-            await db.commit()
+    if not blocker or blocker.status in ("RESOLVED",):
+        return {"replace_original": False, "text": "Blocker not in an escalatable state."}
 
-            return {
-                "replace_original": True,
-                "text": f"🚨 Blocker escalated: {ticket_key}",
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f":rotating_light: *Blocker Escalated*\n\n*{ticket_key}*: {blocker.description[:120]}\n\nEscalated by <@{user.get('id', '')}> — engineering manager has been notified.",
-                        },
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {"type": "mrkdwn", "text": "Action completed via Slack • Plan2Sprint"},
-                        ],
-                    },
+    blocker.status = "ESCALATED"
+    audit = AuditLogEntry(
+        organization_id=org_id,
+        actor_id=None,
+        actor_role="product_owner",
+        event_type="blocker.escalated_via_slack",
+        resource_type="blocker_flag",
+        resource_id=blocker_id,
+        source_channel="SLACK",
+        success=True,
+        metadata_={"slack_user_id": user.get("id"), "ticket_key": ticket_key},
+    )
+    db.add(audit)
+    await db.commit()
+
+    await _broadcast_blocker_change(org_id, blocker_id, "ESCALATED")
+
+    return {
+        "replace_original": True,
+        "text": f"🚨 Blocker escalated: {ticket_key}",
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":rotating_light: *Blocker Escalated*\n\n*{ticket_key or '—'}*: {blocker.description[:120]}",
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"_Escalated by <@{user.get('id', '')}> via Slack • Plan2Sprint_"},
                 ],
-            }
+            },
+        ],
+    }
 
-    return {"replace_original": False, "text": "Blocker not found."}
+
+async def _handle_resolve_blocker(
+    db: AsyncSession,
+    payload: dict,
+    action: dict,
+    action_data: dict,
+    user: dict,
+) -> dict:
+    """PO clicks 'Resolve' on a blocker. Marks status → RESOLVED and broadcasts."""
+    blocker_id = action_data.get("blocker_id")
+    ticket_key = action_data.get("ticket_key", "")
+    org_id = action_data.get("org_id", "demo-org")
+
+    if not blocker_id:
+        return {"replace_original": False, "text": "Blocker not found."}
+
+    result = await db.execute(select(BlockerFlag).where(BlockerFlag.id == blocker_id))
+    blocker = result.scalar_one_or_none()
+
+    if not blocker:
+        return {"replace_original": False, "text": "Blocker not found."}
+
+    blocker.status = "RESOLVED"
+    blocker.resolved_at = datetime.now(timezone.utc)
+    audit = AuditLogEntry(
+        organization_id=org_id,
+        actor_id=None,
+        actor_role="product_owner",
+        event_type="blocker.resolved_via_slack",
+        resource_type="blocker_flag",
+        resource_id=blocker_id,
+        source_channel="SLACK",
+        success=True,
+        metadata_={"slack_user_id": user.get("id"), "ticket_key": ticket_key},
+    )
+    db.add(audit)
+    await db.commit()
+
+    await _broadcast_blocker_change(org_id, blocker_id, "RESOLVED")
+
+    return {
+        "replace_original": True,
+        "text": f"✅ Blocker resolved: {ticket_key}",
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f":white_check_mark: *Blocker Resolved*\n\n*{ticket_key or '—'}*: {blocker.description[:120]}",
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"_Resolved by <@{user.get('id', '')}> via Slack • Plan2Sprint_"},
+                ],
+            },
+        ],
+    }
 
 
 # ===================================================================
@@ -540,6 +611,7 @@ ACTION_HANDLERS = {
     "reject_sprint": _handle_reject_sprint,
     "acknowledge_blocker": _handle_acknowledge_blocker,
     "escalate_blocker": _handle_escalate_blocker,
+    "resolve_blocker": _handle_resolve_blocker,
     "flag_blocker": _handle_flag_blocker,
     "snooze_alert": _handle_snooze_alert,
 }

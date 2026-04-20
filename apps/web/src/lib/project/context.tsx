@@ -1,15 +1,18 @@
 "use client";
 
 /**
- * SelectedProjectContext — Task 1 (Project Selection)
+ * SelectedProjectContext — Project Selection & Auto-Import
  *
  * Provides the currently selected project across the entire app shell.
  * Every data-fetching page reads `selectedProject` from this context to
  * scope its queries to a single project.
  *
- * Persistence: selected project is saved to the database via
- *   POST /api/projects/preferences/selected
- * so it survives page refreshes and new logins.
+ * Data flow:
+ *   1. Load DB projects (GET /api/projects)
+ *   2. Merge with liveProjects from IntegrationProvider (localStorage + status endpoints)
+ *   3. If still 0 projects, discover from tool APIs (GET /api/integrations/ado|jira/projects)
+ *   4. Auto-import first project to DB if it has no internalId
+ *   5. Trigger sync to fetch work items from ADO/Jira
  */
 
 import {
@@ -84,27 +87,113 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   const switchingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { connections } = useIntegrations();
 
-  // Derive live projects from integration connections (fallback source)
+  // Track auto-import to prevent duplicate calls
+  const autoImportDone = useRef(false);
+
+  // ── Derive liveProjects from connections ──
+  // FIX: source comes from the CONNECTION's tool, not the project object
+  // (localStorage may not have `source` stored on the project)
   const liveProjects = useMemo<ProjectItem[]>(() => {
     return connections
       .filter((c) => c.status === "connected" || c.status === "syncing")
       .flatMap((c) => (c.selectedProjects ?? []).map((p: SelectedProject) => ({
-        internalId: p.internalId || `live-${p.source}-${p.id}`,
+        internalId: p.internalId || "",
         id: String(p.id),
         name: p.name,
         key: p.key,
         description: p.description,
-        source: p.source as string,
+        source: p.source || c.tool, // FIX: fallback to connection's tool type
       })));
   }, [connections]);
 
-  // Load projects list + user's saved preference on mount
+  // Stable stringified key for liveProjects to avoid infinite re-renders.
+  // Only re-run init when the actual project list changes, not on every
+  // connections reference change.
+  const liveProjectsKey = useMemo(() => {
+    return liveProjects.map((p) => `${p.source}:${p.id}`).sort().join(",");
+  }, [liveProjects]);
+
+  // ── Helper: save a project to DB and trigger sync ──
+  async function importAndSync(project: ProjectItem): Promise<ProjectItem> {
+    try {
+      const saveRes = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: project.id,
+          name: project.name,
+          key: project.key,
+          description: project.description,
+          sourceTool: project.source,
+          boardId: project.boardId,
+        }),
+      });
+      if (saveRes.ok) {
+        const saved = await saveRes.json();
+        if (saved.internalId) {
+          const updated = { ...project, internalId: saved.internalId };
+          // Fire-and-forget: trigger full data sync from ADO/Jira
+          fetch("/api/integrations/sync/auto", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: saved.internalId }),
+          }).catch(() => {});
+          return updated;
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+    return project;
+  }
+
+  // ── Helper: discover projects from connected tool APIs ──
+  async function discoverProjectsFromTools(): Promise<ProjectItem[]> {
+    const discovered: ProjectItem[] = [];
+    // Try ADO
+    try {
+      const res = await fetch("/api/integrations/ado/projects");
+      if (res.ok) {
+        const data = await res.json();
+        for (const p of data.projects ?? []) {
+          discovered.push({
+            internalId: "",
+            id: String(p.id),
+            name: p.name,
+            key: p.key,
+            description: p.description,
+            source: "ado",
+          });
+        }
+      }
+    } catch { /* ADO not connected — skip */ }
+    // Try Jira
+    try {
+      const res = await fetch("/api/integrations/jira/projects");
+      if (res.ok) {
+        const data = await res.json();
+        for (const p of data.projects ?? []) {
+          discovered.push({
+            internalId: "",
+            id: String(p.id),
+            name: p.name,
+            key: p.key,
+            description: p.description,
+            source: "jira",
+          });
+        }
+      }
+    } catch { /* Jira not connected — skip */ }
+    return discovered;
+  }
+
+  // ── STEP 1: Initial load from DB ──
+  // Runs once on mount. Loads DB projects + saved preference.
   useEffect(() => {
     let cancelled = false;
 
     async function init() {
       try {
-        // Fetch projects and preference in parallel
         const [projectsRes, prefRes] = await Promise.allSettled([
           fetch("/api/projects").then((r) => (r.ok ? r.json() : null)),
           fetch("/api/projects/preferences/selected").then((r) => (r.ok ? r.json() : null)),
@@ -112,7 +201,6 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
 
         if (cancelled) return;
 
-        // Parse projects from backend
         const dbProjects: ProjectItem[] =
           projectsRes.status === "fulfilled" && projectsRes.value
             ? (projectsRes.value.projects ?? []).map((p: Record<string, unknown>) => ({
@@ -127,81 +215,97 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
               }))
             : [];
 
-        // Merge: use DB projects, plus any live integration projects not already in DB
-        const merged = [...dbProjects];
-        for (const lp of liveProjects) {
-          if (!merged.some((p) => String(p.id) === String(lp.id) && p.source === lp.source)) {
-            merged.push(lp);
+        if (cancelled) return;
+
+        if (dbProjects.length > 0) {
+          setProjects(dbProjects);
+
+          // Restore preference
+          const prefData =
+            prefRes.status === "fulfilled" && prefRes.value
+              ? prefRes.value.selectedProject
+              : null;
+
+          if (prefData?.internalId) {
+            const match = dbProjects.find((p) => p.internalId === prefData.internalId);
+            setSelectedProject(match ?? dbProjects[0]);
+          } else {
+            setSelectedProject(dbProjects[0]);
           }
-        }
 
-        setProjects(merged);
-
-        // Restore saved preference
-        const prefData =
-          prefRes.status === "fulfilled" && prefRes.value
-            ? prefRes.value.selectedProject
-            : null;
-
-        if (prefData && prefData.internalId) {
-          const match = merged.find(
-            (p: ProjectItem) => p.internalId === prefData.internalId
-          );
-          if (match) {
-            setSelectedProject(match);
-          } else if (merged.length > 0) {
-            setSelectedProject(merged[0]);
-          }
-        } else if (merged.length > 0) {
-          setSelectedProject(merged[0]);
-        }
-      } catch {
-        // API down — fall back to live integration projects
-        if (liveProjects.length > 0) {
-          setProjects(liveProjects);
-          setSelectedProject(liveProjects[0]);
-        }
-      } finally {
-        if (!cancelled) {
           setLoading(false);
           setInitialized(true);
+        } else {
+          // No DB projects — mark initialized but keep loading=true
+          // so STEP 2 can pick up liveProjects when connections load.
+          setInitialized(true);
         }
+      } catch {
+        setInitialized(true);
       }
     }
 
     init();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Merge live integration projects when connections change after init
+  // ── STEP 2: When liveProjects arrive (connections loaded), auto-import ──
+  // This runs when connections finish loading from localStorage/status endpoints.
+  // Uses liveProjectsKey (stable string) to avoid infinite loops.
   useEffect(() => {
-    if (!initialized || liveProjects.length === 0) return;
+    if (!initialized) return;
+    // If we already have a project with an internalId, we're good
+    if (selectedProject?.internalId) return;
+    // If auto-import already done, skip
+    if (autoImportDone.current) return;
 
-    setProjects((prev) => {
-      const merged = [...prev];
-      let changed = false;
-      for (const lp of liveProjects) {
-        if (!merged.some((p) => String(p.id) === String(lp.id) && p.source === lp.source)) {
-          merged.push(lp);
-          changed = true;
-        }
-      }
-      if (!changed) return prev;
+    let cancelled = false;
 
-      // Auto-select first project if none selected
-      if (!selectedProject && merged.length > 0) {
-        setSelectedProject(merged[0]);
+    async function handleLiveProjects() {
+      let projectsToUse = [...liveProjects];
+
+      // If liveProjects is also empty, try discovering from tool APIs
+      if (projectsToUse.length === 0) {
+        const discovered = await discoverProjectsFromTools();
+        if (cancelled) return;
+        projectsToUse = discovered;
       }
-      return merged;
-    });
+
+      if (projectsToUse.length === 0) {
+        // No projects anywhere — show welcome screen
+        setProjects([]);
+        setSelectedProject(null);
+        setLoading(false);
+        return;
+      }
+
+      // Set projects immediately so UI shows the project name
+      setProjects(projectsToUse);
+      setSelectedProject(projectsToUse[0]);
+
+      // Now auto-import the first project to DB + trigger sync
+      autoImportDone.current = true;
+      const imported = await importAndSync(projectsToUse[0]);
+      if (cancelled) return;
+
+      if (imported.internalId) {
+        const updated = projectsToUse.map((p, i) =>
+          i === 0 ? imported : p
+        );
+        setProjects(updated);
+        setSelectedProject(imported);
+      }
+
+      setLoading(false);
+    }
+
+    handleLiveProjects();
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveProjects, initialized]);
+  }, [initialized, liveProjectsKey]);
 
   // Save preference to DB whenever selectedProject changes (after init)
-  // Debounced to avoid rapid-fire POSTs during initialization cascade
   const savePrefTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!initialized) return;
@@ -214,7 +318,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId }),
       }).catch(() => {});
-    }, 500); // 500ms debounce
+    }, 500);
 
     return () => {
       if (savePrefTimer.current) clearTimeout(savePrefTimer.current);
@@ -222,59 +326,29 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   }, [selectedProject, initialized]);
 
   const selectProject = useCallback(async (project: ProjectItem | null) => {
-    // Clear all cached API responses so components re-fetch with the new projectId
     invalidateCache();
     setSwitching(true);
 
-    // Auto-import: if project comes from liveProjects (no internalId), save to DB first
+    // Auto-import if project has no internalId
     if (project && !project.internalId) {
-      try {
-        const saveRes = await fetch("/api/projects/", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: project.id,
-            name: project.name,
-            key: project.key,
-            description: project.description,
-            sourceTool: project.source,
-            boardId: project.boardId,
-          }),
-        });
-        if (saveRes.ok) {
-          const saved = await saveRes.json();
-          // Update the project with the DB-assigned internalId
-          if (saved.internalId) {
-            project = { ...project, internalId: saved.internalId };
-            // Update projects list with the new internalId
-            setProjects((prev) =>
-              prev.map((p) =>
-                String(p.id) === String(project!.id) && p.source === project!.source
-                  ? { ...p, internalId: saved.internalId }
-                  : p
-              )
-            );
-          }
-          // Trigger sync to import work items from ADO/Jira
-          fetch("/api/integrations/sync", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ projectId: saved.internalId }),
-          }).catch(() => {});
-        }
-      } catch {
-        // Swallow — project will work without DB record, just no dashboard data
+      const imported = await importAndSync(project);
+      if (imported.internalId) {
+        project = imported;
+        setProjects((prev) =>
+          prev.map((p) =>
+            String(p.id) === String(project!.id) && p.source === project!.source
+              ? project! : p
+          )
+        );
       }
     }
 
     setSelectedProject(project);
 
-    // Clear switching flag after a short delay to allow components to re-fetch
     if (switchingTimer.current) clearTimeout(switchingTimer.current);
     switchingTimer.current = setTimeout(() => setSwitching(false), 400);
   }, []);
 
-  // Use ref for selectedProject to avoid re-creating refreshProjects on every selection
   const selectedProjectRef = useRef(selectedProject);
   selectedProjectRef.current = selectedProject;
 
@@ -297,18 +371,14 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
       );
       setProjects(newProjects);
 
-      // If current selection no longer exists, reset to first
       const current = selectedProjectRef.current;
-      if (
-        current &&
-        !newProjects.some((p) => p.internalId === current.internalId)
-      ) {
+      if (current && !newProjects.some((p) => p.internalId === current.internalId)) {
         setSelectedProject(newProjects[0] ?? null);
       }
     } catch {
       // ignore
     }
-  }, []); // No dependency on selectedProject — uses ref instead
+  }, []);
 
   const value = useMemo(
     () => ({

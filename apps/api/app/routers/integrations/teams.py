@@ -25,7 +25,7 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,14 +38,18 @@ import httpx
 
 router = APIRouter()
 
+# Include channel management sub-router (list-teams, select-parent-team, create-channel, post-to-channel, etc.)
+from ._teams_channels import router as _teams_channel_router
+router.include_router(_teams_channel_router)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 MS_AUTHORITY = "https://login.microsoftonline.com"
 MS_GRAPH_API = "https://graph.microsoft.com/v1.0"
 
-# Permissions: ChannelMessage.Send, Chat.ReadWrite, User.Read.All
-TEAMS_SCOPES = "https://graph.microsoft.com/Chat.ReadWrite https://graph.microsoft.com/ChannelMessage.Send https://graph.microsoft.com/User.Read.All offline_access"
+# Permissions: Chat.ReadWrite, ChannelMessage.Send, User.Read.All, Team.ReadBasic.All, Channel.Create
+TEAMS_SCOPES = "https://graph.microsoft.com/Chat.ReadWrite https://graph.microsoft.com/ChannelMessage.Send https://graph.microsoft.com/User.Read.All https://graph.microsoft.com/Team.ReadBasic.All https://graph.microsoft.com/Channel.Create offline_access"
 
 # In-memory CSRF state store
 _oauth_states: dict[str, dict] = {}
@@ -217,23 +221,196 @@ async def initiate_teams_oauth(
     return RedirectResponse(url=authorize_url, status_code=302)
 
 
+@router.get("/blocker-action", response_class=HTMLResponse)
+async def teams_blocker_action(
+    blocker_id: str = Query(...),
+    action: str = Query(...),
+    org_id: str = Query(...),
+    t: str = Query(...),
+    sig: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Signed-URL endpoint invoked from Teams Adaptive Card buttons.
+
+    Verifies the HMAC signature, updates the blocker status, broadcasts the
+    change over WebSocket, and returns a tiny HTML confirmation page.
+    """
+    from ...models.standup import BlockerFlag
+    from ...models.audit_log import AuditLogEntry
+    from ...services.teams_action_signer import verify
+    from ...services.ws_manager import ws_manager
+    from datetime import datetime as _dt, timezone as _tz
+
+    if not verify(blocker_id, action, org_id, t, sig):
+        return HTMLResponse(
+            "<html><body style='font-family:system-ui;padding:40px;text-align:center'>"
+            "<h2>🔒 Invalid or expired link</h2>"
+            "<p>This blocker action link couldn't be verified. It may have expired or been tampered with.</p>"
+            "</body></html>",
+            status_code=403,
+        )
+
+    if action not in ("escalate", "resolve"):
+        return HTMLResponse("<p>Unknown action.</p>", status_code=400)
+
+    result = await db.execute(select(BlockerFlag).where(BlockerFlag.id == blocker_id))
+    blocker = result.scalar_one_or_none()
+    if not blocker:
+        return HTMLResponse(
+            "<html><body style='font-family:system-ui;padding:40px;text-align:center'>"
+            "<h2>❓ Blocker not found</h2></body></html>",
+            status_code=404,
+        )
+
+    new_status = "ESCALATED" if action == "escalate" else "RESOLVED"
+    if blocker.status == new_status:
+        msg = f"This blocker is already marked as <b>{new_status.lower()}</b>."
+    else:
+        blocker.status = new_status
+        if new_status == "RESOLVED":
+            blocker.resolved_at = _dt.now(_tz.utc)
+        audit = AuditLogEntry(
+            organization_id=org_id,
+            actor_id=None,
+            actor_role="product_owner",
+            event_type=f"blocker.{action}d_via_teams",
+            resource_type="blocker_flag",
+            resource_id=blocker_id,
+            source_channel="TEAMS",
+            success=True,
+            metadata_={"blocker_id": blocker_id, "action": action},
+        )
+        db.add(audit)
+        await db.commit()
+
+        # Fire WS event so the dev's Plan2Sprint page updates in real time
+        try:
+            await ws_manager.broadcast(org_id, {
+                "type": "blocker_status_changed",
+                "data": {"blockerId": blocker_id, "status": new_status},
+            })
+        except Exception:
+            pass
+
+        msg = f"Blocker marked as <b>{new_status.lower()}</b>. You can close this tab."
+
+    color = "#d32f2f" if new_status == "ESCALATED" else "#2e7d32"
+    emoji = "🚨" if new_status == "ESCALATED" else "✅"
+    return HTMLResponse(
+        f"""
+        <html><head><title>Plan2Sprint — Blocker Action</title></head>
+        <body style='font-family:system-ui;padding:48px;text-align:center;background:#f5f5f5'>
+          <div style='max-width:480px;margin:0 auto;padding:32px;background:white;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08)'>
+            <div style='font-size:48px'>{emoji}</div>
+            <h2 style='color:{color};margin:16px 0'>Done</h2>
+            <p style='color:#555;line-height:1.5'>{msg}</p>
+            <p style='color:#999;font-size:12px;margin-top:24px'>Plan2Sprint • Teams action</p>
+          </div>
+        </body></html>
+        """
+    )
+
+
+@router.get("/admin-consent")
+async def teams_admin_consent():
+    """
+    GET /admin-consent  — public (no Plan2Sprint auth)
+
+    Redirects to Microsoft's tenant-wide admin consent endpoint.
+
+    Intended to be opened by a Microsoft tenant admin (Global / Application /
+    Cloud Application Administrator). After they click "Accept", Microsoft
+    grants the requested scopes tenant-wide, so every user in the tenant can
+    then OAuth-connect without individual approval requests.
+
+    This endpoint is deliberately unauthenticated: the IT admin may not have
+    a Plan2Sprint account, and all this route does is build a redirect URL
+    — no secrets are exposed. Microsoft's own auth protects the consent step.
+    """
+    client_id = settings.teams_client_id
+    tenant_id = settings.teams_tenant_id or "common"
+    redirect_uri = settings.teams_redirect_uri
+
+    if not client_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Teams OAuth not configured — TEAMS_CLIENT_ID is missing",
+        )
+
+    # Opaque state; we don't need to match it back to a user since the admin
+    # may be logged-out of Plan2Sprint. The /callback endpoint handles the
+    # admin_consent=True path without requiring a matched state.
+    state = str(uuid.uuid4())
+
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": state,
+    }
+    consent_url = f"{MS_AUTHORITY}/{tenant_id}/adminconsent?{urlencode(params)}"
+    return RedirectResponse(url=consent_url, status_code=302)
+
+
+@router.get("/admin-consent-url")
+async def teams_admin_consent_url():
+    """
+    GET /admin-consent-url  — public (no Plan2Sprint auth)
+
+    Returns the raw Microsoft admin-consent URL so the UI can show it for
+    copy-paste (e.g. to email / Slack it to the tenant's IT admin directly).
+    """
+    client_id = settings.teams_client_id
+    tenant_id = settings.teams_tenant_id or "common"
+    redirect_uri = settings.teams_redirect_uri
+
+    if not client_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Teams OAuth not configured — TEAMS_CLIENT_ID is missing",
+        )
+
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": str(uuid.uuid4()),
+    }
+    consent_url = f"{MS_AUTHORITY}/{tenant_id}/adminconsent?{urlencode(params)}"
+    return {"url": consent_url, "tenant": tenant_id}
+
+
 @router.get("/callback")
 async def teams_oauth_callback(
     code: str = Query(None),
     state: str = Query(None),
     error: str = Query(None),
     error_description: str = Query(None),
+    admin_consent: str = Query(None),
+    tenant: str = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """
     GET /callback
-    Microsoft redirects here after admin consents.
-    Exchanges the authorization code for access + refresh tokens.
+    Microsoft redirects here after a user OR an admin consents.
+
+    Two flows land here:
+      • Regular OAuth user flow  → has `code` → exchange for tokens (below).
+      • Admin-consent flow       → has `admin_consent=True`, NO `code` → just
+                                    redirect the admin back with a success msg.
     """
     if error:
         detail = error_description or error
         return RedirectResponse(
             url=f"{settings.frontend_url}/po/notifications?teams=error&detail={detail}",
+            status_code=302,
+        )
+
+    # --- Admin-consent flow (no code; Microsoft returns admin_consent=True) ---
+    if admin_consent and admin_consent.lower() == "true":
+        # Clean up the state we stashed (best-effort — not critical)
+        if state:
+            _oauth_states.pop(state, None)
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/po/notifications?teams=admin_consented",
             status_code=302,
         )
 

@@ -11,23 +11,27 @@ import type {
   IntegrationAuditEntry,
 } from "./types";
 
-// Storage keys include user context to prevent cross-user data leakage
-function getUserStorageKey(base: string): string {
-  if (typeof window === "undefined") return base;
-  // Use supabase user id from cookie or session to scope storage
-  const cookies = document.cookie.split(";").map((c) => c.trim());
-  const sbCookie = cookies.find((c) => c.startsWith("sb-") && c.includes("auth-token"));
-  if (sbCookie) {
-    // Create a short hash from the cookie value for the key
-    const val = sbCookie.split("=")[1] || "";
-    const hash = val.slice(0, 16);
-    return `${base}_${hash}`;
-  }
-  return base;
+// ── Per-user storage scoping ──
+// Prevents cross-user data leakage when multiple users share the same browser.
+// Uses a user ID stored by AuthProvider on login.
+function _getUserSuffix(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("plan2sprint_uid") || "";
 }
 
-const STORAGE_KEY = "plan2sprint_connections";
-const AUDIT_KEY = "plan2sprint_integration_audit";
+function _scopedKey(base: string): string {
+  const suffix = _getUserSuffix();
+  return suffix ? `${base}_${suffix}` : base;
+}
+
+/** Called by AuthProvider on login to set the scoping identifier. */
+export function setStorageUserId(uid: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem("plan2sprint_uid", uid);
+}
+
+const BASE_STORAGE_KEY = "plan2sprint_connections";
+const BASE_AUDIT_KEY = "plan2sprint_integration_audit";
 
 export function clearAllConnectionStorage(): void {
   if (typeof window === "undefined") return;
@@ -49,7 +53,8 @@ export function clearAllConnectionStorage(): void {
 export function loadConnections(): ConnectionInfo[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const key = _scopedKey(BASE_STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
@@ -58,7 +63,8 @@ export function loadConnections(): ConnectionInfo[] {
 
 export function saveConnections(connections: ConnectionInfo[]): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(connections));
+  const key = _scopedKey(BASE_STORAGE_KEY);
+  localStorage.setItem(key, JSON.stringify(connections));
 }
 
 // ============================================================================
@@ -68,7 +74,7 @@ export function saveConnections(connections: ConnectionInfo[]): void {
 export function loadAuditLog(): IntegrationAuditEntry[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem(AUDIT_KEY);
+    const raw = localStorage.getItem(_scopedKey(BASE_AUDIT_KEY));
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
@@ -84,7 +90,7 @@ function appendAuditEntry(entry: Omit<IntegrationAuditEntry, "id" | "timestamp">
   });
   // Keep last 200 entries
   if (log.length > 200) log.splice(0, log.length - 200);
-  localStorage.setItem(AUDIT_KEY, JSON.stringify(log));
+  localStorage.setItem(_scopedKey(BASE_AUDIT_KEY), JSON.stringify(log));
 }
 
 // ============================================================================

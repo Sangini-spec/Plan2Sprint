@@ -10,3 +10,6 @@ node_modules
 .idea
 prisma
 src/generated
+# Windows reserved device name — an accidentally-created file named NUL that
+# Linux tar can't process during docker build.
+NUL

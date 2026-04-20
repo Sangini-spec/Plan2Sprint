@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from ..auth.supabase import get_current_user
 from ..database import get_db
 from ..models import StandupReport, TeamStandupDigest, BlockerFlag, TeamMember
+from ..models.work_item import WorkItem
 from ..services.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -76,15 +77,37 @@ def _build_individual_reports(reports: list) -> list[dict]:
     return individual_reports
 
 
-def _build_submitted_notes(reports: list, query_date: str) -> list[dict]:
-    """Build submittedNotes array from reports with developer_note."""
+def _build_submitted_notes(
+    reports: list,
+    query_date: str,
+    current_user_email: str = "",
+    current_user_name: str = "",
+) -> list[dict]:
+    """Build submittedNotes array from reports with developer_note.
+
+    If current_user_email matches the team member's email, use the logged-in
+    user's name (from JWT) instead of the team_member.display_name, which may
+    be stale or incorrectly linked.
+    """
     submitted_notes = []
     for r in reports:
         if r.developer_note:
+            # Determine author name: prefer the logged-in user's name if this
+            # is their own report (match by email).
+            author = r.team_member.display_name if r.team_member else "Unknown"
+            if (
+                current_user_email
+                and r.team_member
+                and r.team_member.email
+                and r.team_member.email.lower() == current_user_email.lower()
+                and current_user_name
+            ):
+                author = current_user_name
+
             submitted_notes.append({
                 "id": r.id,
                 "date": r.report_date.date().isoformat() if r.report_date else query_date,
-                "author": r.team_member.display_name if r.team_member else "Unknown",
+                "author": author,
                 "authorRole": "developer",
                 "note": r.developer_note,
                 "submittedAt": r.created_at.isoformat() if r.created_at else None,
@@ -100,6 +123,7 @@ def _build_submitted_notes(reports: list, query_date: str) -> list[dict]:
 async def get_standup_digest(
     date_param: str | None = Query(None, alias="date"),
     auto_generate: bool = Query(True, alias="autoGenerate"),
+    project_id: str | None = Query(None, alias="projectId"),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -166,8 +190,46 @@ async def get_standup_digest(
     reports_result = await db.execute(reports_query)
     reports = reports_result.scalars().all()
 
+    # ── Project-scoped filtering ──
+    # If projectId is provided, load that project's work-item ticket IDs and
+    # filter each report's completed / in_progress / blockers to only include
+    # items belonging to the selected project.
+    project_ticket_ids: set[str] | None = None
+    if project_id:
+        wi_q = await db.execute(
+            select(WorkItem.external_id).where(
+                WorkItem.imported_project_id == project_id,
+            )
+        )
+        project_ticket_ids = {r[0] for r in wi_q.all() if r[0]}
+
+    if project_ticket_ids is not None:
+        for r in reports:
+            if isinstance(r.completed_items, list):
+                r.completed_items = [
+                    item for item in r.completed_items
+                    if isinstance(item, dict) and item.get("ticketId") in project_ticket_ids
+                ]
+            if isinstance(r.in_progress_items, list):
+                r.in_progress_items = [
+                    item for item in r.in_progress_items
+                    if isinstance(item, dict) and item.get("ticketId") in project_ticket_ids
+                ]
+            # Blockers may or may not have ticketIds — keep those that match or have no ticketId
+            if isinstance(r.blockers, list):
+                r.blockers = [
+                    b for b in r.blockers
+                    if (isinstance(b, dict) and (not b.get("ticketId") or b.get("ticketId") in project_ticket_ids))
+                    or isinstance(b, str)
+                ]
+
     individual_reports = _build_individual_reports(reports)
-    submitted_notes = _build_submitted_notes(reports, query_date)
+    submitted_notes = _build_submitted_notes(
+        reports,
+        query_date,
+        current_user_email=(current_user.get("email") or "").lower(),
+        current_user_name=current_user.get("full_name") or "",
+    )
 
     # Build the full response matching the Next.js format
     response = {
@@ -246,21 +308,36 @@ async def submit_standup_note(
         )
 
     note = body.get("note", "").strip()
-    author = body.get("author", current_user.get("full_name", "Unknown"))
-    author_role = body.get("authorRole", current_user.get("role", "developer"))
+    # Author name: prefer what the frontend sends, then JWT full_name
+    author = body.get("author") or current_user.get("full_name") or "Unknown"
+    author_role = body.get("authorRole") or current_user.get("role") or "developer"
 
     if not note:
         raise HTTPException(status_code=400, detail="Note cannot be empty")
 
-    # Find team member for the current user
+    # Find team member for the current user (match by email, not just org)
     org_id = current_user.get("organization_id", "demo-org")
+    user_email = (current_user.get("email") or "").lower()
     member_query = (
         select(TeamMember)
-        .where(TeamMember.organization_id == org_id)
+        .where(
+            TeamMember.organization_id == org_id,
+            TeamMember.email.ilike(user_email),
+        )
         .limit(1)
     )
     member_result = await db.execute(member_query)
     member = member_result.scalar_one_or_none()
+
+    # Fallback: if no email match, try by org only (for users not yet email-mapped)
+    if not member and user_email:
+        fallback_q = (
+            select(TeamMember)
+            .where(TeamMember.organization_id == org_id)
+            .limit(1)
+        )
+        fallback_result = await db.execute(fallback_q)
+        member = fallback_result.scalar_one_or_none()
 
     if member:
         # Check for existing report today — append note to it
@@ -516,3 +593,71 @@ async def get_notes_by_date(
             })
 
     return {"date": query_date, "notes": notes}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/blockers/my — Recent blockers raised by the logged-in developer
+# ---------------------------------------------------------------------------
+
+@router.get("/blockers/my")
+async def list_my_blockers(
+    project_id: str | None = Query(None, alias="projectId"),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the current developer's recent blockers with their live status.
+
+    Powers the "Blocker History" list under the dev's Update About Your Blockers
+    form. Status is one of OPEN / ACKNOWLEDGED / ESCALATED / RESOLVED.
+    """
+    org_id = current_user.get("organization_id", "demo-org")
+    user_email = (current_user.get("email") or "").lower()
+
+    # Find all TeamMember rows for this user in this org (they may have multiple — one per project)
+    tm_q = await db.execute(
+        select(TeamMember).where(
+            TeamMember.organization_id == org_id,
+            TeamMember.email.ilike(user_email),
+        )
+    )
+    team_members = list(tm_q.scalars().all())
+    if not team_members:
+        return {"blockers": []}
+
+    tm_ids = [tm.id for tm in team_members]
+
+    # Join BlockerFlag → StandupReport to filter by team_member_id
+    blockers_q = (
+        select(BlockerFlag, StandupReport)
+        .join(StandupReport, BlockerFlag.standup_report_id == StandupReport.id)
+        .where(StandupReport.team_member_id.in_(tm_ids))
+        .order_by(BlockerFlag.flagged_at.desc())
+        .limit(limit)
+    )
+    rows = (await db.execute(blockers_q)).all()
+
+    # Optional project filter — include blockers from team_members that either
+    # belong to the given project OR have no project assignment (self-created
+    # team_members from blocker-flag path).
+    project_tm_ids: set[str] | None = None
+    if project_id:
+        project_tm_ids = {
+            tm.id for tm in team_members
+            if tm.imported_project_id == project_id or tm.imported_project_id is None
+        }
+
+    blockers = []
+    for b, r in rows:
+        if project_tm_ids is not None and r.team_member_id not in project_tm_ids:
+            continue
+        blockers.append({
+            "id": b.id,
+            "ticket": b.ticket_reference or "",
+            "description": b.description or "",
+            "status": (b.status or "OPEN").upper(),
+            "flaggedAt": b.flagged_at.isoformat() if b.flagged_at else None,
+            "resolvedAt": b.resolved_at.isoformat() if b.resolved_at else None,
+        })
+
+    return {"blockers": blockers}

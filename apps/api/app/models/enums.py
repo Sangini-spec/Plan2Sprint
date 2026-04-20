@@ -21,6 +21,7 @@ class SprintPlanStatus(str, enum.Enum):
     SYNCED_PARTIAL = "SYNCED_PARTIAL"
     UNDONE = "UNDONE"
     EXPIRED = "EXPIRED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 class WorkItemStatus(str, enum.Enum):

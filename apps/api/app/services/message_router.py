@@ -402,11 +402,16 @@ async def _log_delivery(
     status: str,
     error_detail: str = "",
 ) -> None:
-    """Log a delivery attempt to the audit log."""
+    """Log a delivery attempt to the audit log.
+
+    Never allowed to fail the caller. If the audit write errors out we roll
+    back the session so it remains usable for subsequent operations (otherwise
+    the poisoned session would take down the whole delivery queue).
+    """
     try:
         entry = AuditLogEntry(
             organization_id=org_id,
-            actor_id="system",  # System-initiated delivery
+            actor_id=None,  # System-initiated delivery (no real user)
             actor_role="system",
             event_type=f"notification.{notification_type}.{channel}",
             resource_type="notification",
@@ -423,5 +428,10 @@ async def _log_delivery(
         )
         db.add(entry)
         await db.commit()
-    except Exception:
-        pass  # Don't fail delivery over audit log errors
+    except Exception as e:  # noqa: BLE001
+        # Roll the failed transaction back so the shared session isn't poisoned
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        logger.warning("Audit log write failed (non-fatal): %s", e)

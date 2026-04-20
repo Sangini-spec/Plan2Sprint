@@ -12,6 +12,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 import type { AppUser, UserRole } from "@/lib/types/auth";
+import { setStorageUserId } from "@/lib/integrations/demo-connections";
 
 interface AuthContextType {
   user: User | null;
@@ -50,6 +51,8 @@ function _clearUserScopedStorage() {
     "plan2sprint_integration_audit",
     "plan2sprint_selected_project",
     "plan2sprint_demo_user",
+    "plan2sprint_github",
+    "plan2sprint_uid",
     "p2s_",
   ];
   const keysToRemove: string[] = [];
@@ -126,6 +129,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(currentUser);
 
       if (currentUser) {
+        // Set per-user storage scope BEFORE any other storage operations
+        setStorageUserId(currentUser.id);
+
         const metadata = currentUser.user_metadata;
         setAppUser({
           id: currentUser.id,

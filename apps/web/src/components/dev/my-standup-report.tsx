@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   CalendarDays,
   Send,
   Lock,
@@ -19,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge, Button } from "@/components/ui";
+import { useSelectedProject } from "@/lib/project/context";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -114,6 +116,7 @@ function formatTime(iso: string): string {
 // ---------------------------------------------------------------------------
 
 export function MyStandupReport() {
+  const { selectedProject } = useSelectedProject();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewMonth, setViewMonth] = useState(new Date().getMonth());
   const [viewYear, setViewYear] = useState(new Date().getFullYear());
@@ -121,8 +124,27 @@ export function MyStandupReport() {
   // Note state
   const [noteText, setNoteText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [sendingTo, setSendingTo] = useState<"slack" | "teams" | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [channelResult, setChannelResult] = useState<string | null>(null);
+
+  // Platform connections
+  const [slackConnected, setSlackConnected] = useState(false);
+  const [teamsConnected, setTeamsConnected] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/integrations/slack/status");
+        if (res.ok) setSlackConnected((await res.json()).connected === true);
+      } catch {}
+      try {
+        const res = await fetch("/api/integrations/teams/status");
+        if (res.ok) setTeamsConnected((await res.json()).connected === true);
+      } catch {}
+    })();
+  }, []);
 
   // API data
   const [report, setReport] = useState<IndividualReport | null>(null);
@@ -140,19 +162,31 @@ export function MyStandupReport() {
   const days = getMonthDays(viewYear, viewMonth);
 
   // ---------- Fetch standup data from API ----------
+  const projectId = selectedProject?.internalId || "";
+
   const fetchStandup = useCallback(async (dateKey: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/standups?date=${dateKey}`);
+      const pidParam = projectId ? `&projectId=${projectId}` : "";
+      const res = await fetch(`/api/standups?date=${dateKey}${pidParam}`);
       const data = await res.json();
 
       const reports: IndividualReport[] = data.individualReports ?? [];
       if (reports.length > 0) {
-        setReport(reports[0]);
-        setNarrative(reports[0].narrativeText || data.summaryText || "");
+        const r = reports[0];
+        setReport(r);
+        // Build a project-aware summary from the filtered items
+        const cCount = r.completed?.length ?? 0;
+        const ipCount = r.inProgress?.length ?? 0;
+        const bCount = r.blockers?.length ?? 0;
+        if (cCount + ipCount + bCount > 0) {
+          setNarrative(r.narrativeText || data.summaryText || "");
+        } else {
+          setNarrative("No tracked activity for this project on this date.");
+        }
       } else {
         setReport(null);
-        setNarrative(data.summaryText || "No standup data for this date.");
+        setNarrative("No standup data for this date.");
       }
       setNotes(data.submittedNotes ?? []);
     } catch {
@@ -161,7 +195,7 @@ export function MyStandupReport() {
       setNotes([]);
     }
     setLoading(false);
-  }, []);
+  }, [projectId]);
 
   useEffect(() => { fetchStandup(selectedKey); }, [selectedKey, fetchStandup]);
 
@@ -186,6 +220,64 @@ export function MyStandupReport() {
       }
     } catch { setSubmitError("Failed to submit note"); }
     setSubmitting(false);
+  };
+
+  // ---------- Submit note + send overview to a channel (Slack or Teams) ----------
+  const handleSubmitAndChannel = async (platform: "slack" | "teams") => {
+    if (!noteText.trim()) return;
+    if (!selectedProject?.internalId) {
+      setSubmitError("Select a project first");
+      return;
+    }
+    setSendingTo(platform);
+    setSubmitError(null);
+    setChannelResult(null);
+
+    try {
+      // First: submit the full note to PO digest
+      const res = await fetch("/api/standups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: noteText }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setSubmitError(data.error ?? "Failed to submit");
+        setSendingTo(null);
+        return;
+      }
+
+      // Then: send brief overview to channel
+      const completedTitles = (report?.completed ?? []).slice(0, 3).map(c => c.title).join(", ");
+      const inProgressTitles = (report?.inProgress ?? []).slice(0, 3).map(c => c.title).join(", ");
+      const blockerCount = report?.blockers?.length ?? 0;
+
+      const base = platform === "slack" ? "/api/integrations/slack" : "/api/integrations/teams";
+      const prefix = platform === "slack" ? "#" : "";
+      const chRes = await fetch(`${base}/post-to-channel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: selectedProject.internalId,
+          type: "standup_to_channel",
+          data: {
+            completed: completedTitles,
+            workingOn: inProgressTitles,
+            blockers: blockerCount > 0 ? `${blockerCount} blocker(s) — see Plan2Sprint for details` : "",
+          },
+        }),
+      });
+      const chData = await chRes.json();
+      if (chData.ok) {
+        setChannelResult(`Sent overview to ${prefix}${chData.channelName}`);
+        setSubmitted(true);
+        setNoteText("");
+        fetchStandup(selectedKey);
+      } else {
+        setChannelResult(chData.message || `Failed to send to ${platform === "slack" ? "Slack" : "Teams"}`);
+      }
+    } catch { setSubmitError("Failed to submit"); }
+    setSendingTo(null);
   };
 
   // ---------- Flag blocker ----------
@@ -446,17 +538,27 @@ export function MyStandupReport() {
                               "resize-none"
                             )} />
                           {submitError && <p className="text-xs text-[var(--color-rag-red)]">{submitError}</p>}
-                          <div className="flex items-center justify-between">
+                          {channelResult && <p className="text-xs text-[var(--color-rag-green)]">✓ {channelResult}</p>}
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
                             <p className="text-[10px] text-[var(--text-tertiary)]">This note will be visible to your Product Owner in the standup digest.</p>
-                            <button onClick={handleSubmit} disabled={submitting || !noteText.trim()}
-                              className={cn(
-                                "flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-all cursor-pointer",
-                                "bg-[var(--color-brand-secondary)] hover:bg-[var(--color-brand-secondary)]/90",
-                                "disabled:opacity-40 disabled:cursor-not-allowed"
-                              )}>
-                              {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={14} />}
-                              {submitting ? "Submitting..." : "Submit Note"}
-                            </button>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <ChannelSendSplitButton
+                                slackConnected={slackConnected}
+                                teamsConnected={teamsConnected}
+                                disabled={submitting || sendingTo !== null || !noteText.trim()}
+                                sendingTo={sendingTo}
+                                onSend={(p) => handleSubmitAndChannel(p)}
+                              />
+                              <button onClick={handleSubmit} disabled={submitting || sendingTo !== null || !noteText.trim()}
+                                className={cn(
+                                  "flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-all cursor-pointer",
+                                  "bg-[var(--color-brand-secondary)] hover:bg-[var(--color-brand-secondary)]/90",
+                                  "disabled:opacity-40 disabled:cursor-not-allowed"
+                                )}>
+                                {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={14} />}
+                                {submitting ? "Submitting..." : "Submit"}
+                              </button>
+                            </div>
                           </div>
                         </>
                       )}
@@ -484,6 +586,126 @@ export function MyStandupReport() {
           </DashboardPanel>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  SPLIT BUTTON — "Send to Slack ▾" with dropdown showing Teams (or vice     */
+/*  versa). Default = Slack if connected, else Teams. Remembers last choice.  */
+/* -------------------------------------------------------------------------- */
+
+function ChannelSendSplitButton({
+  slackConnected,
+  teamsConnected,
+  disabled,
+  sendingTo,
+  onSend,
+}: {
+  slackConnected: boolean;
+  teamsConnected: boolean;
+  disabled: boolean;
+  sendingTo: "slack" | "teams" | null;
+  onSend: (platform: "slack" | "teams") => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Always show both platforms
+  const platforms: { id: "slack" | "teams"; label: string; color: string; connected: boolean }[] = [
+    { id: "slack", label: "Slack", color: "var(--color-brand-secondary)", connected: slackConnected },
+    { id: "teams", label: "Teams", color: "#5059C9", connected: teamsConnected },
+  ];
+
+  // Default primary = Slack (familiar), or Teams if only Teams connected
+  const [primary, setPrimary] = useState<"slack" | "teams">(
+    slackConnected ? "slack" : "teams"
+  );
+
+  useEffect(() => {
+    if (!slackConnected && teamsConnected) setPrimary("teams");
+    if (slackConnected && !teamsConnected) setPrimary("slack");
+  }, [slackConnected, teamsConnected]);
+
+  const current = platforms.find((p) => p.id === primary) || platforms[0];
+  const others = platforms.filter((p) => p.id !== current.id);
+  const isSending = sendingTo !== null;
+  const isSendingThis = sendingTo === current.id;
+
+  const handleClick = (platformId: "slack" | "teams") => {
+    const p = platforms.find((x) => x.id === platformId)!;
+    if (!p.connected) {
+      const label = platformId === "slack" ? "Slack" : "Microsoft Teams";
+      setToast(`${label} is not connected yet. Ask your Product Owner to connect it.`);
+      setTimeout(() => setToast(null), 4000);
+      setOpen(false);
+      return;
+    }
+    setOpen(false);
+    onSend(platformId);
+  };
+
+  return (
+    <div className="relative">
+      <div className="flex items-stretch rounded-lg border overflow-hidden" style={{ borderColor: current.color }}>
+        {/* Main action */}
+        <button
+          onClick={() => handleClick(current.id)}
+          disabled={disabled}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all cursor-pointer",
+            "disabled:opacity-40 disabled:cursor-not-allowed"
+          )}
+          style={{ color: current.color }}
+        >
+          {isSendingThis ? <Loader2 size={14} className="animate-spin" /> : <MessageSquareText size={14} />}
+          {isSendingThis ? "Sending..." : `Send to ${current.label}`}
+        </button>
+
+        {/* Divider + dropdown arrow */}
+        <button
+          onClick={() => setOpen(!open)}
+          disabled={isSending}
+          className={cn(
+            "flex items-center px-2 border-l transition-all cursor-pointer",
+            "hover:bg-[var(--bg-surface-raised)]",
+            "disabled:opacity-40 disabled:cursor-not-allowed"
+          )}
+          style={{ borderColor: current.color, color: current.color }}
+        >
+          <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
+        </button>
+      </div>
+
+      {/* Dropdown — always shows the other platform */}
+      {open && (
+        <div className="absolute z-50 top-full mt-1 right-0 min-w-[200px] rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-xl overflow-hidden">
+          {others.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => {
+                setPrimary(p.id);
+                handleClick(p.id);
+              }}
+              disabled={disabled}
+              className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-surface-raised)] transition-colors cursor-pointer disabled:opacity-40"
+            >
+              <MessageSquareText size={14} style={{ color: p.color }} />
+              <span>Send to {p.label}</span>
+              {!p.connected && (
+                <span className="ml-auto text-[10px] text-[var(--text-tertiary)]">Not connected</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Toast for not-connected platforms */}
+      {toast && (
+        <div className="absolute z-50 top-full mt-1 right-0 min-w-[240px] rounded-lg bg-[var(--color-rag-amber)]/10 border border-[var(--color-rag-amber)]/20 px-3 py-2">
+          <p className="text-xs text-[var(--color-rag-amber)]">{toast}</p>
+        </div>
+      )}
     </div>
   );
 }
