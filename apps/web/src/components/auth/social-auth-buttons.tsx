@@ -1,37 +1,54 @@
 "use client";
 
-import { createClient } from "@/lib/supabase/client";
+import { getSupabase } from "@/lib/supabase/shared-client";
 import { cn } from "@/lib/utils";
 
 interface SocialAuthButtonsProps {
   className?: string;
 }
 
-// Singleton — reuse the same Supabase client across renders
-let _supabase: ReturnType<typeof createClient> | null = null;
-function getSupabase() {
-  if (!_supabase) _supabase = createClient();
-  return _supabase;
-}
-
 export function SocialAuthButtons({ className }: SocialAuthButtonsProps) {
   const handleGoogleLogin = async () => {
     const supabase = getSupabase();
+    // Hotfix 14 — force the Google account picker.
+    //
+    // Without ``prompt=select_account``, Google's default OAuth flow
+    // remembers which account a user previously consented to and
+    // silently re-uses it on subsequent ``signInWithOAuth`` calls. This
+    // surfaced as: "first device shows account picker, second device
+    // skips it after the first login and just signs me back in as the
+    // same dev." That meant a user couldn't switch between two
+    // Plan2Sprint identities (e.g. PO + Developer accounts) on the same
+    // browser without manually clearing Google's session.
+    //
+    // ``prompt=select_account`` makes Google show the picker every time
+    // — the user explicitly chooses which Google account to use, and
+    // can cancel out without auto-signing in. Standard OAuth 2.0 spec
+    // parameter, supported by every provider that follows OIDC.
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
         redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: {
+          prompt: "select_account",
+        },
       },
     });
   };
 
   const handleMicrosoftLogin = async () => {
     const supabase = getSupabase();
+    // Same picker-always behaviour for Microsoft / Azure AD — the
+    // ``prompt=select_account`` value is in the OIDC spec so Azure
+    // honours it too.
     await supabase.auth.signInWithOAuth({
       provider: "azure",
       options: {
         scopes: "email profile openid",
         redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: {
+          prompt: "select_account",
+        },
       },
     });
   };

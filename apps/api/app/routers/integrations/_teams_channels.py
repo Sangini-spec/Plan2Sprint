@@ -416,7 +416,11 @@ async def post_to_project_channel(
         )
 
     elif action_type == "blocker_to_channel":
-        ticket = message_data.get("ticket", "")
+        # Hotfix 78 — frontend now sends a structured ``blockerType``
+        # in place of the freeform ticket reference. Older clients
+        # still send ``ticket`` so we accept either.
+        blocker_type = message_data.get("blockerType") or message_data.get("ticket") or ""
+        ticket = blocker_type
         description = message_data.get("description", "")
 
         # Create a BlockerFlag record so action buttons have something to act on
@@ -503,7 +507,8 @@ async def post_to_project_channel(
                 {
                     "type": "FactSet",
                     "facts": [
-                        {"title": "Ticket", "value": ticket or "—"},
+                        # Hotfix 78 — type-of-blocker tag in place of ticket ref.
+                        {"title": "Type", "value": blocker_type or "Unspecified"},
                         {"title": "Description", "value": description[:300] or "(no description)"},
                         {"title": "Project", "value": project.name},
                     ],

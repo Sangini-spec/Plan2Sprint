@@ -1,8 +1,25 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
+
+# Hotfix 32 — Step C: surface application logs at INFO level.
+# Without this, every ``logger.info(...)`` in the codebase is silently
+# dropped because Python's default logger level is WARNING. Container
+# Apps reads stdout, so as long as we emit a record we'll see it. We
+# also force-propagate to root so per-module loggers don't get
+# accidentally suppressed by uvicorn's default config.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+# Reduce noisy libraries that shouldn't drown our own output.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 # Import routers
 from .routers import analytics, dashboard, github, sprints, standups, team_health, notifications, projects, writeback, ws, retrospectives, phases, organizations, profile, agents, export, notes, reports
@@ -101,9 +118,103 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(
                 "ALTER TABLE team_members ADD COLUMN IF NOT EXISTS github_access_token VARCHAR"
             ))
+            # Hotfix 73 / 74 — per-user Slack/Teams identity link.
+            # When a developer or stakeholder OAuths their personal
+            # Slack / Teams account, we store the resulting account
+            # ID on the User row (one row per person, vs team_members
+            # which is one row per project). The message router prefers
+            # this over the legacy team_members lookup.
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_user_id VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_team_id VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_team_name VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_handle VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS teams_user_id VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS teams_user_principal_name VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS teams_display_name VARCHAR"
+            ))
+            # Timeline revamp (Sprint 1) — target launch date + persisted phase
+            # dates + Ready phase backfill. Idempotent: ALTER IF NOT EXISTS, and
+            # the Ready insert skips projects that already have it.
+            await conn.execute(text(
+                "ALTER TABLE imported_projects ADD COLUMN IF NOT EXISTS target_launch_date TIMESTAMPTZ"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE imported_projects ADD COLUMN IF NOT EXISTS target_launch_source VARCHAR(10)"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE project_phases ADD COLUMN IF NOT EXISTS planned_start TIMESTAMPTZ"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE project_phases ADD COLUMN IF NOT EXISTS planned_end TIMESTAMPTZ"
+            ))
+            # Backfill Ready phase for every project that doesn't have one.
+            # Using cuid-ish random id (25 chars: 'c' + 24 random hex) to match
+            # the format generate_cuid() produces elsewhere.
+            await conn.execute(text("""
+                INSERT INTO project_phases (
+                    id, organization_id, project_id, name, slug, color,
+                    sort_order, is_default, created_at, updated_at
+                )
+                SELECT
+                    'c' || substr(md5(random()::text || ip.id), 1, 24),
+                    ip.organization_id,
+                    ip.id,
+                    'Ready',
+                    'ready',
+                    '#10b981',
+                    6,
+                    FALSE,
+                    NOW(),
+                    NOW()
+                FROM imported_projects ip
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM project_phases pp
+                    WHERE pp.project_id = ip.id AND pp.slug = 'ready'
+                )
+            """))
         print("Auto-migration complete.")
     except Exception as e:
         print(f"WARNING: DB migration skipped (DB unreachable): {e}")
+
+    # Hotfix 32 — Step D: heal stuck GENERATING sprint plans on startup.
+    # Background tasks die when the container scales to 0 (Container Apps
+    # does not gracefully wait for FastAPI BackgroundTasks). A user who
+    # hits Regenerate then closes their tab leaves a GENERATING stub in
+    # the DB forever, which then occupies the "latest plan" slot and
+    # blanks out their dashboard. On startup, mark anything stuck for
+    # >5 min as FAILED with an actionable message. Best-effort — never
+    # block startup if this fails.
+    try:
+        async with engine.begin() as conn:
+            recovered = await conn.execute(text(
+                """
+                UPDATE sprint_plans
+                   SET status = 'FAILED',
+                       risk_summary = COALESCE(
+                           NULLIF(risk_summary, ''),
+                           'Generation interrupted (container restarted before completion). Click Regenerate to try again.'
+                       )
+                 WHERE status = 'GENERATING'
+                   AND created_at < NOW() - INTERVAL '5 minutes'
+                """
+            ))
+            if recovered.rowcount:
+                print(f"Healed {recovered.rowcount} stuck GENERATING sprint plan(s) on startup")
+    except Exception as e:
+        print(f"WARNING: stuck-plan recovery skipped: {e}")
 
     # Start the delivery queue background worker
     from .services.delivery_queue import start_delivery_worker, stop_delivery_worker
@@ -119,6 +230,43 @@ async def lifespan(app: FastAPI):
     # Start notification scheduler (daily digests, nudges)
     from .services.notification_scheduler import start_notification_scheduler, stop_notification_scheduler
     await start_notification_scheduler()
+
+    # Hotfix 56 (MED-5) — verify every OAuth redirect_uri points at a host
+    # we know belongs to Plan2Sprint. A misconfigured env var that points
+    # at attacker.example.com would let any provider's auth code be
+    # delivered to the attacker. We don't crash on mismatch (some
+    # deployments use bespoke hosts) but we LOG LOUDLY so the misconfig
+    # is visible during routine log review.
+    _allowed_redirect_hosts = {
+        "localhost",
+        "127.0.0.1",
+        # API's deployed FQDN (Container Apps default + custom domain)
+        "plan2sprint-api.purplebeach-150945ee.westus3.azurecontainerapps.io",
+        "api.plan2sprint.com",
+    }
+    from urllib.parse import urlparse as _urlparse
+    import os as _os
+    # Pull redirect URIs defensively — some are on Settings, GITHUB is
+    # read directly from os.environ at the consumer site, and others
+    # may be missing entirely on a misconfigured deployment. Use
+    # ``getattr(..., "", "")`` so an unset attribute doesn't crash boot.
+    _redirect_uris = (
+        ("jira_redirect_uri", getattr(settings, "jira_redirect_uri", "") or ""),
+        ("ado_redirect_uri", getattr(settings, "ado_redirect_uri", "") or ""),
+        ("github_redirect_uri", _os.environ.get("GITHUB_REDIRECT_URI", "")),
+        ("slack_redirect_uri", getattr(settings, "slack_redirect_uri", "") or ""),
+        ("teams_redirect_uri", getattr(settings, "teams_redirect_uri", "") or ""),
+    )
+    for label, value in _redirect_uris:
+        if not value:
+            continue
+        host = (_urlparse(value).hostname or "").lower()
+        if host and host not in _allowed_redirect_hosts:
+            logging.warning(
+                f"[SECURITY] {label} points at unfamiliar host '{host}'. "
+                f"If this is intentional add it to _allowed_redirect_hosts; "
+                f"otherwise OAuth codes could be redirected to an attacker."
+            )
 
     yield
 

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Zap, Loader2, Scale } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/api-fetch";
 import { Button, Tabs } from "@/components/ui";
 import { MetricStrip, type MetricItem } from "@/components/ui/metric-strip";
 import { SprintForecastPanel } from "@/components/po/sprint-forecast-panel";
@@ -109,6 +110,21 @@ export default function PlanningPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [plan, setPlan] = useState<PlanOverview | null>(null);
+  // Hotfix 32 — Step E: separate "inflight" state for the GENERATING /
+  // FAILED stub. ``plan`` always holds the most recent READY plan so
+  // the dashboard data (SP, sprints, rebalance flag, insights) stays
+  // visible during regeneration. ``inflight`` drives the status badge
+  // when a generation is queued, and is null otherwise.
+  const [inflight, setInflight] = useState<{
+    id: string;
+    status: "GENERATING" | "FAILED";
+    riskSummary: string | null;
+    createdAt: string | null;
+  } | null>(null);
+  // Hotfix 33b — when the user kicked off the current generation
+  // (millis epoch). Drives the live MM:SS timer in the toolbar.
+  // Cleared when generation completes (success or failure).
+  const [generationStartedAtMs, setGenerationStartedAtMs] = useState<number | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [workItems, setWorkItems] = useState<WorkItemData[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMemberData[]>([]);
@@ -129,6 +145,7 @@ export default function PlanningPage() {
   const fetchPlanData = useCallback(async () => {
     if (!projectId) {
       setPlan(null);
+      setInflight(null);
       setAssignments([]);
       setWorkItems([]);
       setTeamMembers([]);
@@ -145,14 +162,25 @@ export default function PlanningPage() {
       const overviewRes = await fetch(`/api/sprints?projectId=${projectId}`);
       if (!overviewRes.ok) {
         setPlan(null);
+        setInflight(null);
         setAssignments([]);
         setLoading(false);
         return;
       }
       const overviewData = await overviewRes.json();
+      // Hotfix 32 — Step E: capture the GENERATING/FAILED stub if any.
+      // The backend now sends ``inflight`` separately so the previous
+      // READY plan stays visible during regeneration.
+      setInflight(overviewData?.inflight ?? null);
       if (!overviewData?.plan) {
+        // No ready plan yet (first-ever generation, or only an in-flight
+        // stub exists). Clear plan-level data; UI will show the empty
+        // state while the inflight badge stays visible.
         setPlan(null);
         setAssignments([]);
+        setWorkItems([]);
+        setTeamMembers([]);
+        setSprintDetails([]);
         setLoading(false);
         return;
       }
@@ -161,6 +189,10 @@ export default function PlanningPage() {
       const detailRes = await fetch(`/api/sprints/plan?projectId=${projectId}`);
       if (detailRes.ok) {
         const data = await detailRes.json();
+        // Detail endpoint returns inflight too — prefer it (more recent)
+        if (data.inflight !== undefined) {
+          setInflight(data.inflight);
+        }
         if (data.plan) {
           setPlan(data.plan);
           setAssignments(data.assignments || []);
@@ -174,9 +206,10 @@ export default function PlanningPage() {
         }
       }
     } catch {
-      // API unavailable
-      setPlan(null);
-      setAssignments([]);
+      // API unavailable — preserve any prior plan/inflight state to
+      // avoid blank-flickering between fetches when the API is
+      // mid-coldstart. The retry logic in project context handles
+      // genuine outages.
     }
 
     setLoading(false);
@@ -197,24 +230,50 @@ export default function PlanningPage() {
 
       const available: TeamMemberData[] = [];
 
-      // Add explicitly excluded members
+      // Hotfix 33h — dedupe by display name. The user has multiple
+      // accounts under the same display name (one per email/role) and
+      // doesn't want to see them all separately. Priority:
+      //   1. Excluded TeamMember for THIS project — re-including this
+      //      one is preferable because it preserves the existing row's
+      //      email/avatar/skills history rather than creating a new
+      //      one with a different email.
+      //   2. Org member with role='developer' — only fallback when no
+      //      excluded row exists for the same display name.
+      // Anything not 'developer' (PO, stakeholder, owner, admin) is
+      // dropped entirely — they're not assignable in sprint planning.
+      const seenNames = new Set<string>();
+      const planMemberNames = new Set(
+        teamMembers.map((tm) => (tm.displayName || "").toLowerCase()),
+      );
+
+      // Pass 1: excluded-for-this-project candidates (highest priority).
       if (exclRes.ok) {
         const exclData = await exclRes.json();
         for (const m of exclData.members || []) {
-          if (!planMemberIds.has(m.id)) {
-            available.push(m);
-          }
+          if (planMemberIds.has(m.id)) continue;
+          const name = (m.displayName || "").toLowerCase();
+          if (planMemberNames.has(name)) continue;  // already on team under this name
+          if (seenNames.has(name)) continue;
+          seenNames.add(name);
+          available.push(m);
         }
       }
 
-      // Add org members not in plan (from Team page data)
+      // Pass 2: org-level developers, skipping any name we've already covered.
       if (orgRes.ok) {
         const orgData = await orgRes.json();
         for (const m of orgData.members || []) {
-          // Skip if already in plan or already in available list
           const email = (m.email || "").toLowerCase();
+          const name = (m.displayName || "").toLowerCase();
+          // Skip if already on team (by email or name)
           if (planMemberEmails.has(email)) continue;
-          if (available.some((a) => a.email?.toLowerCase() === email)) continue;
+          if (planMemberNames.has(name)) continue;
+          // Skip if we already added this name from the excluded pass
+          if (seenNames.has(name)) continue;
+          // Skip non-developer roles
+          const role = (m.role || "").toLowerCase();
+          if (role && role !== "developer") continue;
+          seenNames.add(name);
           available.push({
             id: m.teamMemberId || m.id,
             displayName: m.displayName,
@@ -246,14 +305,59 @@ export default function PlanningPage() {
   // Actions
   // -----------------------------------------------------------------------
 
-  // Use relative URL to go through Next.js proxy (works both locally and deployed)
-  const sprintApiBase = "";
+  // Sprint plan generation is a slow AI call (60-120s). The Next.js rewrite
+  // proxy times out around 50-60s which is what was causing "Sprint
+  // generation failed: Internal Server Error". Prefer NEXT_PUBLIC_API_URL
+  // so the browser POSTs straight to the API (CORS already allows it) and
+  // the web container never has to hold the long upstream request open.
+  // Falls back to the relative URL for local dev where the proxy is fine.
+  const sprintApiBase =
+    typeof window !== "undefined" && process.env.NEXT_PUBLIC_API_URL
+      ? process.env.NEXT_PUBLIC_API_URL
+      : "";
+
+  // Hotfix 33 — shared poller for in-flight generation. Watches the
+  // ``inflight`` field returned by GET /api/sprints?projectId=… and
+  // returns when it clears (success) or transitions to FAILED.
+  // Caller is responsible for setGenerating + fetchPlanData refresh.
+  const pollUntilInflightClears = useCallback(async () => {
+    if (!projectId) return;
+    const POLL_INTERVAL_MS = 3000;
+    const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      try {
+        invalidateCache(`/api/sprints?projectId=${projectId}`);
+        const r = await fetch(`/api/sprints?projectId=${projectId}`);
+        if (!r.ok) continue;
+        const body = await r.json();
+        const inflightStub = body?.inflight ?? null;
+        if (!inflightStub) {
+          await fetchPlanData();
+          setGenerationStartedAtMs(null);  // Hotfix 33b — stop timer
+          return;
+        }
+        if (inflightStub?.status === "FAILED") {
+          await fetchPlanData();
+          setGenerationStartedAtMs(null);  // Hotfix 33b — stop timer
+          return;
+        }
+      } catch { /* network blip, keep polling */ }
+    }
+    await fetchPlanData();
+    setGenerationStartedAtMs(null);  // Hotfix 33b — timed out, clear timer
+  }, [projectId, fetchPlanData]);
 
   const handleGenerate = async () => {
     if (!projectId) return;
     setGenerating(true);
+    setGenerationStartedAtMs(Date.now());  // Hotfix 33b — start timer
     try {
-      const res = await fetch(`${sprintApiBase}/api/sprints`, {
+      // apiFetch auto-attaches the Supabase token so we can hit the API
+      // directly (bypassing Next.js proxy whose 50-60s rewrite timeout
+      // was what was making AI sprint generation fail with 500).
+      const res = await apiFetch(`${sprintApiBase}/api/sprints`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId }),
@@ -261,7 +365,12 @@ export default function PlanningPage() {
       if (res.ok) {
         // Invalidate all sprint caches to ensure fresh data
         invalidateCache("/api/sprints");
+        invalidateCache(`/api/sprints?projectId=${projectId}`);
+        invalidateCache(`/api/sprints/plan?projectId=${projectId}`);
         await fetchPlanData();
+        // Hotfix 33 — POLL until the BG task actually finishes; the
+        // POST returned 202 in <1s but the AI call runs for 60-180s.
+        await pollUntilInflightClears();
       } else {
         const errData = await res.json().catch(() => ({}));
         console.error("Generation failed:", errData);
@@ -276,6 +385,7 @@ export default function PlanningPage() {
   const handleRegenerate = async (feedback?: string) => {
     if (!projectId) return;
     setGenerating(true);
+    setGenerationStartedAtMs(Date.now());  // Hotfix 33b — start timer
     try {
       // Default optimization: pack 2-3 features per sprint to minimize total sprints
       const defaultFeedback = feedback ||
@@ -284,7 +394,8 @@ export default function PlanningPage() {
         "Each sprint must contain ALL stories from its assigned features. " +
         "Target the minimum number of sprints possible — aim for half the number of features.";
 
-      const res = await fetch(`${sprintApiBase}/api/sprints`, {
+      // apiFetch — same reason as handleGenerate above.
+      const res = await apiFetch(`${sprintApiBase}/api/sprints`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -292,20 +403,26 @@ export default function PlanningPage() {
           feedback: defaultFeedback,
         }),
       });
-      if (res.ok) {
-        // Aggressively invalidate all sprint caches
-        invalidateCache("/api/sprints");
-        invalidateCache(`/api/sprints?projectId=${projectId}`);
-        invalidateCache(`/api/sprints/plan?projectId=${projectId}`);
-        invalidateCache("/api/sprints/plan");
-        await fetchPlanData();
-      } else {
+      if (!res.ok) {
         const text = await res.text().catch(() => "");
         let errData;
         try { errData = JSON.parse(text); } catch { errData = { raw: text.slice(0, 200) }; }
         console.error(`Regeneration failed (${res.status}):`, errData);
         alert(`Sprint generation failed: ${errData?.detail || errData?.raw || `HTTP ${res.status}`}`);
+        return;
       }
+
+      // Refresh once immediately so the inline "Generating new plan…"
+      // indicator appears instantly.
+      invalidateCache("/api/sprints");
+      invalidateCache(`/api/sprints?projectId=${projectId}`);
+      invalidateCache(`/api/sprints/plan?projectId=${projectId}`);
+      invalidateCache("/api/sprints/plan");
+      await fetchPlanData();
+
+      // Hotfix 33 — POLL until the BG task finishes. POST returned 202
+      // in <1s but the AI call runs for 60-180s.
+      await pollUntilInflightClears();
     } catch (e) {
       console.error("Regeneration failed:", e);
     } finally {
@@ -334,15 +451,34 @@ export default function PlanningPage() {
 
   const handleIncludeMember = async (memberId: string, displayName: string) => {
     try {
+      // Hotfix 33c — pass projectId so the backend can create a
+      // project-bound team_member row when the candidate came from the
+      // org-members list (i.e. has no TeamMember row for this project
+      // yet). Without projectId the backend can only toggle existing
+      // rows, which silently affected the wrong project.
       const res = await fetch("/api/sprints/team-member", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ memberId, action: "include" }),
+        body: JSON.stringify({ memberId, projectId, action: "include" }),
       });
       if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const newId: string = data?.memberId ?? memberId;
         const included = excludedMembers.find((tm) => tm.id === memberId);
         setExcludedMembers((prev) => prev.filter((tm) => tm.id !== memberId));
-        if (included) setTeamMembers((prev) => [...prev, included]);
+        if (included) {
+          // If the backend created a brand-new row for this project, use
+          // its new id (so subsequent exclude/include works). Otherwise
+          // keep the original.
+          setTeamMembers((prev) => [...prev, { ...included, id: newId }]);
+        }
+        // Refetch plan data so the new dev shows in Team Capacity card
+        // immediately. Without this the card stays stale until next regen.
+        await fetchPlanData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        console.error("Failed to include member:", errData);
+        alert(`Could not add ${displayName}: ${errData?.detail || "unknown error"}`);
       }
     } catch (e) {
       console.error("Failed to include member:", e);
@@ -442,33 +578,44 @@ export default function PlanningPage() {
     );
   }
 
-  // No plan exists — empty state
+  // No plan exists — empty state. Hotfix 32 — Step E: if a generation
+  // is in flight (project's first plan being created right now, or a
+  // FAILED stub awaiting retry), surface that here so the user isn't
+  // looking at "Generate" while a job is already running.
   if (!plan) {
+    const isGenerating = inflight?.status === "GENERATING" || generating;
+    const failedSummary = inflight?.status === "FAILED" ? inflight.riskSummary : null;
     return (
       <div className="flex flex-col items-center justify-center h-[calc(100vh-180px)] gap-4">
         <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-[var(--color-brand-secondary)]/10">
           <Zap className="h-8 w-8 text-[var(--color-brand-secondary)]" />
         </div>
         <p className="text-sm font-semibold text-[var(--text-primary)]">
-          No Sprint Plan Yet
+          {isGenerating ? "Generating Sprint Plan…" : failedSummary ? "Generation Failed" : "No Sprint Plan Yet"}
         </p>
         <p className="text-xs text-[var(--text-secondary)] text-center max-w-md">
-          Generate an AI-powered sprint plan for &ldquo;{selectedProject.name}&rdquo;.
-          The AI will analyze your backlog, team capacity, velocity, and skills
-          to create optimal assignments across multiple sprints.
+          {isGenerating
+            ? `The AI is analyzing the backlog for "${selectedProject.name}". This typically takes 30-90 seconds. The page will refresh automatically when ready.`
+            : failedSummary
+              ? failedSummary
+              : `Generate an AI-powered sprint plan for "${selectedProject.name}". The AI will analyze your backlog, team capacity, velocity, and skills to create optimal assignments across multiple sprints.`}
         </p>
         <Button
           variant="primary"
           size="md"
           onClick={handleGenerate}
-          disabled={generating}
+          disabled={isGenerating}
         >
-          {generating ? (
+          {isGenerating ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
             <Zap className="h-4 w-4" />
           )}
-          {generating ? "Generating..." : "Generate Sprint Plan"}
+          {isGenerating
+            ? "Generating..."
+            : failedSummary
+              ? "Try Again"
+              : "Generate Sprint Plan"}
         </Button>
       </div>
     );
@@ -513,6 +660,9 @@ export default function PlanningPage() {
           {/* Toolbar */}
           <SprintWorkspaceToolbar
             status={plan.status}
+            inflightStatus={inflight?.status ?? null}
+            inflightRiskSummary={inflight?.riskSummary ?? null}
+            inflightStartedAtMs={generationStartedAtMs}
             generating={generating}
             projectName={selectedProject.name}
             onGenerate={handleGenerate}

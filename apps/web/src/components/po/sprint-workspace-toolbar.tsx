@@ -1,10 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Loader2, RefreshCw, Zap, CheckCircle2, XCircle, MessageSquareText, ChevronUp, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge, Button } from "@/components/ui";
 import type { SprintPlanStatus } from "@/lib/types/models";
+
+// Hotfix 33c — countdown timer next to the "Generating new plan…"
+// indicator. Counts DOWN from an ETA budget so the user sees how much
+// time is expected to remain (per user feedback). Once it hits 0 it
+// keeps showing "0:00" — by that point the polling loop should have
+// detected completion and cleared ``startedAtMs`` anyway, so the
+// component unmounts. ETA budget defaults to 3 minutes (180s) which
+// matches the observed typical max for sprint plan generation
+// (Grok-fast on a ~50-item backlog).
+const GENERATION_ETA_SECONDS = 180;
+function GenerationTimer({ startedAtMs }: { startedAtMs: number | null }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAtMs) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [startedAtMs]);
+  if (!startedAtMs) return null;
+  const elapsedSec = Math.max(0, Math.floor((now - startedAtMs) / 1000));
+  const remainingSec = Math.max(0, GENERATION_ETA_SECONDS - elapsedSec);
+  const mm = Math.floor(remainingSec / 60).toString().padStart(2, "0");
+  const ss = (remainingSec % 60).toString().padStart(2, "0");
+  return <span className="tabular-nums">{mm}:{ss}</span>;
+}
 
 const statusBadgeVariant: Record<SprintPlanStatus, "rag-green" | "rag-amber" | "rag-red" | "brand"> = {
   GENERATING: "brand",
@@ -17,10 +41,19 @@ const statusBadgeVariant: Record<SprintPlanStatus, "rag-green" | "rag-amber" | "
   SYNCED_PARTIAL: "rag-amber",
   UNDONE: "rag-red",
   EXPIRED: "rag-red",
+  FAILED: "rag-red",
 };
 
 interface SprintWorkspaceToolbarProps {
   status: SprintPlanStatus | null;
+  /** Hotfix 32 — Step E: separate in-flight signal so the badge can show
+   *  GENERATING/FAILED while the underlying ``status`` still reflects
+   *  the previous READY plan (whose data fills the rest of the page). */
+  inflightStatus?: "GENERATING" | "FAILED" | null;
+  inflightRiskSummary?: string | null;
+  /** Hotfix 33b — when generation started (ms epoch). Used to drive the
+   *  live "MM:SS" timer in the inline indicator. */
+  inflightStartedAtMs?: number | null;
   generating: boolean;
   projectName: string | null;
   onGenerate: () => void;
@@ -31,6 +64,9 @@ interface SprintWorkspaceToolbarProps {
 
 export function SprintWorkspaceToolbar({
   status,
+  inflightStatus = null,
+  inflightRiskSummary = null,
+  inflightStartedAtMs = null,
   generating,
   projectName,
   onGenerate,
@@ -41,10 +77,25 @@ export function SprintWorkspaceToolbar({
   const [showPrompt, setShowPrompt] = useState(false);
   const [feedback, setFeedback] = useState("");
 
-  const canApprove = status === "PENDING_REVIEW";
-  const canReject = status === "PENDING_REVIEW";
-  const canRegenerate = !!status && status !== "GENERATING" && status !== "REGENERATING";
-  const isReadOnly = status === "APPROVED" || status === "SYNCED" || status === "SYNCED_PARTIAL";
+  // Hotfix 32 (revised) — keep the badge showing the READY plan's
+  // status (PENDING_REVIEW / APPROVED / etc.) like it always did. The
+  // user wanted the simple spinner-on-button UX from before, not a
+  // "GENERATING" tag overriding the badge. We still surface the FAILED
+  // case via an inline error message so the user knows what went wrong.
+  const isInflightGenerating = inflightStatus === "GENERATING";
+  const isInflightFailed = inflightStatus === "FAILED";
+
+  // Approvals & rejections gate on the READY plan's status, but also
+  // disable while a regen is in flight (don't let user approve while
+  // a new plan is mid-flight).
+  const canApprove = status === "PENDING_REVIEW" && !isInflightGenerating;
+  const canReject = status === "PENDING_REVIEW" && !isInflightGenerating;
+  // Don't allow Regenerate while a generation is in flight.
+  const canRegenerate =
+    !!status && status !== "GENERATING" && status !== "REGENERATING" && !isInflightGenerating;
+  const isReadOnly =
+    !isInflightGenerating &&
+    (status === "APPROVED" || status === "SYNCED" || status === "SYNCED_PARTIAL");
 
   const handleRegenerate = () => {
     const trimmed = feedback.trim();
@@ -57,7 +108,7 @@ export function SprintWorkspaceToolbar({
     <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]">
       {/* Main toolbar row */}
       <div className="flex items-center justify-between px-5 py-2.5">
-        {/* Left: status + project */}
+        {/* Left: status + project + (optional) inflight indicator */}
         <div className="flex items-center gap-3">
           {status && (
             <Badge variant={statusBadgeVariant[status]}>
@@ -67,6 +118,27 @@ export function SprintWorkspaceToolbar({
           {projectName && (
             <span className="text-xs text-[var(--text-secondary)]">
               {projectName}
+            </span>
+          )}
+          {/* Subtle inline indicator — does NOT replace the status badge.
+              Hotfix 33c — countdown from estimated 3 min so the wait
+              feels finite. */}
+          {isInflightGenerating && (
+            <span className="flex items-center gap-1.5 text-xs text-[var(--color-brand-secondary)]">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Generating new plan…
+              {inflightStartedAtMs && (
+                <>
+                  <GenerationTimer startedAtMs={inflightStartedAtMs} />
+                  <span className="text-[var(--text-tertiary)]">remaining</span>
+                </>
+              )}
+            </span>
+          )}
+          {isInflightFailed && inflightRiskSummary && (
+            <span className="flex items-center gap-1.5 text-xs text-[var(--color-rag-red)] truncate max-w-[480px]" title={inflightRiskSummary}>
+              <XCircle className="h-3 w-3 shrink-0" />
+              {inflightRiskSummary}
             </span>
           )}
         </div>

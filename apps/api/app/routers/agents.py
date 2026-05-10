@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth.supabase import get_current_user
+from ..auth.supabase import get_current_user, require_po
 from ..database import get_db
 from ..services.agent_orchestrator import orchestrator
 from ..services.ws_manager import ws_manager
@@ -136,6 +136,7 @@ async def generate_ai_standups(
     Falls back to deterministic generation if the agent service is not
     configured or the agent run fails.
     """
+    require_po(user)  # Hotfix 55 (HIGH-8) — burns AI quota; PO/admin only
     org_id = user.get("organization_id")
     if not org_id:
         raise HTTPException(status_code=400, detail="No organization_id in user context")
@@ -202,6 +203,7 @@ async def scan_blockers(
     CI failures, dependency chains, and overloaded developers.
     Creates BlockerFlag records for newly detected blockers.
     """
+    require_po(user)  # Hotfix 55 (HIGH-8)
     org_id = user.get("organization_id")
     if not org_id:
         raise HTTPException(status_code=400, detail="No organization_id in user context")
@@ -269,6 +271,7 @@ async def analyze_sprint_health(
     Evaluates sprint pacing, individual developer risks, team-level patterns,
     and generates actionable recommendations with severity-based routing.
     """
+    require_po(user)  # Hotfix 55 (HIGH-8)
     org_id = user.get("organization_id")
     if not org_id:
         raise HTTPException(status_code=400, detail="No organization_id in user context")
@@ -346,6 +349,7 @@ async def generate_ai_retro(
     Saves the retrospective to the database and creates SprintConstraint
     records for feed-forward action items.
     """
+    require_po(user)  # Hotfix 55 (HIGH-8)
     org_id = user.get("organization_id")
     if not org_id:
         raise HTTPException(status_code=400, detail="No organization_id in user context")

@@ -28,10 +28,11 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...auth.supabase import get_current_user
+from ...auth.supabase import get_current_user, require_po
 from ...config import settings
 from ...database import get_db
 from ...models.tool_connection import ToolConnection
+from ...models.user import User
 from ...services.encryption import encrypt_token, decrypt_token
 import httpx
 
@@ -119,6 +120,7 @@ async def initiate_slack_oauth(
     Initiates Slack OAuth V2 flow by redirecting the browser to Slack's
     authorization page. The frontend navigates here via window.location.href.
     """
+    require_po(current_user)  # Hotfix 69B — connecting Slack is a PO-only org action
     if settings.is_demo_mode:
         # In demo mode, simulate a successful connection
         return RedirectResponse(
@@ -186,6 +188,12 @@ async def slack_oauth_callback(
             url=f"{settings.frontend_url}/po/notifications?slack=error&detail=missing_code_or_state",
             status_code=302,
         )
+
+    # Hotfix 73 — dispatch to per-user identity flow if state has the
+    # ``me:`` prefix. Both flows share this redirect URI so the Slack
+    # app config only needs the one whitelisted callback.
+    if state.startswith("me:"):
+        return await _slack_me_callback_inner(code, state, db)
 
     # Verify CSRF state
     state_data = _oauth_states.pop(state, None)
@@ -300,6 +308,23 @@ async def slack_status(
             "demo": True,
         }
 
+    # Hotfix 72 — revert of Hotfix 71. ``/status`` is the source-of-
+    # truth for the *card UI* which shows "Connected" / "Connect" based
+    # on whether THIS user's account is linked. Returning ``connected:
+    # true`` to non-PO based on org-level state was misleading because
+    # the bot doesn't actually know the dev's personal Slack/Teams
+    # identity yet — the card was claiming "Connected" with no
+    # per-user OAuth ever having happened, so messages would be
+    # delivered to the wrong account (or not at all).
+    #
+    # Org-level visibility ("your workspace has Slack set up at all")
+    # belongs on a separate ``/org-status`` endpoint that the dev
+    # Channels-page UI can use to render the correct guidance — a
+    # design TBD with the product owner.
+    is_po = (current_user.get("role") or "").lower() in {"product_owner", "admin", "owner"}
+    if not is_po:
+        return {"connected": False}
+
     org_id = current_user.get("organization_id", "demo-org")
     conn = await _get_slack_connection(db, org_id)
 
@@ -315,6 +340,257 @@ async def slack_status(
         "connected_at": config.get("connected_at"),
         "sync_status": conn.sync_status,
     }
+
+
+# ===================================================================
+# Hotfix 73 — PER-USER SLACK IDENTITY LINK
+#
+# When a developer or stakeholder lands on /dev/notifications and
+# clicks "Connect my Slack account", we run a *user* OAuth (with
+# user_scope=users.profile:read) that authenticates THEM and returns
+# their Slack user_id. We persist it on the User row so the message
+# router can DM them. PO-level org connection (the bot install) is
+# unrelated — that lives in /connect, /callback above.
+# ===================================================================
+
+# In-memory CSRF state for /me/connect — separate from _oauth_states
+# so the org install flow and the per-user identity flow can't trip
+# over each other.
+_me_oauth_states: dict[str, dict] = {}
+
+
+@router.get("/me/connect")
+async def slack_me_connect(
+    current_user: dict = Depends(get_current_user),
+):
+    """Initiate per-user Slack OAuth so the caller can link their
+    personal Slack identity. Used by developers and stakeholders from
+    the Channels page.
+
+    NOTE: re-uses the existing ``/callback`` redirect URI (already
+    whitelisted in the Slack app config). The two flows are
+    distinguished by a ``me:`` prefix on the state token — the
+    callback handler dispatches accordingly. This avoids requiring
+    you to register a separate redirect URL on the Slack app side.
+    """
+    if settings.is_demo_mode:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/dev/notifications?slack=demo_linked",
+            status_code=302,
+        )
+
+    client_id = settings.slack_client_id
+    redirect_uri = settings.slack_redirect_uri  # same as PO install flow
+
+    if not client_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Slack OAuth not configured — SLACK_CLIENT_ID is missing",
+        )
+
+    # State prefixed with ``me:`` so the unified ``/callback`` knows
+    # to run the per-user flow instead of the org install flow.
+    state = "me:" + str(uuid.uuid4())
+    _me_oauth_states[state] = {
+        "user_id": current_user.get("sub", "unknown"),
+        "user_email": (current_user.get("email") or "").lower(),
+        "org_id": current_user.get("organization_id", "demo-org"),
+        "created_at": time.time(),
+    }
+    # Cleanup expired states
+    cutoff = time.time() - 600
+    for k in [k for k, v in _me_oauth_states.items() if v["created_at"] < cutoff]:
+        del _me_oauth_states[k]
+
+    params = {
+        "client_id": client_id,
+        # IMPORTANT: ``user_scope`` (NOT ``scope``) — this puts the
+        # OAuth flow in user-token mode. With ``scope`` it would re-
+        # install the bot, which is wrong for per-user identity.
+        "user_scope": "users.profile:read",
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "response_type": "code",
+    }
+    authorize_url = f"{SLACK_OAUTH_AUTHORIZE_URL}?{urlencode(params)}"
+    return RedirectResponse(url=authorize_url, status_code=302)
+
+
+async def _slack_me_callback_inner(
+    code: str,
+    state: str,
+    db: AsyncSession,
+):
+    """Handle the per-user identity OAuth callback. Called from the
+    unified ``/callback`` when ``state`` has the ``me:`` prefix."""
+    redirect_base = f"{settings.frontend_url}/dev/notifications"
+
+    state_data = _me_oauth_states.pop(state, None)
+    if not state_data:
+        return RedirectResponse(
+            url=f"{redirect_base}?slack_me=error&detail=invalid_state",
+            status_code=302,
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                SLACK_OAUTH_TOKEN_URL,
+                data={
+                    "client_id": settings.slack_client_id,
+                    "client_secret": settings.slack_client_secret,
+                    "code": code,
+                    "redirect_uri": settings.slack_redirect_uri,
+                },
+            )
+            token_data = res.json()
+            if not token_data.get("ok"):
+                err = token_data.get("error", "token_exchange_failed")
+                return RedirectResponse(
+                    url=f"{redirect_base}?slack_me=error&detail={err}",
+                    status_code=302,
+                )
+    except httpx.RequestError:
+        return RedirectResponse(
+            url=f"{redirect_base}?slack_me=error&detail=network_error",
+            status_code=302,
+        )
+
+    authed_user = token_data.get("authed_user", {}) or {}
+    slack_user_id = authed_user.get("id", "")
+    user_token = authed_user.get("access_token", "")
+    team = token_data.get("team", {}) or {}
+    slack_team_id = team.get("id", "")
+    slack_team_name = team.get("name", "")
+
+    if not slack_user_id:
+        return RedirectResponse(
+            url=f"{redirect_base}?slack_me=error&detail=no_user_id",
+            status_code=302,
+        )
+
+    # Try to fetch the user's display name / handle for friendlier UI.
+    # Best-effort — the token from authed_user.access_token has
+    # users.profile:read scope so users.profile.get works for self.
+    slack_handle: Optional[str] = None
+    try:
+        if user_token:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                profile_res = await client.get(
+                    f"{SLACK_API_BASE}/users.profile.get",
+                    headers={"Authorization": f"Bearer {user_token}"},
+                )
+                pdata = profile_res.json()
+                if pdata.get("ok"):
+                    profile = pdata.get("profile", {}) or {}
+                    slack_handle = (
+                        profile.get("display_name")
+                        or profile.get("real_name")
+                        or None
+                    )
+    except Exception:
+        pass
+
+    # Persist on the Plan2Sprint User row by Supabase UID
+    sup_uid = state_data.get("user_id", "")
+    user_email = state_data.get("user_email", "")
+
+    user_row: Optional[User] = None
+    if sup_uid and sup_uid != "unknown":
+        result = await db.execute(
+            select(User).where(User.supabase_user_id == sup_uid)
+        )
+        user_row = result.scalar_one_or_none()
+    if not user_row and user_email:
+        result = await db.execute(
+            select(User).where(User.email == user_email)
+        )
+        user_row = result.scalar_one_or_none()
+
+    if not user_row:
+        return RedirectResponse(
+            url=f"{redirect_base}?slack_me=error&detail=user_not_found",
+            status_code=302,
+        )
+
+    user_row.slack_user_id = slack_user_id
+    user_row.slack_team_id = slack_team_id or None
+    user_row.slack_team_name = slack_team_name or None
+    user_row.slack_handle = slack_handle
+    await db.commit()
+
+    return RedirectResponse(
+        url=f"{redirect_base}?slack_me=linked",
+        status_code=302,
+    )
+
+
+@router.get("/me/status")
+async def slack_me_status(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return per-user Slack link state for the current caller."""
+    if settings.is_demo_mode:
+        return {"linked": False, "demo": True}
+
+    sup_uid = current_user.get("sub", "")
+    user_email = (current_user.get("email") or "").lower()
+    user_row: Optional[User] = None
+    if sup_uid:
+        result = await db.execute(
+            select(User).where(User.supabase_user_id == sup_uid)
+        )
+        user_row = result.scalar_one_or_none()
+    if not user_row and user_email:
+        result = await db.execute(
+            select(User).where(User.email == user_email)
+        )
+        user_row = result.scalar_one_or_none()
+
+    if not user_row or not user_row.slack_user_id:
+        return {"linked": False}
+
+    return {
+        "linked": True,
+        "slack_user_id": user_row.slack_user_id,
+        "slack_team_name": user_row.slack_team_name,
+        "slack_handle": user_row.slack_handle,
+    }
+
+
+@router.post("/me/disconnect")
+async def slack_me_disconnect(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear the caller's per-user Slack link."""
+    if settings.is_demo_mode:
+        return {"ok": True, "demo": True}
+
+    sup_uid = current_user.get("sub", "")
+    user_email = (current_user.get("email") or "").lower()
+    user_row: Optional[User] = None
+    if sup_uid:
+        result = await db.execute(
+            select(User).where(User.supabase_user_id == sup_uid)
+        )
+        user_row = result.scalar_one_or_none()
+    if not user_row and user_email:
+        result = await db.execute(
+            select(User).where(User.email == user_email)
+        )
+        user_row = result.scalar_one_or_none()
+
+    if not user_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user_row.slack_user_id = None
+    user_row.slack_team_id = None
+    user_row.slack_team_name = None
+    user_row.slack_handle = None
+    await db.commit()
+    return {"ok": True}
 
 
 # ===================================================================
@@ -582,6 +858,7 @@ async def disconnect_slack(
     Remove Slack connection for the current org.
     Revokes the bot token with Slack before deleting.
     """
+    require_po(current_user)  # Hotfix 69B — destructive on org connection
     if settings.is_demo_mode:
         return {"success": True, "demo": True}
 
@@ -658,7 +935,6 @@ async def slack_events(request: Request):
 @router.post("/interactions")
 async def slack_interactions(
     request: Request,
-    db: AsyncSession = Depends(get_db),
 ):
     """
     POST /interactions
@@ -667,9 +943,22 @@ async def slack_interactions(
     IMPORTANT: Slack sends interactions as application/x-www-form-urlencoded
     with a single `payload` field containing JSON — NOT as raw JSON body.
 
-    This is the endpoint configured as "Interactivity Request URL" in the
-    Slack app settings (Features > Interactivity & Shortcuts).
-    URL: https://<your-domain>/api/integrations/slack/interactions
+    Async-ack pattern (required for cold-start safety):
+
+    Slack rejects an interaction if we don't return 200 within ~3 seconds.
+    Plan2Sprint runs at minReplicas=0 between cron windows, so when a PO
+    clicks Escalate/Resolve at, say, 11 PM IST the container has to cold-
+    start before we can even parse the request — which routinely exceeds
+    Slack's deadline. The user sees a "couldn't deliver" warning icon
+    next to the message and the action silently fails.
+
+    Fix: this endpoint now does the bare minimum synchronously
+    (signature verify + payload parse), schedules the actual work as
+    a background task, and returns 200 immediately. The background
+    task runs the same `handle_interaction` it always did, then POSTs
+    the result to Slack's `response_url` to update the original
+    message. Slack accepts that pattern and updates the message
+    in-place when the POST lands (within 30 min, up to 5 retries).
     """
     # Slack sends form-encoded data with a "payload" JSON string
     content_type = request.headers.get("content-type", "")
@@ -702,21 +991,14 @@ async def slack_interactions(
     print(f"[Slack Interaction] type={interaction_type}, actions={[a.get('action_id') for a in payload.get('actions', [])]}")
 
     if interaction_type == "block_actions":
-        # Import the action handler
-        from ...services.slack_actions import handle_interaction
+        # Async-ack pattern: schedule the actual work, return 200 fast.
+        import asyncio
+        asyncio.create_task(_process_interaction_async(payload))
 
-        result = await handle_interaction(db, payload)
-
-        # Return the response to Slack (updates the original message)
-        response: dict = {}
-        if result.get("replace_original"):
-            response["replace_original"] = True
-        if result.get("blocks"):
-            response["blocks"] = result["blocks"]
-        if result.get("text"):
-            response["text"] = result["text"]
-
-        return response
+        # Empty 200 OK is a valid Slack ack. Slack keeps the message
+        # in place; the background task will POST to response_url to
+        # replace it once the action lands.
+        return {}
 
     elif interaction_type == "view_submission":
         # Modal form submissions (future: blocker detail form)
@@ -732,6 +1014,67 @@ async def slack_interactions(
     return {"ok": True}
 
 
+async def _process_interaction_async(payload: dict) -> None:
+    """
+    Run the handler with its own DB session, then POST the result to
+    Slack's `response_url` so the original message updates in place.
+
+    Errors are caught and logged — they must never propagate to the
+    asyncio event loop (would crash the worker). Worst case: the user
+    sees the message un-updated and can re-click; the underlying state
+    change (e.g. blocker.status = ESCALATED) may still have committed.
+    """
+    from ...database import AsyncSessionLocal
+    from ...services.slack_actions import handle_interaction
+
+    response_url = payload.get("response_url", "")
+
+    try:
+        async with AsyncSessionLocal() as db:
+            try:
+                result = await handle_interaction(db, payload)
+            finally:
+                # handle_interaction commits its own writes; if it raised
+                # before commit, roll back to keep the session clean.
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+
+        if not response_url:
+            print("[Slack Interaction] No response_url — skipping message update")
+            return
+
+        update_body: dict = {}
+        if result.get("replace_original"):
+            update_body["replace_original"] = True
+        else:
+            # Default to replacing — that's the UX users expect when
+            # they click Escalate/Resolve.
+            update_body["replace_original"] = True
+        if result.get("blocks"):
+            update_body["blocks"] = result["blocks"]
+        if result.get("text"):
+            update_body["text"] = result["text"]
+        # Always include a fallback text so Slack notifications work.
+        if "text" not in update_body:
+            update_body["text"] = "Plan2Sprint update"
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                response_url,
+                json=update_body,
+                headers={"Content-Type": "application/json"},
+            )
+            if r.is_error:
+                print(
+                    f"[Slack Interaction] response_url POST failed: "
+                    f"{r.status_code} {r.text[:200]}"
+                )
+    except Exception as e:
+        print(f"[Slack Interaction] async handler error: {e}")
+
+
 # ===================================================================
 # CHANNEL LISTING (for message composer)
 # ===================================================================
@@ -744,8 +1087,15 @@ async def list_slack_channels(
 ):
     """
     POST /channels
-    List all public channels the bot has access to.
-    Used by the message composer UI to pick a target channel.
+    List public channels the bot has access to, scoped to the requesting
+    user's role:
+      - PO / admin / owner / engineering_manager → ALL public channels
+        the bot can see (used for cross-project announcements).
+      - Developer / Stakeholder → only channels mapped to projects the
+        user has access to (via TeamMember email match OR explicit
+        StakeholderProjectAssignment). A dev assigned to MediCare
+        shouldn't see Sellixis's project channel — that's a leak of
+        another team's communications surface.
     """
     if settings.is_demo_mode:
         return {
@@ -798,6 +1148,68 @@ async def list_slack_channels(
             if not next_cursor:
                 break
             cursor = next_cursor
+
+    # Role-based filtering. Devs/stakeholders only see channels mapped
+    # to their assigned projects.
+    user_role = (current_user.get("role") or "").lower()
+    elevated = user_role in ("owner", "admin", "product_owner", "engineering_manager")
+
+    if not elevated:
+        from ...models.imported_project import ImportedProject, StakeholderProjectAssignment
+        from ...models.team_member import TeamMember
+        from ...models.user import User as _User
+
+        user_email = (current_user.get("email") or "").lower()
+
+        # Resolve the user's accessible project IDs (mirrors logic in
+        # /api/projects developer branch).
+        proj_ids: set[str] = set()
+        if user_email:
+            tm_q = await db.execute(
+                select(TeamMember.imported_project_id).where(
+                    TeamMember.organization_id == org_id,
+                    TeamMember.email.ilike(user_email),
+                    TeamMember.role != "excluded",
+                )
+            )
+            for row in tm_q.all():
+                if row[0]:
+                    proj_ids.add(row[0])
+
+            ids: list[str] = []
+            u_rows = (await db.execute(
+                select(_User.id).where(_User.email.ilike(user_email))
+            )).scalars().all()
+            ids.extend(u_rows)
+            tm_id_rows = (await db.execute(
+                select(TeamMember.id).where(TeamMember.email.ilike(user_email))
+            )).scalars().all()
+            ids.extend(tm_id_rows)
+            if ids:
+                assigned_q = await db.execute(
+                    select(StakeholderProjectAssignment.imported_project_id).where(
+                        StakeholderProjectAssignment.user_id.in_(ids),
+                    )
+                )
+                for row in assigned_q.all():
+                    if row[0]:
+                        proj_ids.add(row[0])
+
+        # Look up Slack channel IDs registered on those projects.
+        allowed_channel_ids: set[str] = set()
+        if proj_ids:
+            ch_q = await db.execute(
+                select(ImportedProject.slack_channel_id).where(
+                    ImportedProject.organization_id == org_id,
+                    ImportedProject.id.in_(list(proj_ids)),
+                    ImportedProject.slack_channel_id.isnot(None),
+                )
+            )
+            for row in ch_q.all():
+                if row[0]:
+                    allowed_channel_ids.add(row[0])
+
+        all_channels = [c for c in all_channels if c.get("id") in allowed_channel_ids]
 
     return {"channels": all_channels, "count": len(all_channels)}
 

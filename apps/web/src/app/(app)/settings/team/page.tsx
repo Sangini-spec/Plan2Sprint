@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth/context";
 import { isAdmin, ROLE_LABELS, type UserRole } from "@/lib/types/auth";
 import { InviteMemberModal } from "@/components/settings/invite-member-modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { JoinRequestsSection } from "@/components/settings/join-requests-section";
 
 interface MemberProject {
   id: string;
@@ -98,6 +99,40 @@ export default function TeamSettingsPage() {
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  // Hotfix 62A — auto-refresh so accepted invitations move into the
+  // Members list (and disappear from "Pending Invitations") without the
+  // PO ever needing to hit refresh.
+  //
+  //   • visibilitychange → refetch the moment the tab regains focus.
+  //     Catches the common case: PO sends an invite, switches tabs to do
+  //     something else, comes back → list is already current.
+  //   • 60s interval (only while visible) → catches the less common case
+  //     where the PO leaves the tab open in the foreground while the
+  //     invitee accepts.
+  //
+  // We deliberately do NOT toggle the loading spinner here — fetchData
+  // only ever sets loading=false at the end, so background refetches
+  // update silently and the page doesn't flash on every poll.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        fetchData();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        fetchData();
+      }
+    }, 60_000);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(interval);
+    };
   }, [fetchData]);
 
   const handleRoleChange = async (memberId: string, newRole: string) => {
@@ -380,6 +415,10 @@ export default function TeamSettingsPage() {
           )}
         </div>
       </DashboardPanel>
+
+      {/* Hotfix 86 — pending org-join requests (founder-only). Component
+          renders nothing for non-founders or when there are no requests. */}
+      {canManage && <JoinRequestsSection />}
 
       {/* Pending Invitations (admin only) */}
       {canManage && invitations.length > 0 && (

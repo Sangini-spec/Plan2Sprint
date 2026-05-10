@@ -147,7 +147,9 @@ function FeatureCard({ feature }: { feature: FeatureProgressCard }) {
         </span>
       </div>
 
-      {/* 4-column breakdown */}
+      {/* 4-column breakdown — keep all four columns even on phones since
+          this is a status mini-strip (Done/InProgress/Review/Todo); the
+          digits are short enough to fit. */}
       <div className="grid grid-cols-4 gap-1 text-center">
         <div className="rounded bg-[var(--color-rag-green)]/10 px-1 py-1">
           <div className="text-xs font-bold text-[var(--color-rag-green)] tabular-nums">

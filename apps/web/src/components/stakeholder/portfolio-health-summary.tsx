@@ -10,7 +10,7 @@
 /*    4. Top risks + Upcoming milestones                                      */
 /* ========================================================================= */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Loader2,
   TrendingDown,
@@ -25,9 +25,31 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { cachedFetch } from "@/lib/fetch-cache";
+import { cachedFetch, invalidateCache } from "@/lib/fetch-cache";
 import { useSelectedProject } from "@/lib/project/context";
 import { useAutoRefresh } from "@/lib/ws/context";
+
+/* ─── ROOT-CAUSE NOTE ───────────────────────────────────────────────────────
+   Two issues this section fixes:
+
+   1. Wrong iteration / stale data. The PO ProjectHeroBanner kicks off
+      `/api/integrations/sync/auto` whenever it sees an empty dashboard,
+      then polls until fresh data lands. The Stakeholder page never had
+      that trigger. SYNC_SCHEDULER_ENABLED is false in production, so if no
+      PO opened the dashboard recently, ADO/Jira changes (new iterations,
+      story-point updates, etc.) don't propagate to Plan2Sprint's DB. A
+      stakeholder visiting the page sees whatever was last synced — which
+      is why Iteration 1 (oldest, ended 21d ago) was being shown instead
+      of the current Iteration 3.
+
+   2. Predictability flicker. `predictabilityV2 === null` was overloaded
+      to mean both "still loading" and "v2 returned no data". During the
+      first ~200ms of the fetch the local fallback (`computePredictability`)
+      produced a number, then the v2 response arrived with `{score: null}`
+      and the bar went blank. We now use a separate `predictabilityLoaded`
+      flag so the bar stays in skeleton state until v2's authoritative
+      answer is in.
+   ─────────────────────────────────────────────────────────────────────── */
 
 /* ------------------------------------------------------------------------- */
 /*  Types                                                                     */
@@ -166,25 +188,55 @@ export function PortfolioHealthSummary() {
   const [projectPlan, setProjectPlan] = useState<ProjectPlan | null>(null);
   const [blockerCount, setBlockerCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  // v2 composite predictability from /api/analytics — authoritative value
+  // computed by services.predictability_engine. We track the full block so
+  // we can distinguish:
+  //   - v2 was returned with a numeric score  -> use it
+  //   - v2 was returned with score=null       -> honour null (e.g. no
+  //                                              completed sprints yet);
+  //                                              DO NOT silently fall back
+  //                                              to the flawed local calc
+  //                                              which used to return 100%
+  //                                              from a single
+  //                                              over-delivered sprint
+  //   - v2 was not returned at all (error)    -> fall back to local
+  const [predictabilityV2, setPredictabilityV2] = useState<{
+    score: number | null;
+  } | null>(null);
+  // Tracks whether at least one fetch has fully resolved. Lets us
+  // distinguish "predictabilityV2 is null because we haven't fetched yet"
+  // (skeleton) from "v2 returned no v2 block at all" (compute local
+  // fallback). Without this the first paint flickers a local-computed
+  // number before the authoritative v2 null arrives and blanks the bar.
+  const [predictabilityLoaded, setPredictabilityLoaded] = useState(false);
+
+  // One-shot guard: only fire the auto-sync trigger once per project per
+  // session. Without this the stakeholder page reads whatever DB state was
+  // last synced (no SYNC_SCHEDULER in production), which means a stakeholder
+  // gets stuck on iteration N while iteration N+1 already exists in ADO.
+  const autoSyncAttempted = useRef<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     const q = projectId ? `?projectId=${projectId}` : "";
     const qAmp = projectId ? `&projectId=${projectId}` : "";
     try {
-      const [summaryRes, sprintsRes, healthRes, standupsRes, wiRes, planRes] = await Promise.all([
+      const [summaryRes, sprintsRes, healthRes, standupsRes, wiRes, planRes, analyticsRes] = await Promise.all([
         cachedFetch(`/api/dashboard/summary${q}`),
         cachedFetch(`/api/dashboard/sprints${q}`),
         cachedFetch(`/api/team-health/dashboard${q}`),
         cachedFetch(`/api/standups${q}`),
         cachedFetch(`/api/dashboard/work-items?limit=500${qAmp}`),
         cachedFetch(`/api/dashboard/project-plan${q}`),
+        cachedFetch(`/api/analytics${q}`),
       ]);
 
       if (summaryRes.ok) setSummary(summaryRes.data as DashboardSummary);
+      let sprintsData: Sprint[] | null = null;
       if (sprintsRes.ok) {
         const data = sprintsRes.data as { sprints?: Sprint[] };
-        setSprints(data.sprints ?? []);
+        sprintsData = data.sprints ?? [];
+        setSprints(sprintsData);
       }
       if (healthRes.ok) setHealth(healthRes.data as TeamHealthData);
       if (standupsRes.ok) {
@@ -196,6 +248,81 @@ export function PortfolioHealthSummary() {
         setWorkItems(data.workItems ?? []);
       }
       if (planRes.ok) setProjectPlan(planRes.data as ProjectPlan);
+      if (analyticsRes.ok) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const v2 = (analyticsRes.data as any)?.predictability?.v2;
+        if (v2 && typeof v2 === "object") {
+          // v2 was returned (even if score is null) — capture the whole
+          // block so downstream can distinguish "authoritative null" from
+          // "no response".
+          setPredictabilityV2({
+            score: typeof v2.score === "number" ? v2.score : null,
+          });
+        } else {
+          setPredictabilityV2(null);
+        }
+      } else {
+        setPredictabilityV2(null);
+      }
+      setPredictabilityLoaded(true);
+
+      // Auto-sync: trigger an ADO/Jira pull when the DB looks stale, then
+      // poll briefly for fresh data. Mirrors PO ProjectHeroBanner. We
+      // consider the data stale when:
+      //   (a) there are zero sprints in the DB, OR
+      //   (b) the most recent sprint already ended (its end_date is in
+      //       the past) — meaning the project has likely advanced to a
+      //       newer iteration that hasn't been synced yet.
+      if (projectId && autoSyncAttempted.current !== projectId && sprintsData) {
+        const now = Date.now();
+        const mostRecent = sprintsData[0]; // backend orders by start_date desc
+        const mostRecentEnded =
+          mostRecent?.endDate
+            ? new Date(mostRecent.endDate).getTime() < now
+            : true;
+        const shouldSync =
+          sprintsData.length === 0 || mostRecentEnded;
+
+        if (shouldSync) {
+          autoSyncAttempted.current = projectId;
+          fetch("/api/integrations/sync/auto", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId }),
+          }).catch(() => {});
+
+          // Poll up to 6 times (~30s) for a newer sprint to land.
+          let attempts = 0;
+          const pollInterval = setInterval(async () => {
+            attempts += 1;
+            if (attempts > 6) {
+              clearInterval(pollInterval);
+              return;
+            }
+            invalidateCache("/api/dashboard/");
+            invalidateCache("/api/analytics");
+            const q2 = projectId ? `?projectId=${projectId}` : "";
+            const sRes = await cachedFetch(`/api/dashboard/sprints${q2}`);
+            if (sRes.ok) {
+              const sData = sRes.data as { sprints?: Sprint[] };
+              const fresh = sData.sprints?.[0];
+              const freshEnded =
+                fresh?.endDate
+                  ? new Date(fresh.endDate).getTime() < now
+                  : true;
+              // Stop polling once we see a sprint that ends in the future
+              // OR once we see a different sprint than before.
+              if (
+                fresh &&
+                (!freshEnded || fresh.id !== mostRecent?.id)
+              ) {
+                clearInterval(pollInterval);
+                fetchData();
+              }
+            }
+          }, 5000);
+        }
+      }
     } catch {}
     setLoading(false);
   }, [projectId]);
@@ -214,8 +341,81 @@ export function PortfolioHealthSummary() {
 
   // -------------- Derived metrics --------------
 
-  // Active sprint = the "current" one (state = active) — fallback to most recent
-  const activeSprint = sprints.find((s) => s.state === "active") || sprints[0];
+  // Active sprint detection — prefer the iteration that ACTUALLY has work.
+  //
+  // Real-world ADO setups do not always keep `timeFrame=current` on the
+  // sprint where the team is actually working. We've observed projects
+  // where ADO has Iteration 1 marked `current` (zero work) while
+  // Iteration 3 has 56 items / 340 SP and is marked `future`. Trusting
+  // ADO's state field there results in a "0% progress, sprint ended 22d
+  // ago" dashboard while the actual work is one tab over.
+  //
+  // We also can't rely on time-window matching alone: many ADO projects
+  // import iterations all sharing the project's date range, so today
+  // either falls in all of them or none.
+  //
+  // Resolution order:
+  //   1. Iteration with story points or items AND today within window.
+  //   2. Iteration with state = "active" AND non-zero work.
+  //   3. Iteration with the most story points (descending), tie-broken
+  //      by latest start_date. This is what brings Iteration 3 back when
+  //      it's where the work lives.
+  //   4. Iteration whose [start, end] window contains today.
+  //   5. ADO's nominal "active" iteration.
+  //   6. sprints[0] (backend orders by start_date desc).
+  const __nowMs = Date.now();
+  const __hasWork = (s: Sprint) =>
+    (s.totalStoryPoints || 0) > 0 || (s.totalItems || 0) > 0;
+  const __containsToday = (s: Sprint) => {
+    const sd = s.startDate ? new Date(s.startDate).getTime() : NaN;
+    const ed = s.endDate ? new Date(s.endDate).getTime() : NaN;
+    return !isNaN(sd) && !isNaN(ed) && sd <= __nowMs && __nowMs <= ed;
+  };
+  const __byMostWork = (a: Sprint, b: Sprint) => {
+    const sa = a.totalStoryPoints || 0;
+    const sb = b.totalStoryPoints || 0;
+    if (sb !== sa) return sb - sa;
+    const ta = a.totalItems || 0;
+    const tb = b.totalItems || 0;
+    if (tb !== ta) return tb - ta;
+    const da = a.startDate ? new Date(a.startDate).getTime() : 0;
+    const db = b.startDate ? new Date(b.startDate).getTime() : 0;
+    return db - da;
+  };
+
+  const sprintsWithSP = sprints.filter(
+    (s) => (s.totalStoryPoints || 0) > 0,
+  );
+  const sprintsWithItems = sprints.filter(
+    (s) => (s.totalItems || 0) > 0,
+  );
+
+  // Resolution order — designed to be stable across project shapes:
+  //
+  //   1. Today is inside [startDate, endDate]. Most authoritative answer
+  //      to "what sprint are we in right now?" — works for healthy
+  //      projects with proper iteration date ranges, AND covers the
+  //      brand-new-sprint case where today is in window but no work
+  //      has been assigned yet (we still want to show that sprint).
+  //
+  //   2. Sprint with the most story points (recency-tie-broken). Picks
+  //      up the case where ADO has its calendar dates wrong but the work
+  //      is clearly concentrated in one iteration (the Iter-3-with-340-SP
+  //      case). SP is preferred over items because a single stub item
+  //      shouldn't outvote a real loaded sprint.
+  //
+  //   3. Items-based fallback for teams that don't track SP.
+  //
+  //   4. ADO's state=active marker — only trusted last because we've
+  //      seen it pinned to empty stub iterations.
+  //
+  //   5. sprints[0] (backend orders by start_date desc).
+  const activeSprint =
+    sprints.find(__containsToday) ||
+    [...sprintsWithSP].sort(__byMostWork)[0] ||
+    [...sprintsWithItems].sort(__byMostWork)[0] ||
+    sprints.find((s) => s.state === "active") ||
+    sprints[0];
 
   const actualPct = activeSprint ? activeSprint.completionPct : 0;
   const expectedP = activeSprint
@@ -262,12 +462,38 @@ export function PortfolioHealthSummary() {
         );
 
   // ===== PREDICTABILITY =====
-  // 1. If we have velocity trend data: avg(completed/planned) across it.
-  // 2. Else if there's an active sprint: current actual% vs expected% (in-flight).
-  // 3. Else: null → render "—".
-  let predictability: number | null = computePredictability(finalVelocityTrend);
-  if (predictability === null && activeSprint && expectedP > 0) {
-    predictability = Math.min(100, Math.round((actualPct / expectedP) * 100));
+  // Preferred: the v2 composite score from /api/analytics — symmetric
+  // (over-delivery penalised), recency-weighted, variance-aware. Single
+  // source of truth shared with the Delivery page and the weekly PDF.
+  //
+  // When v2 has been returned we honour its answer verbatim — including a
+  // null score meaning "no completed sprints yet". Historically the UI
+  // silently fell back to a local capped-at-1 avg which produced a
+  // meaningless 100% for any project whose sole sprint over-delivered by
+  // even one story. We never do that silent fallback again.
+  //
+  // Local fallbacks only fire when v2 wasn't returned at all (API error,
+  // old backend revision):
+  //   (a) local avg(completed/planned) over velocity trend
+  //   (b) current sprint's actual% vs expected% when nothing else is
+  //       measurable yet
+  let predictability: number | null;
+  if (!predictabilityLoaded) {
+    // First fetch hasn't resolved yet. Don't compute a local fallback —
+    // doing so produces a number that gets immediately overwritten when
+    // the authoritative v2 response lands a tick later, which is the
+    // flicker the user reported.
+    predictability = null;
+  } else if (predictabilityV2 !== null) {
+    // Authoritative — even if the score is null, the product answer is
+    // "not enough sprint history". Don't paper over it.
+    predictability = predictabilityV2.score;
+  } else {
+    // v2 wasn't returned at all (older backend or transient error).
+    predictability = computePredictability(finalVelocityTrend);
+    if (predictability === null && activeSprint && expectedP > 0) {
+      predictability = Math.min(100, Math.round((actualPct / expectedP) * 100));
+    }
   }
 
   // Overall portfolio SP
@@ -284,23 +510,27 @@ export function PortfolioHealthSummary() {
 
   // ===== UPCOMING MILESTONES =====
   // Stakeholder definition: upcoming timeline states + features not yet complete.
-  // Compose from:
-  //   1. Future sprint end dates (cadence checkpoints)
-  //   2. In-flight features with a plannedEnd in the future (feature deliveries)
-  //   3. Sorted by date, closest first.
+  // Hotfix 37 — loosened the filters so projects whose dates are stale
+  // (e.g. all sprint end dates in the past, features lacking plannedEnd
+  // because they haven't been included in a plan yet) still surface as
+  // legitimate upcoming work. The previous strict ``plannedEnd > now``
+  // filter showed empty for MediCare even though the entire project
+  // still needs to be delivered. Now we include:
+  //   1. Any sprint not yet completed (active, future, planned)
+  //   2. Any feature whose status isn't ``complete`` AND completePct < 100,
+  //      regardless of whether plannedEnd is set. Date-less features
+  //      sort to the end of the list.
   const allFeatures: PlanFeature[] = [
     ...(projectPlan?.features ?? []),
     ...(projectPlan?.unassigned ?? []),
   ];
 
-  // Sprint checkpoints: active sprints (regardless of date — still "upcoming" until closed)
-  // plus future-dated sprints of any state.
   const sprintMilestones: MilestoneRow[] = sprints
     .filter((s) => {
-      if (!s.endDate) return false;
-      const inFuture = new Date(s.endDate).getTime() > Date.now();
-      const isActive = (s.state || "").toLowerCase() === "active";
-      return inFuture || isActive;
+      const state = (s.state || "").toLowerCase();
+      // Treat anything not explicitly closed as still upcoming. This
+      // handles "future", "active", "planned", "scheduled" etc.
+      return state !== "completed" && state !== "closed";
     })
     .map((s) => ({
       id: `sprint-${s.id}`,
@@ -309,14 +539,13 @@ export function PortfolioHealthSummary() {
       status: s.state,
     }));
 
-  // Feature deliveries: in-flight or not-yet-complete features with a plannedEnd.
-  // Include past-due ones too (they're still "pending to finish").
   const featureMilestones: MilestoneRow[] = allFeatures
-    .filter(
-      (f) =>
-        f.plannedEnd &&
-        (f.status || "").toLowerCase() !== "complete"
-    )
+    .filter((f) => {
+      const status = (f.status || "").toLowerCase();
+      if (status === "complete") return false;
+      if (typeof f.completePct === "number" && f.completePct >= 100) return false;
+      return true;
+    })
     .map((f) => ({
       id: `feat-${f.id}`,
       name: f.title.length > 60 ? f.title.slice(0, 57) + "…" : f.title,
@@ -324,10 +553,12 @@ export function PortfolioHealthSummary() {
       status: f.status,
     }));
 
+  // Sort by plannedEnd ascending (nulls last), so dated work shows
+  // first and undated/TBD work shows after.
   const upcomingMilestones = [...sprintMilestones, ...featureMilestones]
     .sort((a, b) => {
-      const at = a.plannedEndDate ? new Date(a.plannedEndDate).getTime() : Infinity;
-      const bt = b.plannedEndDate ? new Date(b.plannedEndDate).getTime() : Infinity;
+      const at = a.plannedEndDate ? new Date(a.plannedEndDate).getTime() : Number.POSITIVE_INFINITY;
+      const bt = b.plannedEndDate ? new Date(b.plannedEndDate).getTime() : Number.POSITIVE_INFINITY;
       return at - bt;
     })
     .slice(0, 5);
@@ -435,22 +666,72 @@ function SprintCompletionHero({
   delta: number;
   deltaSev: Severity;
 }) {
-  const deltaColor = severityColor(deltaSev);
+  // Sprint phase determines which tiles to show. The original layout
+  // (Actual / Expected / Behind) only makes intuitive sense for an
+  // ACTIVE sprint, where Expected = elapsed time. For an ended sprint
+  // it always reads "Expected 100% / Behind X%" regardless of what
+  // actually happened, which buries the real story (planned vs
+  // delivered). For a future sprint there is no completion to show.
+  const phase: "active" | "ended" | "future" | "unknown" = (() => {
+    if (!sprint || !sprint.startDate || !sprint.endDate) return "unknown";
+    const now = Date.now();
+    const s = new Date(sprint.startDate).getTime();
+    const e = new Date(sprint.endDate).getTime();
+    if (now < s) return "future";
+    if (now > e) return "ended";
+    return "active";
+  })();
+
+  // Severity selection: only colour the hero when the comparison is
+  // meaningful (active sprint). For an ended sprint we colour by
+  // attainment band instead. For a future sprint, neutral.
+  const heroSev: Severity =
+    phase === "ended"
+      ? actualPct >= 95 ? "GREEN" : actualPct >= 75 ? "AMBER" : "RED"
+      : phase === "active" ? deltaSev
+      : "GREEN";
 
   // Gradient stops based on severity
   const gradientStart =
-    deltaSev === "GREEN" ? "rgba(34,197,94,0.18)" :
-    deltaSev === "AMBER" ? "rgba(245,158,11,0.18)" :
+    heroSev === "GREEN" ? "rgba(34,197,94,0.18)" :
+    heroSev === "AMBER" ? "rgba(245,158,11,0.18)" :
     "rgba(239,68,68,0.18)";
 
   const accentColor =
-    deltaSev === "GREEN" ? "rgba(34,197,94,0.30)" :
-    deltaSev === "AMBER" ? "rgba(245,158,11,0.30)" :
+    heroSev === "GREEN" ? "rgba(34,197,94,0.30)" :
+    heroSev === "AMBER" ? "rgba(245,158,11,0.30)" :
     "rgba(239,68,68,0.30)";
 
   const daysLeft = sprint ? daysFromNow(sprint.endDate) : null;
   const totalSP = sprint?.totalStoryPoints ?? 0;
   const completedSP = sprint?.completedStoryPoints ?? 0;
+  const totalItems = sprint?.totalItems ?? 0;
+  const completedItems = sprint?.completedItems ?? 0;
+  const startsIn =
+    phase === "future" && sprint?.startDate
+      ? daysFromNow(sprint.startDate)
+      : null;
+
+  // Phase-specific eyebrow label so stakeholders read the right story
+  // immediately. ("Sprint Completion" was the same string regardless,
+  // implying we were always reporting on a finished sprint.)
+  //
+  // For the "ended" phase we use "Current Sprint" rather than "Last
+  // Sprint Result". Reasoning: the activeSprint resolver picks the
+  // iteration the team is actually working on. When ADO's calendar
+  // dates have lapsed but no new sprint has started, the team is
+  // still conceptually in that sprint — calling it "last sprint"
+  // implies a fresh one has begun, which it hasn't.
+  const eyebrow =
+    phase === "ended" ? "Current Sprint"
+    : phase === "future" ? "Upcoming Sprint"
+    : "Sprint Progress";
+
+  // Story point unit fallback — some projects have items but no SP.
+  const planned = totalSP > 0 ? totalSP : totalItems;
+  const delivered = totalSP > 0 ? completedSP : completedItems;
+  const unit = totalSP > 0 ? "SP" : "items";
+  const attainment = planned > 0 ? Math.round((delivered / planned) * 100) : 0;
 
   return (
     <div
@@ -474,43 +755,119 @@ function SprintCompletionHero({
       <div className="relative flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--text-tertiary)]">
-            Sprint Completion
+            {eyebrow}
           </p>
           <h2 className="mt-2 text-2xl font-bold text-[var(--text-primary)]">
             {sprint?.name || "No active sprint"}
           </h2>
           {sprint && (
             <p className="text-xs text-[var(--text-secondary)] mt-1">
-              {completedSP.toFixed(0)} of {totalSP.toFixed(0)} story points
-              {daysLeft != null && daysLeft > 0 && ` · ${daysLeft} days remaining`}
-              {daysLeft != null && daysLeft === 0 && ` · ends today`}
-              {daysLeft != null && daysLeft < 0 && ` · ended ${Math.abs(daysLeft)}d ago`}
+              {delivered.toFixed(0)} of {planned.toFixed(0)} {unit}
+              {phase === "active" && daysLeft != null && daysLeft > 0 && ` · ${daysLeft} days remaining`}
+              {phase === "active" && daysLeft != null && daysLeft === 0 && ` · ends today`}
+              {phase === "ended" && daysLeft != null && ` · ended ${Math.abs(daysLeft)}d ago`}
+              {phase === "future" && startsIn != null && startsIn > 0 && ` · starts in ${startsIn}d`}
             </p>
           )}
         </div>
       </div>
 
-      {/* 3 ratio tiles */}
+      {/* 3 tiles — content depends on sprint phase */}
       <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <RatioTile
-          label="Actual"
-          value={actualPct}
-          color="var(--color-brand-secondary)"
-          emphasis
-        />
-        <RatioTile
-          label="Expected"
-          value={expectedPct}
-          color="var(--text-secondary)"
-        />
-        <RatioTile
-          label={delta >= 0 ? "Ahead" : "Behind"}
-          value={delta}
-          suffix="%"
-          color={deltaColor}
-          emphasis
-          showSign
-        />
+        {phase === "active" && (
+          <>
+            <RatioTile
+              label="Actual"
+              value={actualPct}
+              color="var(--color-brand-secondary)"
+              emphasis
+            />
+            <RatioTile
+              label="Expected"
+              value={expectedPct}
+              color="var(--text-secondary)"
+            />
+            <RatioTile
+              label={delta >= 0 ? "Ahead" : "Behind"}
+              value={delta}
+              suffix="%"
+              color={severityColor(deltaSev)}
+              emphasis
+              showSign
+            />
+          </>
+        )}
+
+        {phase === "ended" && (
+          <>
+            <RatioTile
+              label={`Planned ${unit}`}
+              value={planned}
+              suffix=""
+              color="var(--text-secondary)"
+              emphasis
+              showBar={false}
+            />
+            <RatioTile
+              label={`Delivered ${unit}`}
+              value={delivered}
+              suffix=""
+              color="var(--color-brand-secondary)"
+              emphasis
+              showBar={false}
+            />
+            <RatioTile
+              label="Plan Attainment"
+              value={attainment}
+              color={severityColor(heroSev)}
+              emphasis
+            />
+          </>
+        )}
+
+        {phase === "future" && (
+          <>
+            <RatioTile
+              label={`Planned ${unit}`}
+              value={planned}
+              suffix=""
+              color="var(--text-secondary)"
+              emphasis
+              showBar={false}
+            />
+            <RatioTile
+              label="Starts In"
+              value={startsIn ?? 0}
+              suffix="d"
+              color="var(--color-brand-secondary)"
+              emphasis
+              showBar={false}
+            />
+            <RatioTile
+              label="Status"
+              value={0}
+              suffix=""
+              color="var(--text-secondary)"
+              emphasis
+              showBar={false}
+            />
+          </>
+        )}
+
+        {phase === "unknown" && (
+          <>
+            <RatioTile label="Actual" value={actualPct} color="var(--color-brand-secondary)" emphasis />
+            <RatioTile label="Expected" value={expectedPct} color="var(--text-secondary)" />
+            <RatioTile
+              label={delta >= 0 ? "Ahead" : "Behind"}
+              value={delta}
+              suffix="%"
+              color={severityColor(deltaSev)}
+              emphasis
+              showSign
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -523,6 +880,7 @@ function RatioTile({
   emphasis,
   showSign,
   suffix = "%",
+  showBar = true,
 }: {
   label: string;
   value: number;
@@ -530,9 +888,12 @@ function RatioTile({
   emphasis?: boolean;
   showSign?: boolean;
   suffix?: string;
+  showBar?: boolean;
 }) {
   const displayValue = Math.abs(value).toFixed(0);
   const sign = showSign ? (value > 0 ? "+" : value < 0 ? "−" : "") : "";
+  // Bar only makes sense for percentage values. For raw counts (story
+  // points, day counts) capping at 100 produces a meaningless full bar.
   const barWidth = Math.min(Math.abs(value), 100);
 
   return (
@@ -560,12 +921,14 @@ function RatioTile({
           {suffix}
         </span>
       </div>
-      <div className="mt-3 h-1.5 rounded-full bg-[var(--bg-surface-sunken)] overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all"
-          style={{ width: `${barWidth}%`, backgroundColor: color }}
-        />
-      </div>
+      {showBar && (
+        <div className="mt-3 h-1.5 rounded-full bg-[var(--bg-surface-sunken)] overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all"
+            style={{ width: `${barWidth}%`, backgroundColor: color }}
+          />
+        </div>
+      )}
     </div>
   );
 }

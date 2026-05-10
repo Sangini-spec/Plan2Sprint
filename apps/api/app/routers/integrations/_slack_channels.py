@@ -350,7 +350,12 @@ async def post_to_project_channel(
         ]
 
     elif action_type == "blocker_to_channel":
-        ticket = message_data.get("ticket", "")
+        # Hotfix 78 — frontend now sends a structured ``blockerType``
+        # (one of a curated set of categories) in place of the
+        # freeform ticket reference. Older clients still send
+        # ``ticket`` so we accept either; ``blockerType`` wins.
+        blocker_type = message_data.get("blockerType") or message_data.get("ticket") or ""
+        ticket = blocker_type  # store under the existing column name
         description = message_data.get("description", "")
         text = f"Blocker flagged by {user_name}"
 
@@ -427,8 +432,12 @@ async def post_to_project_channel(
             "org_id": org_id,
         })
 
+        # Hotfix 78 — render the blocker type as a prominent tag at
+        # the top (before the description) so the channel can scan
+        # the category at a glance.
+        type_tag = f"`{blocker_type}`" if blocker_type else "`Unspecified`"
         blocks = [
-            {"type": "section", "text": {"type": "mrkdwn", "text": f":construction: *Blocker Flagged by {user_name}*\n\n*Ticket:* {ticket or '—'}\n*Description:* {description}"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": f":construction: *Blocker Flagged by {user_name}*\n\n*Type:* {type_tag}\n*Description:* {description}"}},
             {"type": "actions", "block_id": f"blocker_actions:{blocker_id}", "elements": [
                 {
                     "type": "button",

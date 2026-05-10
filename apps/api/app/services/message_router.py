@@ -243,22 +243,70 @@ async def deliver_notification(
         "errors": [],
     }
 
-    # 1. Find the team member
+    # 1. Find recipient identity. Hotfix 73/74 — prefer the User row
+    # (which carries the personal Slack/Teams IDs the dev OAuthed
+    # themselves) over the legacy TeamMember row (auto-populated from
+    # ADO/Jira sync, only had IDs after a manual /map-users run that
+    # nothing actually triggered).
+    #
+    # Hotfix (today): use `.scalars().first()` instead of
+    # `scalar_one_or_none()`. Multi-tenant orgs commonly have MORE THAN
+    # ONE TeamMember row for the same email (the auto-import creates a
+    # `developer` row alongside an `excluded` row left over from a prior
+    # role mapping). `scalar_one_or_none()` raises MultipleResultsFound
+    # on those, the delivery worker swallows the exception, and the
+    # whole notification (Slack + Teams + in-app) is silently dropped.
+    # That's why C2A's Sangini got no daily digests for days while
+    # other orgs (single TM per email) worked fine. Picking *any* row
+    # is fine — we only use it for `.slack_user_id` / `.teams_user_id`
+    # which are usually identical across the duplicates, and the dedup
+    # logic in `_dedupe_reports_by_email` handles any divergence at the
+    # display layer.
+    from ..models.user import User as _UserModel
+    user_result = await db.execute(
+        select(_UserModel).where(_UserModel.email == recipient_email).limit(1)
+    )
+    user_row = user_result.scalars().first()
+
+    # Prefer rows that have a slack_user_id set (so DM delivery works).
+    # `case` translates to a CASE WHEN expression that sorts populated
+    # rows first.
+    from sqlalchemy import case as _case
     member_result = await db.execute(
         select(TeamMember).where(
             TeamMember.organization_id == org_id,
             TeamMember.email == recipient_email,
+            TeamMember.role != "excluded",
         )
+        .order_by(
+            _case(
+                (TeamMember.slack_user_id.is_not(None), 0),
+                else_=1,
+            ),
+        )
+        .limit(1)
     )
-    member = member_result.scalar_one_or_none()
+    member = member_result.scalars().first()
 
-    if not member:
-        result["errors"].append(f"Team member not found: {recipient_email}")
+    if not user_row and not member:
+        result["errors"].append(f"Recipient not found: {recipient_email}")
         result["channels"] = {"slack": "skipped", "teams": "skipped", "in_app": "skipped"}
         return result
 
+    # Effective IDs: User row (per-user OAuth) first, TeamMember as
+    # legacy fallback. Either source winning is fine — both end up at
+    # the same Slack/Teams identity.
+    effective_slack_user_id = (
+        (user_row.slack_user_id if user_row else None)
+        or (member.slack_user_id if member else None)
+    )
+    effective_teams_user_id = (
+        (user_row.teams_user_id if user_row else None)
+        or (member.teams_user_id if member else None)
+    )
+
     # 2. Try Slack delivery
-    if slack_payload and member.slack_user_id:
+    if slack_payload and effective_slack_user_id:
         try:
             slack_conn_result = await db.execute(
                 select(ToolConnection).where(
@@ -272,7 +320,7 @@ async def deliver_notification(
                 bot_token = decrypt_token(slack_conn.access_token)
                 slack_result = await send_slack_dm(
                     bot_token,
-                    member.slack_user_id,
+                    effective_slack_user_id,
                     slack_payload.get("text", ""),
                     slack_payload.get("blocks"),
                 )
@@ -297,7 +345,7 @@ async def deliver_notification(
         result["channels"]["slack"] = "skipped"
 
     # 3. Try Teams delivery
-    if teams_payload and member.teams_user_id:
+    if teams_payload:
         try:
             teams_conn_result = await db.execute(
                 select(ToolConnection).where(
@@ -310,13 +358,81 @@ async def deliver_notification(
             if teams_conn:
                 # Refresh token if expired (Teams tokens expire after 1 hour)
                 access_token = await _refresh_teams_token_if_needed(db, teams_conn)
-                teams_result = await send_teams_chat(
-                    access_token,
-                    member.teams_user_id,
-                    teams_payload.get("content", ""),
-                    teams_payload.get("content_type", "html"),
-                )
-                if teams_result.get("ok"):
+
+                # Graph fallback — when neither User nor TeamMember row
+                # has `teams_user_id` cached, look the recipient up by
+                # email via Graph (`/users/{email}`). Real-world setups
+                # often have org-level Teams OAuth completed (bot can
+                # send) without the per-user OAuth that populates the
+                # User.teams_user_id column. Without this fallback, all
+                # Teams delivery silently no-ops for those users — even
+                # though the same email IS a real Microsoft account
+                # the bot can resolve via Graph.
+                resolved_teams_id = effective_teams_user_id
+                if not resolved_teams_id and recipient_email:
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as _gc:
+                            _r = await _gc.get(
+                                f"{GRAPH_API}/users/{recipient_email}",
+                                headers={"Authorization": f"Bearer {access_token}"},
+                            )
+                            if _r.status_code == 200:
+                                resolved_teams_id = (_r.json() or {}).get("id") or None
+                                # Cache on the User row so next delivery
+                                # skips this network round-trip.
+                                if resolved_teams_id and user_row:
+                                    user_row.teams_user_id = resolved_teams_id
+                                    try:
+                                        await db.commit()
+                                    except Exception:
+                                        await db.rollback()
+                    except Exception as _e:
+                        # Non-fatal — fall through with skipped state.
+                        result["errors"].append(
+                            f"Teams lookup error: {str(_e)}"
+                        )
+
+                if not resolved_teams_id:
+                    result["channels"]["teams"] = "skipped"
+                    teams_result = {"ok": False, "skipped": True}
+                else:
+                    # Pre-flight: detect "DM to self" — Microsoft Graph
+                    # rejects oneOnOne chats where sender == recipient
+                    # with HTTP 400. The Plan2Sprint daily digest sends
+                    # to the org's PO, and the same human often did the
+                    # Teams OAuth, so this is the most common cause of
+                    # delivery failure. Skip cleanly with a clear note
+                    # instead of letting the 400 bubble up as "error".
+                    me_self_id: str | None = None
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as _gc2:
+                            _meres = await _gc2.get(
+                                f"{GRAPH_API}/me",
+                                headers={"Authorization": f"Bearer {access_token}"},
+                            )
+                            if _meres.status_code == 200:
+                                me_self_id = (_meres.json() or {}).get("id") or None
+                    except Exception:
+                        pass
+
+                    if me_self_id and me_self_id == resolved_teams_id:
+                        result["channels"]["teams"] = "skipped"
+                        result["errors"].append(
+                            "Teams skipped: recipient is the same Microsoft "
+                            "account that completed the Teams OAuth. Graph "
+                            "doesn't support oneOnOne chats with self."
+                        )
+                        teams_result = {"ok": False, "skipped": True}
+                    else:
+                        teams_result = await send_teams_chat(
+                            access_token,
+                            resolved_teams_id,
+                            teams_payload.get("content", ""),
+                            teams_payload.get("content_type", "html"),
+                        )
+                if teams_result.get("skipped"):
+                    pass  # already set channels=skipped above
+                elif teams_result.get("ok"):
                     result["channels"]["teams"] = "sent"
                     await _log_delivery(
                         db, org_id, recipient_email, notification_type, "teams", "sent"

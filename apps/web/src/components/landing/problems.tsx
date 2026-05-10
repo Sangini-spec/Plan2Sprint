@@ -20,32 +20,32 @@ const problems = [
   {
     icon: Clock,
     title: "Sprint Planning Takes Hours",
-    body: "POs spend 3\u20135 hours per sprint manually reviewing backlogs and assigning tickets based on gut feel \u2014 not data.",
+    body: "POs burn 3\u20135 hours per sprint assigning tickets on gut feel.",
   },
   {
     icon: Drama,
     title: "Standups Are Just Theatre",
-    body: "Every morning, developers report what\u2019s already in Jira and GitHub. The meeting exists because no tool synthesises it automatically.",
+    body: "Devs read aloud what\u2019s already in Jira and GitHub.",
   },
   {
     icon: Flame,
     title: "Burnout Hides Until It\u2019s Too Late",
-    body: "Overloading goes undetected until a developer disengages or leaves. No system flags the warning signs early.",
+    body: "Overload goes undetected until someone disengages or leaves.",
   },
   {
     icon: Ghost,
     title: "Progress is Invisible",
-    body: "PRs stalled in review, CI failures, developers who haven\u2019t committed in days \u2014 none of this surfaces until the sprint is already at risk.",
+    body: "Stalled PRs, failing CI, idle devs \u2014 surface only when the sprint is already at risk.",
   },
   {
     icon: Puzzle,
     title: "Signals Scattered Everywhere",
-    body: "Critical info lives in Jira, GitHub, Slack, and email simultaneously. The right person never gets the right signal at the right time.",
+    body: "Info lives in Jira, GitHub, Slack, email \u2014 never together.",
   },
   {
     icon: TrendingDown,
     title: "Retrospectives Repeat Mistakes",
-    body: "Post-sprint retros rely on memory. Teams repeat the same failures because there\u2019s no systematic analysis.",
+    body: "Memory-based retros mean teams repeat the same failures.",
   },
 ];
 
@@ -106,7 +106,7 @@ export default function Problems() {
 
           <motion.div variants={headingVariants}>
             <SectionHeading className="max-w-3xl">
-              Your team&rsquo;s best work is buried under meetings and manual&nbsp;updates.
+              Best work, buried under meetings and manual&nbsp;updates.
             </SectionHeading>
           </motion.div>
         </motion.div>

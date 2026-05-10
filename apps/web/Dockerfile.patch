@@ -16,6 +16,10 @@ WORKDIR /app
 ENV NEXT_PUBLIC_SUPABASE_URL=https://obmbpfoormxbbizudrrp.supabase.co
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ibWJwZm9vcm14YmJpenVkcnJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2NTg0NjAsImV4cCI6MjA4NzIzNDQ2MH0.weAMr4zip5JyY49GfJ70nqjie6ka_QkYzRp4Zsev9B8
 ENV API_URL=https://plan2sprint-api.purplebeach-150945ee.westus3.azurecontainerapps.io
+# Publicly baked API URL — Next.js inlines NEXT_PUBLIC_* at build time into
+# the client bundle. Used by the browser to call slow endpoints (AI sprint
+# generation) directly, bypassing the Next.js proxy's ~50s rewrite timeout.
+ENV NEXT_PUBLIC_API_URL=https://plan2sprint-api.purplebeach-150945ee.westus3.azurecontainerapps.io
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Overlay the whole src tree in ONE layer. Copying 30+ individual files

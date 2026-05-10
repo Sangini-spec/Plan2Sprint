@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
@@ -175,6 +175,19 @@ def build_sprint_prompt(
         else:
             standalone_items.append(item)
 
+    def _sp_label(item: dict) -> str:
+        """Format SP info for the prompt — emphasise REMAINING work for
+        items already in flight so the AI doesn't over-budget capacity.
+        """
+        sp = item.get("story_points")
+        rsp = item.get("remaining_sp")
+        factor = item.get("remaining_effort_factor", 1.0)
+        if sp is None:
+            return "SP: unestimated"
+        if factor < 1.0 and rsp is not None:
+            return f"SP: {sp} (remaining: {rsp} = {int(factor * 100)}% of original)"
+        return f"SP: {sp}"
+
     backlog_text = ""
     # First list epics with their children grouped together
     for epic_id, epic_title in epics.items():
@@ -185,7 +198,7 @@ def build_sprint_prompt(
             blocked = " [BLOCKED]" if item["id"] in blocked_item_ids else ""
             backlog_text += (
                 f"    - ID: {item['id']} | Title: {item['title']} | Type: {item['type']} | "
-                f"Priority: {item['priority']} | SP: {item.get('story_points') or 'unestimated'} | "
+                f"Priority: {item['priority']} | {_sp_label(item)} | "
                 f"Status: {item['status']} | Parent: {epic_title}{blocked}\n"
             )
     # Then standalone items
@@ -195,7 +208,7 @@ def build_sprint_prompt(
         blocked = " [BLOCKED]" if item["id"] in blocked_item_ids else ""
         backlog_text += (
             f"  - ID: {item['id']} | Title: {item['title']} | Type: {item['type']} | "
-            f"Priority: {item['priority']} | SP: {item.get('story_points') or 'unestimated'} | "
+            f"Priority: {item['priority']} | {_sp_label(item)} | "
             f"Status: {item['status']}{blocked}\n"
         )
 
@@ -208,7 +221,7 @@ def build_sprint_prompt(
         for item in carry_forward_items:
             carry_text += (
                 f"  - ID: {item['id']} | Title: {item['title']} | "
-                f"SP: {item.get('story_points') or 'unestimated'} | "
+                f"{_sp_label(item)} | "
                 f"Status: {item['status']} (carry-forward from previous sprint)\n"
             )
     else:
@@ -310,13 +323,44 @@ The Product Owner has provided specific instructions for this sprint plan:
 You MUST follow these instructions. They take priority over default ordering and distribution rules. Adjust the plan to satisfy the PO's requirements while still assigning all items.
 """
 
+    # Hotfix 26 — regeneration nonce. Without this, two consecutive
+    # "Regenerate" clicks (no rejection feedback) produced near-identical
+    # plans because the prompt was deterministic and Grok at temperature
+    # 0.3 only adds minor wording variation. Adding a per-call timestamp
+    # + random nonce shifts the prompt enough that the model's hidden
+    # state takes a different sampling path, producing genuinely
+    # different plans (different sprint orderings, different developer
+    # assignments) while still respecting all the constraints.
+    import secrets as _secrets
+    regen_nonce = _secrets.token_hex(4)
+    regen_timestamp = datetime.now(timezone.utc).isoformat()
+
     prompt = f"""You are a sprint planning AI. Create a project plan by assigning ALL backlog items to developers across sprints.
+
+THINKING PROTOCOL (Hotfix 30 — invoke before producing JSON):
+Before emitting the final JSON plan, work through this analysis on a private
+scratchpad (the scratchpad is discarded; only the JSON is consumed downstream):
+  1. Read the backlog feature-by-feature; estimate each feature's TOTAL SP.
+  2. Estimate the MINIMUM sprint count: ceil(total SP / team capacity per sprint).
+     Aim for that count, not more.
+  3. Group features into sprints in DEPENDENCY ORDER (foundation → dependent →
+     polish). Each sprint should be 60-85% of capacity, never over 100%.
+  4. Distribute stories evenly across developers based on their skill match
+     and current load. Avoid loading a single developer over their per-sprint
+     capacity.
+  5. If rejection feedback is present below, identify what about the LAST plan
+     was rejected and produce a plan that demonstrably differs on those axes
+     (fewer sprints, different developer pairings, or different sequencing).
+  6. Verify each rule (1-7) below holds for your draft plan; revise if any
+     rule is violated.
+After completing the analysis, emit the JSON exactly as specified at the end.
 
 PROJECT STATS:
 - {num_features} features/epics, {num_stories} stories/tasks/bugs
 - Sprint duration: {sprint_days} days ({start_date} → {end_date} is Sprint 1)
 - Team capacity per sprint: ~{total_team_capacity:.0f} SP
 - Today's date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
+- Generation request id: {regen_nonce} (run at {regen_timestamp}; use this to vary your sampling between runs — different developer pairings or feature sequencing across regenerations are encouraged when constraints allow)
 
 DEVELOPERS:
 {team_text}
@@ -344,11 +388,26 @@ BACKLOG (grouped by feature):
 
 7. STORY POINTS: Items without SP — estimate from complexity (story=3-5, bug=2-3, task=2, epic=5-8). Keep estimates realistic and low — minimum 2 SP per item.
 
-8. CAPACITY IS FLEXIBLE: You can exceed the stated capacity by up to 30% per sprint. The goal is fewer, denser sprints — not perfectly balanced load.
+7a. EFFORT SCALING — items already in flight only consume PART of their original story-point budget. When the backlog item shows a "remaining: X = N% of original" hint, plan capacity against the REMAINING SP, not the original SP. Specifically:
+    - In Progress / Active / Committed → 60% of original SP remains
+    - In Review / Testing / Ready-for-Test → 30% of original SP remains
+    - Backlog / Todo / New → 100% of original SP remains
+  Example: a 5 SP card in Testing only consumes 1.5 SP of capacity. This means the team can pull MORE fresh work into the sprint than the raw SP total suggests. Reflect this in your assignment rationale ("In Testing — only 30% effort left, included alongside higher-effort items").
+
+8. CAPACITY IS FLEXIBLE: You can exceed the stated capacity by up to 30% per sprint. The goal is fewer, denser sprints — not perfectly balanced load. Capacity calculations use REMAINING SP per rule 7a, not raw SP.
 
 9. [BLOCKED] items go in unplanned_items.
 
 10. For items with priority=0, include "suggested_priority" (1-5) in the assignment.
+
+11. DEVELOPER LOAD DISTRIBUTION (CRITICAL — Hotfix 33b):
+    - Every developer in the DEVELOPERS list above MUST receive assignments. Do NOT pile all work on one developer while others sit idle.
+    - Distribute story points across developers PROPORTIONAL to their per-sprint capacity.
+      Example: dev A has 30 SP capacity, dev B has 20 SP, dev C has 15 SP — over a multi-sprint plan A should get ~46%, B ~31%, C ~23% of total SP.
+    - A cold-start developer's velocity has been pre-filled with the team average (~15 SP/sprint). Treat them as a normal contributor and ramp them in starting Sprint 1 — do NOT skip them just because they have no historical velocity.
+    - Within a sprint, balance the per-developer load: no single developer should carry more than 1.5x another developer's load in the same sprint unless explicitly skill-required.
+    - Each assignment must reference one of the developer tokens in the DEVELOPERS list above. Do NOT invent new tokens or omit team members.
+    - If a developer has a specific skill match for a story, prefer them; otherwise round-robin across the team to keep loads balanced.
 
 PROJECT ANALYSIS:
 - estimated_sprints = exact count of sprints that have assignments (no empty ones)
@@ -404,6 +463,7 @@ async def generate_sprint_plan_ai(
     project_id: str,
     iteration_id: str | None = None,
     feedback: str | None = None,
+    existing_plan_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Generate a sprint plan using Claude AI.
@@ -471,19 +531,42 @@ async def generate_sprint_plan_ai(
         select(TeamMember).where(*tm_filters)
     )
     all_members = list(tm_result.scalars().all())
-    # Filter to developers only for assignment purposes
+
+    # Hotfix 32c — pick assignable members.
+    # Preferred: anyone explicitly marked ``role='developer'``.
+    # Fallback: any team_member not explicitly excluded. This preserves
+    # the historical behaviour where projects with stakeholder-only or
+    # untagged members still got plans generated (the strict
+    # developer-only filter was a regression — Sangini's MediCare project
+    # had successfully been planned in the past with a single
+    # ``role='stakeholder'`` member, then started failing silently when
+    # the strict filter was added).
     members = [m for m in all_members if m.role == "developer"]
     if not members:
-        return {"error": "No developers found in the team. Mark at least one team member as a developer."}
+        members = [m for m in all_members if (m.role or "").lower() != "excluded"]
+    if not members:
+        return {
+            "error": (
+                "No team members found for this project. Add at least one team "
+                "member in Settings → Team to enable sprint planning."
+            )
+        }
 
     # -----------------------------------------------------------------------
     # 5. Load work items (plannable)
     # -----------------------------------------------------------------------
+    # Exclusion-based filter — anything that's already finished is NOT
+    # plannable. Using NOT IN with a denylist (instead of a whitelist of
+    # in-flight statuses) means custom ADO/Jira states like "Resolved",
+    # "Active", "Migrate", "Testing" etc. flow through into planning by
+    # default. The denylist is case-insensitive on the DB side via UPPER.
+    # See services._planning_status.TERMINAL_STATUSES for the canonical set.
+    from ._planning_status import TERMINAL_STATUSES
     wi_query = (
         select(WorkItem)
         .where(
             WorkItem.organization_id == org_id,
-            WorkItem.status.in_(["BACKLOG", "TODO", "IN_PROGRESS", "IN_REVIEW"]),
+            func.upper(WorkItem.status).notin_(TERMINAL_STATUSES),
         )
     )
     if project_id:
@@ -575,13 +658,25 @@ async def generate_sprint_plan_ai(
     sprint_days = max(1, (iteration.end_date.replace(tzinfo=None) - iteration.start_date.replace(tzinfo=None)).days)
     weeks = sprint_days / 7.0
 
+    from ._planning_status import remaining_effort_factor
+
     def _wi_to_dict(wi: WorkItem) -> dict:
+        # Effort scaling: a work item that's already In Progress or In
+        # Review only consumes a fraction of its original story-point
+        # budget (60% / 30% — see services._planning_status). Surface that
+        # to the AI prompt as both the multiplier and the pre-computed
+        # ``remaining_sp`` so the model can plan capacity honestly.
+        sp = wi.story_points
+        factor = remaining_effort_factor(wi.status)
+        remaining_sp = round(sp * factor, 1) if (sp is not None and sp > 0) else None
         return {
             "id": wi.id,
             "title": scrub_pii(wi.title, token_map),
             "type": wi.type or "story",
             "priority": wi.priority,
-            "story_points": wi.story_points,
+            "story_points": sp,
+            "remaining_effort_factor": factor,
+            "remaining_sp": remaining_sp,
             "status": wi.status,
             "epic_id": wi.epic_id,
         }
@@ -637,52 +732,68 @@ async def generate_sprint_plan_ai(
     )
 
     # -----------------------------------------------------------------------
-    # 10. Create SprintPlan record (GENERATING)
-    # -----------------------------------------------------------------------
-    plan = SprintPlan(
-        id=generate_cuid(),
-        organization_id=org_id,
-        project_id=project_id,
-        iteration_id=iteration.id,
-        status="GENERATING",
-        ai_model_used=AI_MODEL,
-        tool=source_tool,
-        rejection_feedback=feedback,
-    )
-    db.add(plan)
+    # 10. Get-or-create the SprintPlan record. Hotfix 27 — when the
+    # async POST handler pre-created a GENERATING stub, we mutate that
+    # row instead of inserting a new one. This way the planId returned
+    # by the POST is the same id the background task ends up updating,
+    # and the frontend's poll-by-id loop can wait for the right record.
+    plan = None
+    if existing_plan_id:
+        result_existing = await db.execute(
+            select(SprintPlan).where(SprintPlan.id == existing_plan_id)
+        )
+        plan = result_existing.scalar_one_or_none()
+        if plan:
+            # Refresh fields that may have changed since the stub was
+            # written (e.g. iteration may have been resolved differently).
+            plan.iteration_id = iteration.id
+            plan.ai_model_used = AI_MODEL
+            plan.tool = source_tool
+            plan.rejection_feedback = feedback
+            plan.status = "GENERATING"
+    if plan is None:
+        plan = SprintPlan(
+            id=generate_cuid(),
+            organization_id=org_id,
+            project_id=project_id,
+            iteration_id=iteration.id,
+            status="GENERATING",
+            ai_model_used=AI_MODEL,
+            tool=source_tool,
+            rejection_feedback=feedback,
+        )
+        db.add(plan)
     await db.flush()
 
     # -----------------------------------------------------------------------
-    # 11. Call Azure AI Foundry (Grok) via OpenAI-compatible API
+    # 11. Call AI with primary→secondary failover (Hotfix 30)
     # -----------------------------------------------------------------------
+    # Sprint plan generation is reasoning-heavy: many constraints to weigh
+    # (capacity, feature grouping, "fewer sprints", "even distribution",
+    # rejection feedback). When the secondary (o4-mini) serves this call,
+    # we pass ``reasoning_effort="medium"`` to invoke its thinking step.
+    # Grok ignores the parameter — harmless to pass.
+    from .ai_caller import call_ai
     try:
-        import httpx
-
-        logger.info(f"Calling Azure AI Foundry ({AI_MODEL}) for sprint plan generation (plan {plan.id})")
-
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": settings.azure_ai_api_key,
-        }
-        payload = {
-            "model": AI_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 16384,
-            "temperature": 0.3,
-        }
-
-        async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
-            resp = await client.post(
-                settings.azure_ai_endpoint,
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-
-        data = resp.json()
-        ai_text = data["choices"][0]["message"]["content"]
-
-        logger.info(f"Azure AI response received: {len(ai_text)} chars")
+        logger.info(
+            f"[ai_sprint_generator] calling AI (primary→secondary failover) "
+            f"for plan {plan.id}"
+        )
+        # Hotfix 33i — pass response_format for stricter JSON output
+        # when o4-mini serves the failover. Helps with reasoning-token
+        # budget too — see ai_caller._build_openai_body docstring.
+        ai_text = await call_ai(
+            messages=[{"role": "user", "content": prompt}],
+            mode="primary",
+            max_tokens=16384,
+            temperature=0.3,
+            reasoning_effort="medium",
+            response_format={"type": "json_object"},
+            timeout_s=180.0,
+        )
+        if not ai_text:
+            raise RuntimeError("All AI models exhausted (primary + secondary)")
+        logger.info(f"[ai_sprint_generator] AI response received: {len(ai_text)} chars")
 
     except Exception as e:
         logger.error(f"Azure AI API call failed: {e}")

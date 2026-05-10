@@ -26,12 +26,58 @@ from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
+
+def _detect_pat_failure_reason(response) -> str | None:
+    """Inspect ADO's HTML error body to figure out *specifically* why PAT
+    auth failed. Returns one of:
+
+      "expired"   — token is past its expiry date
+      "scope"     — token is valid but lacks required permissions
+      "not_found" — the org URL itself doesn't exist
+      None        — body did not contain a recognised signature (caller
+                    falls back to a generic message)
+
+    ADO consistently returns an HTML page on auth failures whose <title>
+    + body text reveal the cause. Examples seen in the wild:
+
+      Expired:   <title>Access Denied: The Personal Access Token used has expired.</title>
+      Wrong org: 404 with title "The resource cannot be found."
+      No scope:  401 with phrasing about insufficient permissions
+
+    We lower-case the body and look for stable substrings — Microsoft
+    occasionally tweaks the wording but the core phrases stay constant.
+    """
+    try:
+        body = (response.text or "").lower()
+    except Exception:
+        return None
+
+    if (
+        "personal access token used has expired" in body
+        or "the token has expired" in body
+        or "pat has expired" in body
+    ):
+        return "expired"
+    if (
+        "the resource cannot be found" in body
+        or "404 - page not found" in body
+    ):
+        return "not_found"
+    if (
+        "does not have permission" in body
+        or "is not authorized" in body
+        or "insufficient permission" in body
+    ):
+        return "scope"
+    return None
+
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...auth.supabase import get_current_user
+from ...auth.supabase import get_current_user, require_po
 from ...config import settings
 from ...database import get_db
 from ...models.tool_connection import ToolConnection
@@ -241,6 +287,14 @@ async def initiate_ado_oauth(
     GET /connect
     Redirect user to Microsoft OAuth consent screen for Azure DevOps.
     """
+    # Hotfix 79 — reverted the require_po gate added in Hotfix 69B.
+    # Both PO and dev should be able to initiate OAuth from the
+    # Connect Tools modal. The earlier gate was throwing the
+    # "This action requires product owner / admin role" 403 to
+    # developers. Org-level state visibility (/status,
+    # /selected-projects POST, /disconnect) stays gated so non-PO
+    # still can't see or modify org connection metadata — they can
+    # only kick off a fresh OAuth flow.
     if settings.is_demo_mode:
         return RedirectResponse(url=f"{settings.frontend_url}/po/notifications?ado=demo")
 
@@ -421,6 +475,7 @@ async def connect_with_pat(
 
     Body: { "org_url": "https://dev.azure.com/orgname", "pat": "..." }
     """
+    # Hotfix 79 — reverted the require_po gate (see /connect note).
     import base64
 
     org_url = (body.get("org_url") or "").rstrip("/")
@@ -476,11 +531,47 @@ async def connect_with_pat(
             )
             logger.info(f"connectiondata response: {conn_res.status_code}")
 
+            # Hotfix 82 — surface the real reason for PAT failures.
+            # ADO returns an HTML error page on 401/403/302/404 whose <title>
+            # tells us specifically why ("expired", "not found", etc.). The
+            # previous code threw a generic 3-bullet "check these things"
+            # message for every failure, which forced the PO to guess. Now we
+            # parse the body and show the exact cause when ADO tells us.
+            org_parts = [p for p in org_url.rstrip("/").split("/") if p and "." not in p and ":" not in p]
+            org_display = org_parts[-1] if org_parts else org_url
+            reason = _detect_pat_failure_reason(conn_res)
+
+            if conn_res.status_code == 404 or reason == "not_found":
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Azure DevOps organization '{org_display}' was not found. "
+                        f"Double-check the URL — it should look like https://dev.azure.com/YourOrgName."
+                    ),
+                )
+
+            if reason == "expired":
+                raise HTTPException(
+                    status_code=401,
+                    detail=(
+                        "This Personal Access Token has expired. "
+                        "Generate a new one in Azure DevOps (User Settings → Personal Access Tokens → New Token) "
+                        "and reconnect."
+                    ),
+                )
+
+            if reason == "scope":
+                raise HTTPException(
+                    status_code=401,
+                    detail=(
+                        "The PAT authenticated but lacks required permissions. "
+                        "Regenerate it with at least 'Work Items: Read' and 'Project and Team: Read' scopes."
+                    ),
+                )
+
             if conn_res.status_code in (301, 302, 303, 307, 308):
-                # ADO redirects to sign-in when PAT is invalid or doesn't belong to this org.
-                # Extract org name for the message
-                org_parts = [p for p in org_url.rstrip("/").split("/") if p and "." not in p and ":" not in p]
-                org_display = org_parts[-1] if org_parts else org_url
+                # Auth failure that didn't match a known body signature — falls
+                # through to the generic 3-bullet guidance.
                 raise HTTPException(
                     status_code=401,
                     detail=(
@@ -493,7 +584,11 @@ async def connect_with_pat(
             if conn_res.status_code in (401, 403):
                 raise HTTPException(
                     status_code=401,
-                    detail="Invalid PAT or insufficient permissions. Ensure the token was created for this organization.",
+                    detail=(
+                        f"Authentication failed for '{org_display}'. The PAT was rejected by Azure DevOps. "
+                        "Common causes: (1) PAT created in a different org (PATs are org-specific). "
+                        "(2) PAT has expired. (3) PAT lacks 'Work Items: Read' / 'Project and Team: Read' scopes."
+                    ),
                 )
             if conn_res.status_code == 203:
                 raise HTTPException(
@@ -585,6 +680,17 @@ async def ado_status(
     org_id = current_user.get("organization_id", "demo-org")
     conn = await _get_ado_connection(db, org_id)
 
+    # Hotfix 80 — non-PO callers get the connected boolean reflecting
+    # the actual org-level connection state, but no management metadata.
+    # Without this they couldn't tell whether the OAuth they just
+    # completed had taken effect (Connect Tools modal showed "Not
+    # connected" forever). PO callers still get the full payload
+    # (org_url, selectedProjects, etc.) which they need to manage the
+    # connection.
+    is_po = (current_user.get("role") or "").lower() in {"product_owner", "admin", "owner"}
+    if not is_po:
+        return {"connected": conn is not None}
+
     if not conn:
         return {"connected": False}
 
@@ -608,6 +714,7 @@ async def save_selected_projects(
     db: AsyncSession = Depends(get_db),
 ):
     """POST /selected-projects — Persist user's selected ADO projects in connection config."""
+    require_po(current_user)  # Hotfix 68B — write to org connection state
     org_id = current_user.get("organization_id", "demo-org")
     conn = await _get_ado_connection(db, org_id)
     if not conn:
@@ -626,6 +733,7 @@ async def disconnect_ado(
     db: AsyncSession = Depends(get_db),
 ):
     """POST /disconnect — Remove ADO connection."""
+    require_po(current_user)  # Hotfix 68B — destructive on org connection
     org_id = current_user.get("organization_id", "demo-org")
     conn = await _get_ado_connection(db, org_id)
 
@@ -647,6 +755,14 @@ async def list_projects(
     db: AsyncSession = Depends(get_db),
 ):
     """GET /projects — Fetch ADO projects using stored credentials (OAuth or PAT)."""
+    # Hotfix 81 — reverted the require_po gate added in Hotfix 67A.
+    # That gate was put in to stop a silent auto-discover leak that
+    # used PO tokens. Now that devs OAuth their OWN Atlassian/ADO
+    # accounts (Hotfix 79), the stored tokens belong to whoever last
+    # OAuthed, so /projects returns the calling user's projects —
+    # which is exactly what the Connect Tools modal needs to render
+    # "Select Projects" with real options. Re-gating it would block
+    # the explicit import flow.
     if settings.is_demo_mode:
         return {"projects": MOCK_ADO_PROJECTS}
 
@@ -1435,6 +1551,33 @@ async def refresh_board_items(
             except (ValueError, TypeError):
                 pass
 
+        # Hotfix 3a — planned dates from ADO Scheduling fields. Without this
+        # the Gantt would show "TBD" for every imported feature even when
+        # ADO has Start/Target dates set, because the work_items columns
+        # stayed NULL on import. ADO returns these as ISO 8601 strings;
+        # we parse leniently and silently skip any malformed values.
+        from datetime import datetime as _dt, timezone as _tz
+
+        def _parse_ado_date(raw):
+            if not raw:
+                return None
+            try:
+                # ADO uses "...Z" suffix; fromisoformat handles "+00:00".
+                s = str(raw).replace("Z", "+00:00")
+                d = _dt.fromisoformat(s)
+                if d.tzinfo is None:
+                    d = d.replace(tzinfo=_tz.utc)
+                return d
+            except (ValueError, TypeError):
+                return None
+
+        ado_start = _parse_ado_date(
+            fields.get("Microsoft.VSTS.Scheduling.StartDate")
+        )
+        ado_end = _parse_ado_date(
+            fields.get("Microsoft.VSTS.Scheduling.TargetDate")
+        )
+
         # Build response item (returned to frontend directly)
         response_items.append({
             "id": ext_id,
@@ -1474,6 +1617,14 @@ async def refresh_board_items(
                 existing.assignee_id = assignee_id
             if project_id:
                 existing.imported_project_id = project_id
+            # Only overwrite planned dates when ADO actually has them, so we
+            # don't clobber a manual override the PO set via the Gantt edit
+            # modal (Sprint D). Treat ADO as the source of truth only when
+            # it returns a value.
+            if ado_start is not None:
+                existing.planned_start = ado_start
+            if ado_end is not None:
+                existing.planned_end = ado_end
             updated += 1
         else:
             new_item = WorkItem(
@@ -1494,6 +1645,8 @@ async def refresh_board_items(
                 ),
                 assignee_id=assignee_id,
                 imported_project_id=project_id,
+                planned_start=ado_start,
+                planned_end=ado_end,
             )
             db.add(new_item)
             created += 1
@@ -1514,17 +1667,51 @@ async def refresh_board_items(
 
 @router.post("/webhooks")
 async def receive_webhook(request: Request):
-    """POST /webhooks — Receive Azure DevOps service hook events."""
+    """POST /webhooks — Receive Azure DevOps service hook events.
+
+    Hotfix 80 — webhook security hardening:
+      - Constant-time compare of the X-Hook-Secret header against the
+        configured shared secret (was previously a plain ``!=`` compare,
+        which leaks timing info).
+      - Strict-mode enforcement parallels GitHub: when ``strict_webhook_verification``
+        is on AND no secret is configured, reject 401.
+      - The verification block lives OUTSIDE the broad try/except so a
+        bad signature returns 401 rather than being swallowed as 500.
+    """
+    import logging as _logging
+    from ...services.webhook_security import (
+        verify_shared_secret,
+        is_strict_mode_enabled,
+    )
+    _log = _logging.getLogger(__name__)
+
+    body_bytes = await request.body()
+
+    # ---- Signature verification (outside broad try/except) ----
+    webhook_secret = getattr(settings, "ado_webhook_secret", "") or ""
+    hook_secret_header = request.headers.get("X-Hook-Secret", "")
+    strict_mode = is_strict_mode_enabled() or settings.strict_webhook_verification
+
+    if webhook_secret:
+        if not verify_shared_secret(hook_secret_header, webhook_secret):
+            _log.warning("[SECURITY] ADO webhook secret MISMATCH — rejecting")
+            raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    elif strict_mode:
+        _log.warning(
+            "[SECURITY] ADO webhook REJECTED (strict mode) — ADO_WEBHOOK_SECRET "
+            "is not configured."
+        )
+        raise HTTPException(
+            status_code=401, detail="Webhook secret not configured"
+        )
+    else:
+        _log.warning(
+            "[SECURITY] ADO webhook accepted UNVERIFIED — ADO_WEBHOOK_SECRET "
+            "is not configured. Set it and STRICT_WEBHOOK_VERIFICATION=true to lock down."
+        )
+
+    # ---- Payload processing ----
     try:
-        body_bytes = await request.body()
-
-        # Verify webhook shared secret if configured
-        webhook_secret = getattr(settings, "ado_webhook_secret", "") or ""
-        if webhook_secret:
-            hook_secret = request.headers.get("X-Hook-Secret", "")
-            if hook_secret != webhook_secret:
-                raise HTTPException(status_code=403, detail="Invalid webhook secret")
-
         body_text = body_bytes.decode("utf-8")
 
         payload = json.loads(body_text)
@@ -1540,5 +1727,8 @@ async def receive_webhook(request: Request):
             "event": event_type,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception:
+        _log.exception("ADO webhook processing failed")
         raise HTTPException(status_code=500, detail="Webhook processing failed")

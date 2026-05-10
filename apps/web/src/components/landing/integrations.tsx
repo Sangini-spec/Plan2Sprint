@@ -56,12 +56,13 @@ const integrations: Integration[] = [
     name: "Notion",
     capability: "Requirements reading",
     icon: <FileText className="h-8 w-8" />,
+    phase: "Coming Soon",
   },
   {
     name: "Linear",
-    capability: "Issue sync (Phase 2)",
+    capability: "Issue sync",
     icon: <LayoutList className="h-8 w-8" />,
-    phase: "Phase 2",
+    phase: "Coming Soon",
   },
 ];
 
@@ -187,8 +188,8 @@ export default function IntegrationsSection() {
             Works where your team already works.
           </SectionHeading>
           <p className="mt-6 text-lg leading-relaxed text-[var(--text-secondary)]">
-            Plan2Sprint overlays on top of your existing tools&nbsp;&mdash; it
-            never replaces them.
+            Plan2Sprint overlays on top of your existing tools. It never
+            replaces them.
           </p>
         </motion.div>
 
@@ -234,22 +235,16 @@ export default function IntegrationsSection() {
             {/* Text */}
             <div>
               <p className="text-base font-semibold text-[var(--text-primary)] leading-relaxed">
-                Plan2Sprint writes exactly 3 fields back to your tools:{" "}
+                Plan2Sprint never modifies your ticket fields. Sprint plans,
+                rebalances, and recommendations are posted as{" "}
                 <span className="text-[var(--color-brand-secondary)]">
-                  Assignee
+                  comments
                 </span>{" "}
-                &middot;{" "}
-                <span className="text-[var(--color-brand-secondary)]">
-                  Sprint Membership
-                </span>{" "}
-                &middot;{" "}
-                <span className="text-[var(--color-brand-secondary)]">
-                  Story Points
-                </span>
-                .
+                on the ticket itself.
               </p>
               <p className="mt-2 text-sm text-[var(--text-secondary)]">
-                Nothing else. Ever. Enforced at the architecture level.
+                Your structured data stays yours. You decide what (if anything)
+                to action.
               </p>
             </div>
           </div>

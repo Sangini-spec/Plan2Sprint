@@ -11,7 +11,7 @@ import {
   History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Input } from "@/components/ui";
+import { Button, Input, Select } from "@/components/ui";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { MyNotificationInbox } from "@/components/dev/my-notification-inbox";
 import { DeliveryChannelsSection } from "@/components/notifications/delivery-channels-section";
@@ -33,20 +33,27 @@ export default function NotificationsPage() {
   const [teamsConnected, setTeamsConnected] = useState(false);
   const { selectedProject } = useSelectedProject();
 
+  // Hotfix 76 — gate DevPlatformSections (blockers / message composers /
+  // channel-membership pane) on the per-user link state, not org-level
+  // status. The previous /status call returned ``connected: false`` for
+  // every non-PO caller (Hotfix 72), so the entire section below the
+  // cards was suppressed even after the dev had successfully OAuthed
+  // their Slack / Teams account. /me/status reflects whether THIS user
+  // can actually send / receive messages, which is the right gate.
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/integrations/slack/status");
+        const res = await fetch("/api/integrations/slack/me/status");
         if (res.ok) {
           const data = await res.json();
-          setSlackConnected(data.connected === true);
+          setSlackConnected(data.linked === true);
         }
       } catch {}
       try {
-        const res = await fetch("/api/integrations/teams/status");
+        const res = await fetch("/api/integrations/teams/me/status");
         if (res.ok) {
           const data = await res.json();
-          setTeamsConnected(data.connected === true);
+          setTeamsConnected(data.linked === true);
         }
       } catch {}
     })();
@@ -161,11 +168,32 @@ function DevPlatformSections({
 /*  DEVELOPER QUICK ACTIONS                                                    */
 /* -------------------------------------------------------------------------- */
 
+// Hotfix 78 — curated list of blocker categories common in
+// engineering team standups. Order roughly by frequency.
+const BLOCKER_TYPES = [
+  "Waiting on code review",
+  "Waiting on QA",
+  "Waiting on design / spec",
+  "Unclear requirements",
+  "External dependency",
+  "Access / permissions",
+  "Environment / infrastructure issue",
+  "Unexpected complexity",
+  "Bug / unexpected behavior",
+  "Other",
+] as const;
+
 function DevQuickActions({ project, platform }: { project: ProjectInfo; platform: Platform }) {
   const base = platform === "slack" ? "/api/integrations/slack" : "/api/integrations/teams";
   const prefix = platform === "slack" ? "#" : "";
   const platformLabel = platform === "slack" ? "Slack" : "Microsoft Teams";
-  const [blockerTicket, setBlockerTicket] = useState("");
+  // Hotfix 78 — replace freeform "Ticket reference" input with a
+  // structured "Type of blocker" dropdown. The Slack/Teams message
+  // template still renders the value, just labelled "Type" instead
+  // of "Ticket". Curated list of categories engineering teams hit
+  // most often during sprint work — the last option is "Other" so
+  // nothing gets shoehorned.
+  const [blockerType, setBlockerType] = useState("");
   const [blockerDesc, setBlockerDesc] = useState("");
   const [sending, setSending] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -186,7 +214,7 @@ function DevQuickActions({ project, platform }: { project: ProjectInfo; platform
       if (resp.ok) {
         setResult({ ok: true, message: `Sent to ${prefix}${resp.channelName}` });
         if (type === "blocker_to_channel") {
-          setBlockerTicket(""); setBlockerDesc("");
+          setBlockerType(""); setBlockerDesc("");
         }
       } else {
         setResult({ ok: false, message: resp.message || "Failed to send" });
@@ -233,12 +261,16 @@ function DevQuickActions({ project, platform }: { project: ProjectInfo; platform
               <h4 className="text-sm font-medium text-[var(--text-primary)]">Update About Your Blockers</h4>
             </div>
             <div className="space-y-2">
-              <Input
-                value={blockerTicket}
-                onChange={e => setBlockerTicket(e.target.value)}
-                placeholder="Ticket reference (e.g., PROJ-123)"
+              <Select
+                value={blockerType}
+                onChange={e => setBlockerType(e.target.value)}
                 className="text-sm"
-              />
+              >
+                <option value="">Type of blocker…</option>
+                {BLOCKER_TYPES.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </Select>
               <Input
                 value={blockerDesc}
                 onChange={e => setBlockerDesc(e.target.value)}
@@ -248,12 +280,15 @@ function DevQuickActions({ project, platform }: { project: ProjectInfo; platform
               <button
                 onClick={async () => {
                   await postToChannel("blocker_to_channel", {
-                    ticket: blockerTicket,
+                    blockerType: blockerType,
+                    // Keep ``ticket`` for backwards-compat with older API
+                    // builds — the new templates read blockerType first.
+                    ticket: blockerType,
                     description: blockerDesc,
                   });
                   setHistoryBumpKey(k => k + 1);
                 }}
-                disabled={!hasChannel || !blockerDesc || sending === "blocker_to_channel"}
+                disabled={!hasChannel || !blockerType || !blockerDesc || sending === "blocker_to_channel"}
                 className={cn(
                   "w-full flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-all cursor-pointer",
                   "bg-[var(--color-brand-secondary)] hover:bg-[var(--color-brand-secondary)]/90",

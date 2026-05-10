@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Loader2, Check, Calendar, Sparkles, AlertTriangle, RefreshCw } from "lucide-react";
+import { Loader2, Check, Calendar, Sparkles, AlertTriangle, RefreshCw, Pencil, X as XIcon } from "lucide-react";
 import { useSelectedProject } from "@/lib/project/context";
 import { useAutoRefresh } from "@/lib/ws/context";
 import { cachedFetch, invalidateCache } from "@/lib/fetch-cache";
@@ -11,9 +11,15 @@ import type {
   ProjectPlanData,
   ProjectPhase,
   PlanSummaryData,
+  ConfidenceBlock,
 } from "@/lib/types/models";
 
-type MilestoneState = "complete" | "current" | "future";
+// Hotfix 16 — added "also_active" state. A phase is "also_active" when the
+// project's frontier has advanced past it (a later phase has been touched)
+// but it still has in-flight work. Rendered cyan-glowing alongside the
+// orange "current" pill so stakeholders see "we've reached Deployment, but
+// Testing still has loose ends" without conflating the two.
+type MilestoneState = "complete" | "current" | "also_active" | "future";
 
 interface MilestoneData {
   id: string;
@@ -44,8 +50,41 @@ function LiveDataBadge({ source }: { source: string }) {
 }
 
 // ── Plan Source Badge ──
-
-function PlanSourceBadge({ isOptimized, isRebalanced }: { isOptimized: boolean; isRebalanced?: boolean }) {
+//
+// Hotfix 83 — when the project has passed its target launch date the
+// badge slot swaps to a lifecycle indicator instead, since the
+// rebalance/optimised label is misleading once the rebalanced date
+// itself has slipped. Three terminal states on top of the original
+// three:
+//
+//   overdue        → red "PLAN OVERDUE" — date passed, work unfinished
+//   delivered_late → amber "DELIVERED LATE" — shipped but past the date
+//   on_track       → fall through to the original Rebalanced/AI/Raw set
+function PlanSourceBadge({
+  isOptimized,
+  isRebalanced,
+  lifecycleStatus,
+}: {
+  isOptimized: boolean;
+  isRebalanced?: boolean;
+  lifecycleStatus?: "on_track" | "overdue" | "delivered_late";
+}) {
+  if (lifecycleStatus === "overdue") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-rag-red)]/20 border border-[var(--color-rag-red)]/40 px-2.5 py-0.5 text-[10px] font-semibold text-[var(--color-rag-red)] uppercase tracking-wide">
+        <AlertTriangle className="h-3 w-3" />
+        Plan Overdue
+      </span>
+    );
+  }
+  if (lifecycleStatus === "delivered_late") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-rag-amber)]/20 border border-[var(--color-rag-amber)]/40 px-2.5 py-0.5 text-[10px] font-semibold text-[var(--color-rag-amber)] uppercase tracking-wide">
+        <Calendar className="h-3 w-3" />
+        Delivered Late
+      </span>
+    );
+  }
   if (isRebalanced) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-500/20 border border-orange-500/30 px-2.5 py-0.5 text-[10px] font-semibold text-orange-400 uppercase tracking-wide">
@@ -76,24 +115,34 @@ function KpiCard({
   label,
   value,
   highlight,
+  tone,
 }: {
   label: string;
   value: string | number;
   highlight?: boolean;
+  /** Hotfix 83 — "alert" flips the tile to a red tone (used by EST. WEEKS
+   *  when the project is past its target launch). "warn" is amber for
+   *  the delivered-late case. Falls through to the default white tile
+   *  when omitted, so no existing call site is affected. */
+  tone?: "alert" | "warn";
 }) {
+  const isAlert = tone === "alert";
+  const isWarn = tone === "warn";
   return (
     <div
       className={cn(
         "rounded-xl px-5 py-4 text-center",
-        highlight
+        isAlert && "bg-[var(--color-rag-red)] text-white",
+        isWarn && "bg-[var(--color-rag-amber)] text-white",
+        !isAlert && !isWarn && (highlight
           ? "bg-[var(--color-rag-green)] text-white"
-          : "bg-white/90 text-[#1e293b]"
+          : "bg-white/90 text-[#1e293b]")
       )}
     >
       <div
         className={cn(
           "text-3xl font-extrabold tabular-nums leading-tight",
-          highlight ? "text-white" : "text-[#1e293b]"
+          isAlert || isWarn || highlight ? "text-white" : "text-[#1e293b]"
         )}
       >
         {value}
@@ -101,7 +150,7 @@ function KpiCard({
       <div
         className={cn(
           "text-[11px] font-medium uppercase tracking-wider mt-1",
-          highlight ? "text-white/80" : "text-[#64748b]"
+          isAlert || isWarn || highlight ? "text-white/80" : "text-[#64748b]"
         )}
       >
         {label}
@@ -109,6 +158,96 @@ function KpiCard({
     </div>
   );
 }
+
+// ── Confidence KPI Card with breakdown tooltip ──
+//
+// Wraps the plain KpiCard but exposes a hover tooltip that explains which
+// factors contributed to the composite score. The backend returns rescaled
+// weights (so e.g. a project without a linked repo sees velocity 35%
+// instead of 30% because the 15% CI/CD slice was redistributed). Tooltip
+// shows each factor's raw 0-100 reading + its weight + its contribution
+// in points, so the PO can see *why* the number is what it is.
+
+const _CONFIDENCE_LABELS: Record<string, string> = {
+  velocity: "Delivery velocity",
+  cicd: "CI/CD throughput",
+  ai_plan: "AI plan baseline",
+  target_feasibility: "Target-launch feasibility",
+  sprint_reliability: "Sprint reliability (last 4)",
+};
+
+function ConfidenceKpiCard({
+  value,
+  breakdown,
+}: {
+  value: number;
+  breakdown: ConfidenceBlock | null;
+}) {
+  if (!breakdown) {
+    return <KpiCard label="Confidence" value={`${Math.round(value)}%`} />;
+  }
+  // Build one row per USED factor. Sort: factors that scored < 50 first so
+  // the problem areas jump out at the top of the tooltip.
+  const rows = (breakdown.factorsUsed ?? []).map((key) => {
+    const camelKey = key === "ai_plan"
+      ? "aiPlan"
+      : key === "target_feasibility"
+        ? "targetFeasibility"
+        : key === "sprint_reliability"
+          ? "sprintReliability"
+          : (key as "velocity" | "cicd");
+    const raw = breakdown.breakdown[camelKey as keyof typeof breakdown.breakdown];
+    const weight = breakdown.weights[key] ?? 0;
+    return {
+      key,
+      label: _CONFIDENCE_LABELS[key] ?? key,
+      score: raw ?? 0,
+      weight,
+      contribution: Math.round(((raw ?? 0) * weight) / 100),
+    };
+  });
+  rows.sort((a, b) => a.score - b.score);
+
+  return (
+    <div className="relative group">
+      <KpiCard label="Confidence" value={`${Math.round(value)}%`} />
+      {/* Hover tooltip — Tailwind-only, no portal, so it disappears instantly
+          when the user moves away. */}
+      <div
+        role="tooltip"
+        className={cn(
+          "absolute z-20 left-1/2 -translate-x-1/2 top-full mt-2 w-72",
+          "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto",
+          "transition-opacity duration-150",
+          "rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 shadow-xl"
+        )}
+      >
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-2">
+          How it's scored
+        </div>
+        <ul className="space-y-1.5">
+          {rows.map((r) => (
+            <li key={r.key} className="flex items-center justify-between text-[11px]">
+              <span className="text-[var(--text-primary)] truncate mr-2" title={r.label}>
+                {r.label}
+              </span>
+              <span className="tabular-nums text-[var(--text-secondary)] shrink-0">
+                {r.score}<span className="text-[var(--text-tertiary)]"> × {r.weight}%</span>
+                <span className="ml-1 text-[var(--text-primary)] font-semibold"> = {r.contribution}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+        {rows.length < 5 && (
+          <p className="mt-2 text-[10px] italic text-[var(--text-tertiary)]">
+            Some factors unavailable — weights rescaled across the rest.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 // ── Project Timeline Stepper ──
 
@@ -126,7 +265,9 @@ function ProjectTimelineStepper({
           <div key={m.id} className="flex items-start flex-1 min-w-0">
             {/* Node + Label */}
             <div className="flex flex-col items-center min-w-[80px]">
-              {/* Circle */}
+              {/* Circle. Hotfix 16 adds the "also_active" state (cyan
+                  glow) — a phase the project has moved past but which
+                  still has in-flight work. */}
               <div
                 className={cn(
                   "relative flex items-center justify-center h-9 w-9 rounded-full border-2 shrink-0 transition-all",
@@ -134,15 +275,25 @@ function ProjectTimelineStepper({
                     "bg-[var(--color-rag-green)] border-[var(--color-rag-green)]",
                   m.state === "current" &&
                     "bg-transparent border-[var(--color-rag-amber)] ring-4 ring-[var(--color-rag-amber)]/20",
+                  m.state === "also_active" &&
+                    "bg-transparent border-[var(--color-brand-secondary)] ring-4 ring-[var(--color-brand-secondary)]/25",
                   m.state === "future" &&
                     "bg-transparent border-[var(--text-secondary)]/30"
                 )}
+                title={
+                  m.state === "also_active"
+                    ? "Still has in-flight work even though the project's frontier has moved past this phase"
+                    : undefined
+                }
               >
                 {m.state === "complete" && (
                   <Check className="h-4.5 w-4.5 text-white" strokeWidth={3} />
                 )}
                 {m.state === "current" && (
                   <div className="h-3 w-3 rounded-full bg-[var(--color-rag-amber)]" />
+                )}
+                {m.state === "also_active" && (
+                  <div className="h-3 w-3 rounded-full bg-[var(--color-brand-secondary)] animate-pulse" />
                 )}
                 {m.state === "future" && (
                   <div className="h-2.5 w-2.5 rounded-full bg-[var(--text-secondary)]/25" />
@@ -155,6 +306,7 @@ function ProjectTimelineStepper({
                   "text-[11px] font-medium text-center mt-2 leading-tight max-w-[90px]",
                   m.state === "complete" && "text-[var(--text-primary)]",
                   m.state === "current" && "text-[var(--color-rag-amber)]",
+                  m.state === "also_active" && "text-[var(--color-brand-secondary)]",
                   m.state === "future" && "text-[var(--text-secondary)]"
                 )}
               >
@@ -169,13 +321,17 @@ function ProjectTimelineStepper({
               )}
             </div>
 
-            {/* Connecting line */}
+            {/* Connecting line. ``also_active`` phases share the
+                "we passed through here" semantics with ``complete``,
+                so the line still shows green up to and including
+                them — they just have a cyan ring on the node itself
+                to flag the loose-ends warning. */}
             {!isLast && (
               <div className="flex-1 flex items-center pt-[18px] px-1 min-w-[20px]">
                 <div
                   className={cn(
                     "h-0.5 w-full rounded-full",
-                    m.state === "complete"
+                    m.state === "complete" || m.state === "also_active"
                       ? "bg-[var(--color-rag-green)]"
                       : "border-t-2 border-dashed border-[var(--text-secondary)]/25 bg-transparent"
                   )}
@@ -194,8 +350,29 @@ function ProjectTimelineStepper({
 function deriveTargetLaunch(
   planData: ProjectPlanData | null,
   planSummary: PlanSummaryData | null,
-): { date: Date | null; formatted: string; isOptimized: boolean; isRebalanced: boolean } {
-  // If an approved plan exists, use the AI-computed end date
+): { date: Date | null; formatted: string; isOptimized: boolean; isRebalanced: boolean; source: "AUTO" | "MANUAL" | null } {
+  // Preferred: backend timeline block carries the authoritative
+  // target_launch_date (Sprint 3 auto-sets it on plan approval; Sprint 6
+  // exposes it). Use this first so a MANUAL override from the hover-edit UI
+  // is honoured even when plan summary still points at the old AI date.
+  const timeline = planData?.timeline;
+  if (timeline?.targetLaunchDate) {
+    const d = new Date(timeline.targetLaunchDate);
+    const formatted = d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+    return {
+      date: d,
+      formatted,
+      isOptimized: timeline.mode === "AI_OPTIMIZED" || timeline.mode === "REBALANCED",
+      isRebalanced: timeline.mode === "REBALANCED",
+      source: timeline.targetLaunchSource,
+    };
+  }
+
+  // Legacy path: plan summary fallback for old backend revisions.
   if (
     planSummary?.hasPlan &&
     ["APPROVED", "SYNCED", "SYNCED_PARTIAL"].includes(planSummary.status ?? "") &&
@@ -205,8 +382,9 @@ function deriveTargetLaunch(
     const formatted = d.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
+      timeZone: "UTC",
     });
-    return { date: d, formatted, isOptimized: true, isRebalanced: planSummary.isRebalanced ?? false };
+    return { date: d, formatted, isOptimized: true, isRebalanced: planSummary.isRebalanced ?? false, source: "AUTO" };
   }
 
   // Fallback: derive from raw ADO feature dates
@@ -215,7 +393,7 @@ function deriveTargetLaunch(
     ...(planData?.unassigned ?? []),
   ];
   if (allFeatures.length === 0) {
-    return { date: null, formatted: "TBD", isOptimized: false, isRebalanced: false };
+    return { date: null, formatted: "TBD", isOptimized: false, isRebalanced: false, source: null };
   }
 
   let latest: Date | null = null;
@@ -226,13 +404,13 @@ function deriveTargetLaunch(
     }
   }
 
-  if (!latest) return { date: null, formatted: "TBD", isOptimized: false, isRebalanced: false };
+  if (!latest) return { date: null, formatted: "TBD", isOptimized: false, isRebalanced: false, source: null };
 
   const formatted = latest.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
   });
-  return { date: latest, formatted, isOptimized: false, isRebalanced: false };
+  return { date: latest, formatted, isOptimized: false, isRebalanced: false, source: null };
 }
 
 function deriveWeeksLeft(targetDate: Date | null): number {
@@ -242,11 +420,78 @@ function deriveWeeksLeft(targetDate: Date | null): number {
   return Math.max(0, Math.ceil(diffMs / (7 * 24 * 60 * 60 * 1000)));
 }
 
+/** Compact "MMM D" label for timeline tiles. Safe with null/invalid dates.
+ *
+ * We format in UTC so that a target the PO set as "Apr 30" always renders
+ * as "Apr 30" regardless of the viewer's local timezone. Without the UTC
+ * anchor, any date stored near midnight UTC shifts one calendar day for
+ * viewers east of UTC (e.g. IST), producing the off-by-one "May 1" bug.
+ */
+function formatDateShort(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 function deriveMilestones(
   planData: ProjectPlanData | null,
   progressData: FeatureProgressData | null
 ): MilestoneData[] {
-  // Use phases from plan data (API-driven, sorted by sortOrder)
+  // ------------------------------------------------------------------
+  // Preferred path: backend-computed TimelineBlock (Sprint 6+). It carries
+  // per-phase dates derived from the right source for the project's mode
+  // (Raw / AI-Optimised / Rebalanced) and an authoritative currentPhaseSlug
+  // driven by the real-time ADO + GitHub reconciliation layer. When this
+  // block is present the UI does NO date math of its own — we just map.
+  // ------------------------------------------------------------------
+  const timeline = planData?.timeline;
+  if (timeline && timeline.phases && timeline.phases.length > 0) {
+    const currentSlug = timeline.currentPhaseSlug;
+    // Index of the current phase so earlier ones become "complete".
+    const currentIdx = currentSlug
+      ? timeline.phases.findIndex((p) => p.slug === currentSlug)
+      : -1;
+    // Hotfix 16 — earlier phases that still have in-flight work get
+    // the cyan "also_active" state instead of green "complete". The
+    // backend computes this list (``alsoActivePhaseSlugs``); empty/
+    // missing means no loose ends and earlier phases all read complete.
+    const alsoActiveSet = new Set<string>(
+      timeline.alsoActivePhaseSlugs ?? [],
+    );
+    return timeline.phases.map((p, i) => {
+      let state: MilestoneState;
+      if (currentIdx === -1) {
+        // No current phase yet — everything future.
+        state = "future";
+      } else if (i < currentIdx) {
+        // Phases before the current frontier — usually "complete",
+        // but if the backend says this phase still has loose ends,
+        // mark it "also_active" so the cyan glow surfaces it.
+        state = alsoActiveSet.has(p.slug) ? "also_active" : "complete";
+      } else if (i === currentIdx) {
+        state = "current";
+      } else {
+        state = "future";
+      }
+      return {
+        id: p.id,
+        label: p.name,
+        state,
+        date: p.plannedEnd ? formatDateShort(p.plannedEnd) : null,
+      };
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Legacy fallback — kept alive in case the timeline block is ever null
+  // (old backend revision, failed engine call, etc.). Same behaviour as
+  // before the Sprint 6 wiring: derive phase states from overall %.
+  // ------------------------------------------------------------------
   const phases: ProjectPhase[] = planData?.phases ?? [];
 
   if (phases.length === 0) {
@@ -380,6 +625,217 @@ function deriveMilestones(
   return results;
 }
 
+// ── Target Launch — hover-to-edit block ──
+//
+// Renders the "TARGET LAUNCH  Apr 30" block on the hero banner. Hovering
+// reveals a pencil. Clicking the pencil swaps in a native date input; Enter
+// or the check button commits, Escape / X cancels. Save hits the backend's
+// PATCH /api/projects/{id}/target-launch — which flips the source to MANUAL
+// so subsequent plan-approval cycles don't clobber the override.
+//
+// Parent supplies the read-only view (formatted label, source, date) and a
+// callback to refetch once the write succeeds.
+
+function TargetLaunchEditable({
+  projectId,
+  value,
+  formatted,
+  source,
+  onSaved,
+  lifecycleStatus,
+  daysPastTarget,
+}: {
+  projectId: string | undefined;
+  value: Date | null;
+  formatted: string;
+  source: "AUTO" | "MANUAL" | null;
+  onSaved: () => void | Promise<void>;
+  lifecycleStatus?: "on_track" | "overdue" | "delivered_late";
+  daysPastTarget?: number;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const openEditor = () => {
+    if (!projectId) return;
+    // Pre-fill the picker with today if no current value so the input is
+    // never empty — otherwise the browser clears and the PO has to type a
+    // full date from scratch.
+    const iso = value ? isoDateOnly(value) : isoDateOnly(new Date());
+    setDraft(iso);
+    setError(null);
+    setEditing(true);
+  };
+
+  const cancel = () => {
+    setEditing(false);
+    setError(null);
+  };
+
+  const save = async () => {
+    if (!projectId || !draft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/target-launch`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetLaunchDate: draft }),
+      });
+      if (!res.ok) {
+        const detail = await safeJson(res);
+        throw new Error(detail?.detail ?? `HTTP ${res.status}`);
+      }
+      setEditing(false);
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ---- Edit mode ----
+  if (editing) {
+    return (
+      <div className="flex flex-col items-end shrink-0 gap-1">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-white/50">
+          Target Launch
+        </span>
+        <div className="flex items-center gap-2 mt-1">
+          <input
+            type="date"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+              if (e.key === "Escape") cancel();
+            }}
+            min={isoDateOnly(new Date())}
+            disabled={saving}
+            className="rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm text-white focus:outline-none focus:border-[var(--color-rag-green)]"
+            autoFocus
+          />
+          <button
+            onClick={save}
+            disabled={saving || !draft}
+            className="rounded-md bg-[var(--color-rag-green)]/20 hover:bg-[var(--color-rag-green)]/30 border border-[var(--color-rag-green)]/40 p-1.5 text-[var(--color-rag-green)] disabled:opacity-50"
+            aria-label="Save"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            onClick={cancel}
+            disabled={saving}
+            className="rounded-md bg-white/10 hover:bg-white/20 border border-white/20 p-1.5 text-white/70 disabled:opacity-50"
+            aria-label="Cancel"
+          >
+            <XIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {error && (
+          <span className="text-[11px] text-[var(--color-rag-red)] max-w-[220px] text-right">
+            {error}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  // ---- Read-only view with hover-reveal pencil ----
+  // Hotfix 83 — color flip when overdue / delivered late.
+  const isOverdue = lifecycleStatus === "overdue";
+  const isDeliveredLate = lifecycleStatus === "delivered_late";
+  const dateColor = isOverdue
+    ? "text-[var(--color-rag-red)]"
+    : isDeliveredLate
+      ? "text-[var(--color-rag-amber)]"
+      : "text-[var(--color-rag-green)]";
+
+  return (
+    <div
+      className="group flex flex-col items-end shrink-0 cursor-pointer select-none"
+      onClick={openEditor}
+      role={projectId ? "button" : undefined}
+      tabIndex={projectId ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (projectId && (e.key === "Enter" || e.key === " ")) openEditor();
+      }}
+      aria-label="Edit target launch date"
+    >
+      <span className="text-[10px] font-bold uppercase tracking-widest text-white/50">
+        Target Launch
+      </span>
+      <div className="flex items-center gap-2 mt-1">
+        <Calendar className={cn("h-4 w-4", isOverdue || isDeliveredLate ? dateColor : "text-white/50")} />
+        <span className={cn("text-3xl font-extrabold tabular-nums", dateColor)}>
+          {formatted}
+        </span>
+        {/* Pencil revealed on hover. Hidden by default so the block stays
+            visually identical to the pre-Sprint-8 design until the PO
+            actually hovers. */}
+        <Pencil
+          className={cn(
+            "h-3.5 w-3.5 text-white/40 opacity-0 transition-opacity",
+            projectId && "group-hover:opacity-100 group-focus-visible:opacity-100"
+          )}
+        />
+      </div>
+      {/* Overdue subline — sits where the "Edited" pill normally would */}
+      {isOverdue && typeof daysPastTarget === "number" && daysPastTarget > 0 && (
+        <span
+          className="mt-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-rag-red)]"
+          title="The target launch date has passed and the project is not yet complete. Set a new date or generate a new plan to clear this alert."
+        >
+          Overdue · {daysPastTarget} day{daysPastTarget === 1 ? "" : "s"}
+        </span>
+      )}
+      {isDeliveredLate && typeof daysPastTarget === "number" && daysPastTarget > 0 && (
+        <span
+          className="mt-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-rag-amber)]"
+          title="The project completed all stories, but landed past its committed target launch date."
+        >
+          Delivered · {daysPastTarget} day{daysPastTarget === 1 ? "" : "s"} late
+        </span>
+      )}
+      {!isOverdue && !isDeliveredLate && source === "MANUAL" && (
+        <span
+          className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-white/60"
+          title="Target launch date was manually set. It will not be overwritten by future plan approvals."
+        >
+          Edited
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** YYYY-MM-DD (UTC) — what <input type="date"> expects.
+ *
+ * We deliberately use the UTC calendar day, not the local one. The stored
+ * target_launch_date is anchored at noon UTC, which means the intended
+ * calendar day is the same for every viewer. Using getFullYear()/etc would
+ * shift that day by one for timezones far from UTC during the pre-fill,
+ * causing the date picker to open on the wrong day.
+ */
+function isoDateOnly(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+async function safeJson(res: Response): Promise<{ detail?: string } | null> {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+
 // ── Main Component ──
 
 export function ProjectHeroBanner() {
@@ -502,6 +958,16 @@ export function ProjectHeroBanner() {
   const weeksLeft = deriveWeeksLeft(targetLaunch.date);
   const milestones = deriveMilestones(planData, progressData);
 
+  // Hotfix 83 — lifecycle indicators (red Target Launch tile, badge swap,
+  // overdue EST. WEEKS replacement). All three derive from the backend's
+  // single source of truth in the timeline block; the frontend never
+  // computes "is it overdue" itself, so the in-app banner and the
+  // cron-fired email can never disagree.
+  const lifecycleStatus = planData?.timeline?.lifecycleStatus;
+  const daysPastTarget = planData?.timeline?.daysPastTarget ?? 0;
+  const isOverdue = lifecycleStatus === "overdue";
+  const isDeliveredLate = lifecycleStatus === "delivered_late";
+
   const totalFeatures = progressData?.totalFeatures ?? 0;
   const totalStories = progressData?.totalStories ?? 0;
   const completePct = progressData?.overallCompletePct ?? 0;
@@ -514,8 +980,19 @@ export function ProjectHeroBanner() {
     ["APPROVED", "SYNCED", "SYNCED_PARTIAL"].includes(planSummary.status ?? "");
   const hasPendingPlan =
     planSummary?.hasPlan === true && planSummary.status === "PENDING_REVIEW";
-  const confidence = planSummary?.confidenceScore ?? null;
-  const estWeeks = planSummary?.estimatedWeeksTotal ?? null;
+  const planEstWeeks = planSummary?.estimatedWeeksTotal ?? null;
+
+  // EST. WEEKS: prefer a live "weeks until target" value when a target is
+  // set, so the card updates the moment the PO rescales the timeline.
+  const estWeeks = targetLaunch.date ? weeksLeft : planEstWeeks;
+
+  // CONFIDENCE: composite score from confidence_engine.py — blends velocity,
+  // CI/CD throughput, AI plan baseline, target-launch feasibility, and
+  // recent sprint reliability. See services/confidence_engine.py for the
+  // formula. When the backend hasn't computed one (no approved plan yet,
+  // fall-back path) ``confidence`` is null and the KPI tile hides itself.
+  const confidenceBlock = progressData?.confidence ?? null;
+  const confidence = confidenceBlock?.score ?? null;
 
   // Loading state
   if (loading && !progressData && !planData) {
@@ -543,7 +1020,11 @@ export function ProjectHeroBanner() {
             )}
             <div className="flex items-center gap-2 flex-wrap">
               <LiveDataBadge source={source} />
-              <PlanSourceBadge isOptimized={targetLaunch.isOptimized} isRebalanced={targetLaunch.isRebalanced} />
+              <PlanSourceBadge
+                isOptimized={targetLaunch.isOptimized}
+                isRebalanced={targetLaunch.isRebalanced}
+                lifecycleStatus={lifecycleStatus}
+              />
               <button
                 onClick={async () => {
                   setRefreshing(true);
@@ -568,18 +1049,27 @@ export function ProjectHeroBanner() {
             </div>
           </div>
 
-          {/* Target Launch */}
-          <div className="flex flex-col items-end shrink-0">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-white/50">
-              Target Launch
-            </span>
-            <div className="flex items-center gap-2 mt-1">
-              <Calendar className="h-4 w-4 text-white/50" />
-              <span className="text-3xl font-extrabold text-[var(--color-rag-green)] tabular-nums">
-                {targetLaunch.formatted}
-              </span>
-            </div>
-          </div>
+          {/* Target Launch — hover-editable (Sprint 8). Clicking the
+              block opens an inline date picker. Saving writes to
+              /api/projects/{id}/target-launch and we refetch. */}
+          <TargetLaunchEditable
+            projectId={projectId}
+            value={targetLaunch.date}
+            formatted={targetLaunch.formatted}
+            source={targetLaunch.source}
+            lifecycleStatus={lifecycleStatus}
+            daysPastTarget={daysPastTarget}
+            onSaved={async () => {
+              // Invalidate the cached dashboard responses so the next fetch
+              // reflects the new date + rescaled timeline.
+              if (projectId) {
+                invalidateCache(`/api/dashboard/project-plan?projectId=${projectId}`);
+                invalidateCache(`/api/dashboard/feature-progress?projectId=${projectId}`);
+                invalidateCache(`/api/dashboard/plan-summary?projectId=${projectId}`);
+              }
+              await fetchData();
+            }}
+          />
         </div>
 
         {/* Pending plan banner */}
@@ -600,11 +1090,26 @@ export function ProjectHeroBanner() {
             highlight={completePct >= 40}
           />
           {hasApprovedPlan && confidence !== null ? (
-            <KpiCard label="Confidence" value={`${Math.round(confidence <= 1 ? confidence * 100 : confidence)}%`} />
+            <ConfidenceKpiCard value={confidence} breakdown={confidenceBlock} />
           ) : (
             <KpiCard label="Ready for Test" value={readyForTest} />
           )}
-          {hasApprovedPlan && estWeeks !== null ? (
+          {/* Hotfix 83 — when the project is overdue, replace the
+              meaningless "0 EST. WEEKS" tile with a red "Overdue Nd"
+              indicator. When delivered late, amber "Late +Nd". */}
+          {isOverdue && daysPastTarget > 0 ? (
+            <KpiCard
+              label="Overdue"
+              value={`${daysPastTarget}d`}
+              tone="alert"
+            />
+          ) : isDeliveredLate && daysPastTarget > 0 ? (
+            <KpiCard
+              label="Late by"
+              value={`${daysPastTarget}d`}
+              tone="warn"
+            />
+          ) : hasApprovedPlan && estWeeks !== null ? (
             <KpiCard label="Est. Weeks" value={estWeeks} />
           ) : (
             <KpiCard label="Weeks Left" value={weeksLeft} />
@@ -614,9 +1119,29 @@ export function ProjectHeroBanner() {
 
       {/* ── Project Timeline Stepper ── */}
       <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] border-t-0 rounded-b-xl px-6 py-5">
-        <h3 className="text-xs font-bold uppercase tracking-[0.15em] text-[var(--text-secondary)] mb-4">
-          Project Timeline
-        </h3>
+        <div className="flex items-center justify-between mb-4 gap-4">
+          <h3 className="text-xs font-bold uppercase tracking-[0.15em] text-[var(--text-secondary)]">
+            Project Timeline
+          </h3>
+          {/* Target-violation warning — only appears in AI/Rebalanced modes
+              when at least one phase ends after the committed launch date. */}
+          {planData?.timeline?.targetViolated && (
+            <span className="inline-flex items-center gap-2 rounded-full bg-[var(--color-rag-amber)]/15 border border-[var(--color-rag-amber)]/40 px-3 py-1 text-[11px] font-semibold text-[var(--color-rag-amber)]">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Plan ends {planData.timeline.targetViolatedDays} day{planData.timeline.targetViolatedDays === 1 ? "" : "s"} past Target Launch &mdash; rebalance to resolve
+            </span>
+          )}
+          {/* Current-phase source tooltip — lets the PO know when GitHub
+              commits have pulled the current phase ahead of the ADO board. */}
+          {planData?.timeline?.currentPhaseSource === "GITHUB" && (
+            <span
+              title="GitHub commits indicate this is the most advanced phase. ADO cards may be lagging — update them when you can."
+              className="inline-flex items-center gap-1.5 rounded-full bg-white/5 border border-white/10 px-2.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)]"
+            >
+              via GitHub
+            </span>
+          )}
+        </div>
         <ProjectTimelineStepper milestones={milestones} />
       </div>
     </div>

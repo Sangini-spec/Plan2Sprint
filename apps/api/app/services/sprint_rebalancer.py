@@ -94,6 +94,24 @@ PO GUIDANCE (must be respected):
     prompt = f"""You are a sprint rescue advisor for an agile team. The current sprint plan
 is at risk of failure. Your job is to propose a REBALANCED sprint plan that saves the project.
 
+THINKING PROTOCOL (Hotfix 30 — invoke before producing JSON):
+Before emitting the final JSON, work through this analysis on a private scratchpad
+(the scratchpad is discarded; only the JSON below is consumed downstream):
+  1. List EACH sprint that is over capacity and by how many SP.
+  2. For EACH overflowing story, evaluate the candidate actions
+     (KEEP / DEFER / REPRIORITIZE / ADJUST_SP / SPLIT / DESCOPE) and predict
+     the SP impact + downstream sprint capacity changes for each.
+  3. Check feature grouping — does any candidate split a feature across
+     sprints? If yes, prefer keeping the feature together unless that
+     forces a >85% capacity sprint.
+  4. Verify against the mode constraint below — PROTECT_TIMELINE forbids
+     adding sprints; PROTECT_SCOPE forbids dropping stories.
+  5. Pick the option set that minimises TOTAL CHANGES while meeting the
+     mode constraint. Keeping things stable matters.
+  6. Sanity-check: every story present in the input MUST appear in the
+     output (with KEEP if unchanged). No silent drops.
+After completing the analysis, emit the JSON exactly as specified.
+
 CRITICAL RULES:
 1. You manage SCOPE, not people. Do NOT reassign work to different developers — developers self-assign in agile.
 2. Your tools:
@@ -394,42 +412,43 @@ async def generate_rebalance_proposal(
     await db.flush()
 
     # -----------------------------------------------------------------------
-    # 7. Call Grok AI
+    # 7. Call AI — secondary-first for max reasoning depth (Hotfix 30)
     # -----------------------------------------------------------------------
+    # Rebalance is the most consequential AI call in the system — the PO
+    # uses it to decide whether to defer scope, extend timeline, or split
+    # stories under real time pressure. We route the secondary (o4-mini)
+    # FIRST with ``reasoning_effort="high"`` so the deeper model gets the
+    # call by default. Grok-fast is the failover in case o4-mini is rate
+    # limited or down. If both fail we drop to the deterministic
+    # fallback_rebalance() heuristic — never block the PO entirely.
     ai_result = None
     try:
-        if not (settings.azure_ai_api_key or settings.azure_ai_key):
-            raise ValueError("No Azure AI API key configured")
+        from .ai_caller import call_ai
 
-        import httpx
+        logger.info(
+            f"[sprint_rebalancer] calling AI (reasoning-first failover) "
+            f"for proposal {proposal.id}, mode={mode}, prompt ~{len(prompt)} chars"
+        )
 
-        logger.info(f"Calling Grok AI for rebalancing (proposal {proposal.id}, mode={mode})")
+        # Hotfix 33i — pass response_format=json_object so o4-mini
+        # (Azure OpenAI) is forced into strict JSON mode. Without it
+        # the model occasionally wraps the answer in prose. Combined
+        # with the auto reasoning-headroom in ai_caller, this prevents
+        # the "empty content" path we saw earlier where high-effort
+        # reasoning ate the entire token budget.
+        ai_text = await call_ai(
+            messages=[{"role": "user", "content": prompt}],
+            mode="reasoning",  # o4-mini → Grok
+            max_tokens=8192,
+            temperature=0.2,
+            reasoning_effort="high",  # full deliberation; can save the project
+            response_format={"type": "json_object"},
+            timeout_s=300.0,
+        )
+        if not ai_text:
+            raise RuntimeError("All AI models exhausted (secondary + primary)")
 
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": (settings.azure_ai_api_key or settings.azure_ai_key),
-        }
-        payload = {
-            "model": AI_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 8192,
-            "temperature": 0.2,
-        }
-
-        logger.info(f"Calling Grok AI (prompt ~{len(prompt)} chars, timeout 300s)")
-
-        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
-            resp = await client.post(
-                settings.azure_ai_endpoint,
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-
-        data = resp.json()
-        ai_text = data["choices"][0]["message"]["content"]
-
-        logger.info(f"Grok AI rebalancing response: {len(ai_text)} chars")
+        logger.info(f"[sprint_rebalancer] AI rebalancing response: {len(ai_text)} chars")
 
         # Parse JSON
         json_text = ai_text.strip()
@@ -531,6 +550,13 @@ async def approve_rebalance(
     # -----------------------------------------------------------------------
     # 1. Create NEW SprintPlan from rebalanced allocations
     # -----------------------------------------------------------------------
+    # Hotfix 33j — carry forward capacity / quality fields from the
+    # source plan. The rebalancer only changes WHICH stories are in
+    # WHICH sprints; the team composition, capacity recommendations,
+    # goal-attainment confidence, etc. do NOT change. Previously the
+    # new plan was created with these fields = NULL, so the dashboard
+    # rendered an empty Team Capacity card (no utilization %, no
+    # bottlenecks, no understaffed warning).
     new_plan = SprintPlan(
         id=generate_cuid(),
         organization_id=proposal.organization_id,
@@ -540,14 +566,21 @@ async def approve_rebalance(
         confidence_score=old_plan.confidence_score,
         risk_summary=f"Rebalanced plan: {proposal.summary}",
         overall_rationale=proposal.ai_rationale if isinstance(proposal.ai_rationale, str) else json.dumps(proposal.ai_rationale or {}),
+        goal_attainment_confidence=old_plan.goal_attainment_confidence,
         total_story_points=old_plan.total_story_points,
+        unplanned_items=old_plan.unplanned_items,
         estimated_sprints=len(proposal.sprint_allocations or []),
         estimated_end_date=proposal.projected_end_date or old_plan.estimated_end_date,
         success_probability=proposal.projected_success_probability,
+        spillover_risk_sp=old_plan.spillover_risk_sp,
         ai_model_used=proposal.ai_model_used,
         tool=old_plan.tool,
         estimated_weeks_total=old_plan.estimated_weeks_total,
-        project_completion_summary=f"Rebalanced from plan {old_plan.id}",
+        project_completion_summary=(
+            old_plan.project_completion_summary
+            or f"Rebalanced from plan {old_plan.id}"
+        ),
+        capacity_recommendations=old_plan.capacity_recommendations,
         approved_by_id=user_id,
         approved_at=datetime.now(timezone.utc),
         is_rebalanced=True,

@@ -342,20 +342,59 @@ async def generate_nudge_data(
 # ---------------------------------------------------------------------------
 
 async def get_po_email(db: AsyncSession, org_id: str) -> str | None:
-    """Get the PO's email for an org. Prefers POs that have Slack mapping."""
-    # First: prefer team members with slack_user_id set (they can actually receive)
+    """Get the PO's email for an org. Prefers POs that have Slack mapping.
+
+    Note: Plan2Sprint's authoritative role lives on `users.role`. The
+    `team_members` table is populated from PM-tool imports and often
+    has a different `role` (e.g., 'developer' for everyone). So we check
+    BOTH sources and prefer rows that have a usable `slack_user_id`.
+    """
+    PO_ROLES = (
+        "PRODUCT_OWNER", "product_owner",
+        "ADMIN", "admin",
+        "OWNER", "owner",
+    )
+
+    # 1) PO on users table with slack_user_id set on the user record itself
+    result = await db.execute(
+        select(User.email).where(
+            User.organization_id == org_id,
+            User.slack_user_id.isnot(None),
+            User.role.in_(PO_ROLES),
+        ).limit(1)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        return row
+
+    # 2) PO on users table where there's a matching team_member with slack_user_id
+    result = await db.execute(
+        select(User.email)
+        .join(TeamMember, TeamMember.email == User.email)
+        .where(
+            User.organization_id == org_id,
+            TeamMember.organization_id == org_id,
+            TeamMember.slack_user_id.isnot(None),
+            User.role.in_(PO_ROLES),
+        ).limit(1)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        return row
+
+    # 3) PO-role team member with slack_user_id (legacy path)
     result = await db.execute(
         select(TeamMember.email).where(
             TeamMember.organization_id == org_id,
             TeamMember.slack_user_id.isnot(None),
-            TeamMember.role.in_(["PRODUCT_OWNER", "product_owner", "ADMIN", "admin", "OWNER", "owner"]),
+            TeamMember.role.in_(PO_ROLES),
         ).limit(1)
     )
     row = result.scalar_one_or_none()
     if row:
         return row
 
-    # Second: any team member with slack_user_id (even if not PO role)
+    # 4) Any team member with slack_user_id (PO might be unmapped on team_member)
     result = await db.execute(
         select(TeamMember.email).where(
             TeamMember.organization_id == org_id,
@@ -366,18 +405,29 @@ async def get_po_email(db: AsyncSession, org_id: str) -> str | None:
     if row:
         return row
 
-    # Third: any PO-role team member
+    # 5) Any PO on users table (no slack mapping yet)
     result = await db.execute(
-        select(TeamMember.email).where(
-            TeamMember.organization_id == org_id,
-            TeamMember.role.in_(["PRODUCT_OWNER", "product_owner", "ADMIN", "admin", "OWNER", "owner"]),
+        select(User.email).where(
+            User.organization_id == org_id,
+            User.role.in_(PO_ROLES),
         ).limit(1)
     )
     row = result.scalar_one_or_none()
     if row:
         return row
 
-    # Fallback: any user with email
+    # 6) Any PO-role team member
+    result = await db.execute(
+        select(TeamMember.email).where(
+            TeamMember.organization_id == org_id,
+            TeamMember.role.in_(PO_ROLES),
+        ).limit(1)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        return row
+
+    # 7) Fallback: any user with email
     user_result = await db.execute(
         select(User.email).where(User.organization_id == org_id).limit(1)
     )

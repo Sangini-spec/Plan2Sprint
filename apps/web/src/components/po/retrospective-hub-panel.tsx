@@ -362,7 +362,7 @@ export function RetrospectiveHubPanel() {
         </div>
 
         {/* ── Quick Summary Stats ── */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="rounded-lg border border-[var(--color-rag-green)]/20 bg-[var(--color-rag-green)]/5 px-3 py-2.5 text-center">
             <p className="text-lg font-bold text-[var(--color-rag-green)]">{retro.whatWentWell.length}</p>
             <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">Went Well</p>

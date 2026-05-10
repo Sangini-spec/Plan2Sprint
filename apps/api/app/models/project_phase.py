@@ -47,6 +47,17 @@ class ProjectPhase(Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )
+    # Timeline revamp (Sprint 1): persist computed phase boundaries so the
+    # dashboard doesn't have to re-derive them on every page load. Values are
+    # written by services.timeline_engine in one of three modes (Raw, AI-Opt,
+    # Rebalanced). Nullable because phases for brand-new projects may not have
+    # dates yet — the UI renders "TBD" in that case.
+    planned_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    planned_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

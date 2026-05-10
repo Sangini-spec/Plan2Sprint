@@ -69,11 +69,23 @@ async def generate_sprint_plan(
     proj_result = await db.execute(proj_q)
     project = proj_result.scalar_one_or_none()
 
-    # 3. Load team members — only developers get assignments (filtered by project)
+    # 3. Load team members — prefer explicit developers, fall back to
+    #    any non-excluded member. Hotfix 32c — see ai_sprint_generator
+    #    for context; the strict developer-only filter was breaking
+    #    projects whose only members had other roles (stakeholder etc.)
+    #    even though those projects had successfully generated plans
+    #    before.
     all_members = await _load_team_members(db, org_id, project_id)
     members = [m for m in all_members if m.role == "developer"]
     if not members:
-        return {"error": "No developers found in the team. Mark at least one team member as a developer."}
+        members = [m for m in all_members if (m.role or "").lower() != "excluded"]
+    if not members:
+        return {
+            "error": (
+                "No team members found for this project. Add at least one "
+                "team member in Settings → Team to enable sprint planning."
+            )
+        }
 
     # 4. Load velocity profiles for each member
     velocity_map = await _load_velocity_profiles(db, members)
@@ -364,11 +376,16 @@ async def _load_plannable_work_items(
     - Backlog items (TODO/BACKLOG) from this project
     Sorted by priority (lower = higher priority).
     """
+    # Exclusion-based filter — see services._planning_status for rationale.
+    # Anything that's already finished (DONE/CLOSED/RESOLVED/etc., case-
+    # insensitive) is NOT plannable. Everything else, including custom
+    # ADO/Jira states, flows through.
+    from ._planning_status import TERMINAL_STATUSES
     query = (
         select(WorkItem)
         .where(
             WorkItem.organization_id == org_id,
-            WorkItem.status.in_(["BACKLOG", "TODO", "IN_PROGRESS", "IN_REVIEW"]),
+            func.upper(WorkItem.status).notin_(TERMINAL_STATUSES),
         )
     )
     # Scope to the selected project if provided

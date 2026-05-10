@@ -40,14 +40,38 @@ class Settings(BaseSettings):
     teams_tenant_id: str = "common"
     teams_redirect_uri: str = "http://localhost:8000/api/integrations/teams/callback"
 
+    # Inbound webhook security (Hotfix 80 — security hardening)
+    # Each integration's webhook endpoint compares the inbound request
+    # signature/secret against the value below. When a secret is empty
+    # AND ``strict_webhook_verification`` is True, the endpoint rejects
+    # the request with 401 — same behaviour as GitHub's existing strict
+    # mode. When the secret is empty AND strict mode is off, we accept
+    # but log a [SECURITY] warning so operators see the gap.
+    jira_webhook_secret: str = ""           # signs X-Atlassian-Webhook-Signature
+    ado_webhook_secret: str = ""            # exact-match X-Hook-Secret header
+    teams_webhook_client_state: str = ""    # exact-match clientState in body
+    strict_webhook_verification: bool = False
+
     # AI — Anthropic Claude (legacy)
     anthropic_api_key: str = ""
 
-    # AI — Azure AI Foundry (Grok)
+    # AI — Azure AI Foundry (Grok) — primary model
     azure_ai_api_key: str = ""
     azure_ai_key: str = ""  # alias used in Azure Container Apps
     azure_ai_endpoint: str = ""
     azure_ai_model: str = "grok-4-fast-reasoning"
+
+    # AI — Secondary model (Hotfix 30 — o4-mini on Azure OpenAI).
+    # Used as failover when the primary errors out, rate-limits, or times
+    # out. Also used directly for high-stakes reasoning calls (rebalancer)
+    # where the secondary's reasoning_effort beats the primary's speed.
+    # Endpoint URL pattern is ``cognitiveservices.azure.com/openai/...`` —
+    # the ai_caller helper auto-detects this and switches request shape
+    # (max_completion_tokens, reasoning_effort, no model in body).
+    azure_ai_api_key_2: str = ""
+    azure_ai_key_2: str = ""
+    azure_ai_endpoint_2: str = ""
+    azure_ai_model_2: str = "o4-mini"
 
     # AI — Azure AI Agent Service (agentic workflows)
     azure_agent_endpoint: str = ""

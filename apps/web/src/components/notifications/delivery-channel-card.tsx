@@ -184,10 +184,16 @@ export function DeliveryChannelCard({
   const isAdmin = isPORole(role);
 
   async function handleDisconnect() {
+    // Hotfix 73/74 — non-admin callers use /me/disconnect to clear
+    // their personal Slack/Teams identity link. PO uses /disconnect
+    // which removes the org connection (also gated PO-only on the
+    // backend, so a non-PO calling it would 403).
+    const url = isAdmin
+      ? `/api/integrations/${platform}/disconnect`
+      : `/api/integrations/${platform}/me/disconnect`;
+    const method = isAdmin ? "DELETE" : "POST";
     try {
-      await fetch(`/api/integrations/${platform}/disconnect`, {
-        method: "DELETE",
-      });
+      await fetch(url, { method });
       onDisconnect?.();
     } catch {
       // Ignore
@@ -368,7 +374,11 @@ export function DeliveryChannelCard({
         )}
       >
         {isConnected ? (
-          /* Connected: disabled "Connected" button + Disconnect (admin only) */
+          /* Connected: disabled label + Disconnect. PO disconnect
+             clears the org-level workspace install; non-PO disconnect
+             clears the per-user OAuth link (handleDisconnect routes to
+             the right endpoint based on isAdmin). Visible to both roles
+             so each manages their own state. */
           <div className="w-full space-y-2">
             <button
               disabled
@@ -382,7 +392,7 @@ export function DeliveryChannelCard({
               <CheckCircle2 size={15} />
               Connected to {config.name}
             </button>
-            {isAdmin && (
+            {(
               <button
                 onClick={handleDisconnect}
                 className="w-full flex items-center justify-center gap-1.5 text-xs font-medium text-[var(--text-secondary)]/60 hover:text-[var(--color-rag-red)] transition-colors cursor-pointer py-1"
@@ -401,15 +411,22 @@ export function DeliveryChannelCard({
             </Button>
           </div>
         ) : (
-          /* Disconnected: Connect CTA */
+          /* Disconnected: Connect CTA. For non-admin this kicks off
+             per-user OAuth (handled in
+             DeliveryChannelsSection.handleConnect). The
+             admin-onboarding text + TeamsAdminConsentHint only render
+             for PO/admin since they're the ones who actually install
+             the workspace bot / grant tenant consent. */
           <>
             <Button variant="primary" onClick={onConnect}>
               Connect {config.name}
             </Button>
-            <p className="text-[11px] text-[var(--text-secondary)]/60">
-              {config.adminNote}
-            </p>
-            {platform === "teams" && <TeamsAdminConsentHint />}
+            {isAdmin && (
+              <p className="text-[11px] text-[var(--text-secondary)]/60">
+                {config.adminNote}
+              </p>
+            )}
+            {isAdmin && platform === "teams" && <TeamsAdminConsentHint />}
           </>
         )}
       </div>

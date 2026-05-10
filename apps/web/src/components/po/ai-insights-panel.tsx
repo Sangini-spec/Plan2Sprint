@@ -350,8 +350,12 @@ export function AIInsightsPanel({
                 </div>
               )}
 
-              {/* Per-developer bars — pushed to bottom */}
-              <div className="space-y-1.5 mt-auto">
+              {/* Per-developer bars — pushed to bottom.
+                  Hotfix 33b — when a team grows past ~3 developers the
+                  list overflows the card. Cap visible height and let
+                  the inner list scroll. Custom scrollbar matches the
+                  surrounding theme (bg-surface-sunken). */}
+              <div className="space-y-1.5 mt-auto max-h-[180px] overflow-y-auto pr-1 -mr-1 [scrollbar-width:thin] [scrollbar-color:var(--border-subtle)_transparent]">
                 {teamMembers.map((tm) => {
                   const load = devLoad.get(tm.id) || 0;
                   const maxSp = Math.max(load, 30);

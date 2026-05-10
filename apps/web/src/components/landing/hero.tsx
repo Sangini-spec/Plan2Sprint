@@ -344,7 +344,7 @@ export default function Hero() {
               <div className="glass rounded-xl px-3 py-2 border-[var(--color-rag-amber)]/30 shadow-lg shadow-black/5">
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-rag-amber)]">
                   <span className="w-2 h-2 rounded-full bg-[var(--color-rag-amber)] animate-pulse" />
-                  Alex &mdash; 3rd high-load sprint
+                  Alex: 3rd high-load sprint
                 </span>
               </div>
             </div>

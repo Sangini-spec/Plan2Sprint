@@ -168,6 +168,12 @@ export function GithubMonitoringPanel() {
         </span>
       }
     >
+      {/* Hotfix 8 — wrap the fixed-pixel grid in a horizontal-scroll
+          container so the 600+px-wide table doesn't blow out the
+          viewport on phones. min-w ensures columns don't squeeze
+          unreadably tight before the scroll kicks in. */}
+      <div className="overflow-x-auto">
+      <div className="min-w-[640px]">
       {/* Table header */}
       <div className="grid grid-cols-[1fr_140px_140px_130px_100px] gap-3 px-6 py-3 border-b border-[var(--border-subtle)] text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
         <span>Pull Request</span>
@@ -265,6 +271,8 @@ export function GithubMonitoringPanel() {
             </div>
           );
         })}
+      </div>
+      </div>
       </div>
     </DashboardPanel>
   );

@@ -10,14 +10,12 @@ import {
 import {
   Target,
   Code2,
-  Users,
   Building2,
   CheckCircle2,
   Zap,
   GitPullRequest,
   Clock,
   TrendingUp,
-  Activity,
   Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -75,15 +73,12 @@ const tabs: TabData[] = [
     label: "Product Owners",
     icon: Target,
     headline: "Stop planning sprints manually. Start approving them.",
-    body: "Plan2Sprint reads your backlog, analyzes team capacity and skill profiles, and generates a complete sprint plan in under 90 seconds. Review AI-generated assignments with per-ticket rationale, make adjustments with inline editing, and approve. Your sprint planning meeting just became a 5-minute review.",
+    body: "Read backlog, analyse capacity, generate a sprint plan in under 90 seconds. Approve in 5 minutes.",
     capabilities: [
-      "AI sprint plan generated in under 90 seconds",
+      "AI sprint plan in under 90 seconds",
       "Inline editing of assignments and story points",
-      "GitHub PR monitoring linked to sprint tickets",
-      "Real-time developer progress without asking anyone",
-      "Team standup digest delivered every weekday",
-      "Early burnout signals across your team",
-      "AI-generated sprint retrospective from real data",
+      "Daily standup digest from real data",
+      "AI retrospectives at sprint end",
     ],
     dashboardLabel: "PO Dashboard",
   },
@@ -92,45 +87,28 @@ const tabs: TabData[] = [
     label: "Developers",
     icon: Code2,
     headline: "Your standup is ready before you open Slack.",
-    body: "No more typing what you did yesterday. Plan2Sprint tracks your commits, PRs, and ticket transitions automatically, then compiles your standup report from real work data. Flag blockers with one tap. Get back to building.",
+    body: "Standups auto-compiled from your commits, PRs, and ticket activity. Flag blockers with one tap.",
     capabilities: [
-      "Auto-generated standup from GitHub and Jira activity",
-      "One-tap blocker flagging in Slack or Teams",
-      "Clear sprint assignments with AI rationale",
-      "No manual status updates ever",
-      "Focus time protected — zero interruptions from Plan2Sprint",
+      "Auto-standup from GitHub + Jira activity",
+      "One-tap blocker flagging in Slack/Teams",
+      "Clear assignments with AI rationale",
+      "Zero manual status updates",
     ],
     dashboardLabel: "Developer View",
   },
   {
-    id: "engineering-managers",
-    label: "Engineering Managers",
-    icon: Users,
-    headline: "Know your team's health before it becomes a problem.",
-    body: "Burnout detection, overtime patterns, stalled tickets, and review bottlenecks — all surfaced before they escalate. Plan2Sprint gives you a real-time pulse on your team without micromanaging or adding process overhead.",
-    capabilities: [
-      "Burnout detection from overtime and weekend commit patterns",
-      "Stalled ticket and review lag alerts",
-      "Sprint velocity trends with AI-powered insights",
-      "Team load distribution and capacity planning",
-      "AI retrospectives generated from actual delivery data",
-    ],
-    dashboardLabel: "Manager Dashboard",
-  },
-  {
-    id: "executives",
-    label: "Executives & Stakeholders",
+    id: "stakeholders",
+    label: "Stakeholders",
     icon: Building2,
-    headline: "Delivery health across all teams. No meetings required.",
-    body: "See sprint progress, team health, and delivery risk across every engineering team from a single view. Plan2Sprint aggregates the signals that matter — shipping velocity, blocker frequency, and burnout risk — so you can make informed decisions without scheduling another sync.",
+    headline: "Delivery health across teams. No meetings required.",
+    body: "See sprint progress, team health, and delivery risk in one view. The signals that matter (velocity, blockers, burnout) without scheduling a sync.",
     capabilities: [
       "Cross-team delivery health dashboard",
-      "Sprint completion trends and velocity tracking",
-      "Blocker frequency and resolution time metrics",
-      "Burnout risk indicators across all teams",
-      "Zero meeting overhead — everything is async",
+      "Sprint completion and velocity tracking",
+      "Blocker frequency and resolution metrics",
+      "Zero meeting overhead. Everything async",
     ],
-    dashboardLabel: "Executive Dashboard",
+    dashboardLabel: "Stakeholder Dashboard",
   },
 ];
 
@@ -225,9 +203,9 @@ function DashboardVisual({ label, tabId }: { label: string; tabId: string }) {
         </div>
         {/* Activity items */}
         {[
-          { icon: GitPullRequest, text: "PR #287 merged — auth refresh", color: "var(--color-rag-green)" },
+          { icon: GitPullRequest, text: "PR #287 merged: auth refresh", color: "var(--color-rag-green)" },
           { icon: Code2, text: "3 commits on rate-limiter branch", color: "var(--color-brand-secondary)" },
-          { icon: Clock, text: "P2S-151 in progress — 6h", color: "var(--color-rag-amber)" },
+          { icon: Clock, text: "P2S-151 in progress: 6h", color: "var(--color-rag-amber)" },
         ].map((item, i) => (
           <div key={i} className="flex items-center gap-2.5 p-2 rounded-lg bg-[var(--bg-surface-raised)]/50">
             <item.icon className="w-3.5 h-3.5 shrink-0" style={{ color: item.color }} />
@@ -237,44 +215,7 @@ function DashboardVisual({ label, tabId }: { label: string; tabId: string }) {
       </div>
     ),
 
-    "engineering-managers": (
-      <div className="space-y-3">
-        <div className="flex items-center gap-2 mb-2">
-          <Activity className="w-4 h-4 text-[var(--color-brand-secondary)]" />
-          <span className="text-xs font-semibold text-[var(--text-primary)]">
-            Team Health
-          </span>
-        </div>
-        {/* Health indicators */}
-        {[
-          { label: "Sprint Velocity", value: "94%", status: "healthy" },
-          { label: "Review Lag", value: "4.2h avg", status: "warning" },
-          { label: "Burnout Risk", value: "Low", status: "healthy" },
-          { label: "Stalled Tickets", value: "1", status: "warning" },
-        ].map((item) => (
-          <div
-            key={item.label}
-            className="flex items-center justify-between p-2 rounded-lg bg-[var(--bg-surface-raised)]/50"
-          >
-            <span className="text-[11px] text-[var(--text-secondary)]">
-              {item.label}
-            </span>
-            <span
-              className={cn(
-                "text-[11px] font-semibold",
-                item.status === "healthy"
-                  ? "text-[var(--color-rag-green)]"
-                  : "text-[var(--color-rag-amber)]"
-              )}
-            >
-              {item.value}
-            </span>
-          </div>
-        ))}
-      </div>
-    ),
-
-    executives: (
+    stakeholders: (
       <div className="space-y-3">
         <div className="flex items-center gap-2 mb-2">
           <TrendingUp className="w-4 h-4 text-[var(--color-brand-secondary)]" />

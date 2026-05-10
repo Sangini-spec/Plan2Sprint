@@ -7,6 +7,7 @@ from sqlalchemy import (
     String,
     Integer,
     Float,
+    Boolean,
     DateTime,
     ForeignKey,
     UniqueConstraint,
@@ -115,6 +116,41 @@ class WorkItem(Base):
     spillover_reason: Mapped[Optional[str]] = mapped_column(
         String, name="spillover_reason", nullable=True
     )
+    # Sprint E — PO-controlled visibility on the Project Plan Gantt. When
+    # a long project accumulates dozens of completed/legacy features the
+    # Gantt becomes unreadable; the PO clicks the trash icon on a row to
+    # hide it. The work item itself stays in the DB (for analytics, sprint
+    # history, etc.) — this flag only filters it out of the Gantt query.
+    # The "Show N hidden" toggle in the header brings them back.
+    hidden_from_gantt: Mapped[bool] = mapped_column(
+        Boolean,
+        name="hidden_from_gantt",
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    # Hotfix 19 — AI-classified phase fallback. Populated by
+    # ``services.ai_phase_classifier`` when keyword/board_column rules
+    # fail to match a feature. Cached per-feature so we only pay an LLM
+    # round-trip the FIRST time a feature can't be matched, and only
+    # again when the title or description changes (input hash mismatch).
+    # The actual phase resolution chain is:
+    #   1. Manual phase_id (PO drag)
+    #   2. Rules engine (keyword + board_column)
+    #   3. ai_classified_phase_id (this) — semantic understanding
+    #   4. Status fallback (terminal -> last work phase, else first)
+    ai_classified_phase_id: Mapped[Optional[str]] = mapped_column(
+        String(25),
+        ForeignKey("project_phases.id", ondelete="SET NULL"),
+        name="ai_classified_phase_id",
+        nullable=True,
+    )
+    ai_classified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), name="ai_classified_at", nullable=True
+    )
+    ai_classified_input_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), name="ai_classified_input_hash", nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), name="created_at", server_default=func.now()
     )
@@ -136,7 +172,19 @@ class WorkItem(Base):
         back_populates="work_items"
     )
     imported_project: Mapped[Optional["ImportedProject"]] = relationship()
-    phase: Mapped[Optional["ProjectPhase"]] = relationship()
+    # Hotfix 21 — disambiguate which FK this relationship uses. The
+    # ``ai_classified_phase_id`` column added in Hotfix 19 introduced a
+    # second FK from work_items → project_phases, which made
+    # ``relationship(ProjectPhase)`` ambiguous. Without ``foreign_keys``,
+    # SQLAlchemy fails mapper initialisation with "multiple foreign key
+    # paths" and EVERY endpoint that touches work_items returns 500.
+    # Pinning ``foreign_keys=[phase_id]`` keeps the original meaning of
+    # ``feature.phase`` (the manual/rule-resolved phase, not the AI-
+    # classified one). The AI-classified phase doesn't need its own
+    # ORM relationship — we read the column directly.
+    phase: Mapped[Optional["ProjectPhase"]] = relationship(
+        foreign_keys=[phase_id]
+    )
     plan_assignments: Mapped[List["PlanAssignment"]] = relationship(
         back_populates="work_item"
     )

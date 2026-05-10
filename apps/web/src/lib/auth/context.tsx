@@ -9,10 +9,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { getSupabase as getSharedSupabase } from "@/lib/supabase/shared-client";
 import type { User } from "@supabase/supabase-js";
 import type { AppUser, UserRole } from "@/lib/types/auth";
 import { setStorageUserId } from "@/lib/integrations/demo-connections";
+import { invalidateCache } from "@/lib/fetch-cache";
 
 interface AuthContextType {
   user: User | null;
@@ -36,11 +37,12 @@ const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
-// Singleton Supabase client — created once, reused across renders
-let _supabaseClient: ReturnType<typeof createClient> | null = null;
+// Hotfix 88 — point the local ``getSupabase()`` alias at the shared
+// browser singleton in ``lib/supabase/shared-client.ts``. Was a private
+// module-level singleton; multiple per-file singletons race-condition
+// PKCE on stricter browsers (see shared-client.ts for the postmortem).
 function getSupabase() {
-  if (!_supabaseClient) _supabaseClient = createClient();
-  return _supabaseClient;
+  return getSharedSupabase();
 }
 
 /** Clear all user-scoped localStorage to prevent cross-user data leakage */
@@ -158,13 +160,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const newUserId = session?.user?.id;
 
       setUser(session?.user ?? null);
+
       if (!session?.user) {
+        // Sign-out: clear EVERYTHING so the next user starts clean.
         setAppUser(null);
-        // Clear cached data on logout to prevent cross-user leakage
         _clearUserScopedStorage();
-      } else if (prevUserId && newUserId && prevUserId !== newUserId) {
-        // Different user logged in — clear previous user's cached data
+        // In-memory fetch cache survives a soft sign-out otherwise — flush it.
+        invalidateCache();
+        return;
+      }
+
+      // Sign-in path. The previous logic only cleared when both prevUserId
+      // and newUserId existed AND differed. That missed the common case of
+      // user A signing out (prevUserId becomes null) then user B signing
+      // in: prevUserId is null so no clear ran, and B inherited A's
+      // localStorage scope key + the in-memory fetch cache. Fix: clear on
+      // ANY user change, including the null -> userId transition.
+      if (prevUserId !== newUserId) {
         _clearUserScopedStorage();
+        invalidateCache();
+      }
+
+      // Always re-bind the per-user storage scope to the current user.
+      // setStorageUserId was only called during the initial getSession, so
+      // sign-ins through the listener inherited the previous user's scope.
+      if (newUserId) {
+        setStorageUserId(newUserId);
       }
     });
 
@@ -178,6 +199,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     // Clear all user-scoped cached data to prevent cross-user leakage
     _clearUserScopedStorage();
+    // In-memory fetch cache also persists across sign-outs unless we
+    // explicitly invalidate it.
+    invalidateCache();
 
     if (isDemoMode) {
       localStorage.removeItem("plan2sprint_demo_user");
@@ -191,9 +215,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
     setUser(null);
     setAppUser(null);
+    // Hard navigation guarantees every React provider re-mounts and every
+    // in-memory cache (project context, integrations context, etc.) is
+    // dropped. Without this, the next user sees the previous user's state
+    // until they manually reload.
+    window.location.href = "/login";
   }, []);
 
-  const role: UserRole = appUser?.role ?? "developer";
+  // Hotfix 15 — fallback role when ``appUser`` hasn't populated yet.
+  //
+  // Was previously "developer", which combined with a brief race in
+  // ``DashboardPage`` (where ``loading`` flips false a tick before
+  // ``appUser`` is set from the Supabase metadata read) caused EVERY
+  // user to be routed to /dev for one render cycle, even POs and
+  // stakeholders. The URL got locked in and they never moved.
+  //
+  // Aligned with line 141 which uses "product_owner" as the appUser
+  // default when metadata.role is unset. Two layers, same default —
+  // no inconsistency.
+  const role: UserRole = appUser?.role ?? "product_owner";
 
   // Memoize context value to prevent unnecessary child re-renders
   const value = useMemo(

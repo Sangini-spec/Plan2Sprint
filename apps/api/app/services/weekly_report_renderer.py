@@ -83,8 +83,10 @@ class WeeklyReportData:
     team_health_label: str = "At Risk"
     pillars: list[PillarScore] = field(default_factory=list)
 
-    # Progress card
-    predictability_pct: Optional[int] = None
+    # Progress card. ``predictability_pct`` is float (one-decimal) post
+    # Hotfix 10 — the score formula now returns 96.4-style values rather
+    # than a rounded int. Comparisons + str() rendering still work.
+    predictability_pct: Optional[float] = None
     current_sprint_name: Optional[str] = None
     current_sprint_pct: Optional[int] = None
     velocity_delta_pct: Optional[int] = None
@@ -787,11 +789,22 @@ async def collect_weekly_report_data(
         logger.warning("Team health collection failed: %s", e)
 
     # -------- Predictability & velocity delta --------
-    # Predictability = average (completed / planned) ratio across recent sprints.
-    # This is the SAME data shown on the stakeholder dashboard, so the numbers
-    # match what users see in the app.
-    predictability_pct = None
-    velocity_delta_pct = None
+    # Uses the same predictability_engine as the Stakeholder dashboard and the
+    # /api/analytics endpoint, so the weekly PDF number matches what the PO
+    # and stakeholders see in the app. Symmetric (over-delivery penalised),
+    # recency-weighted, variance-aware. See services.predictability_engine.
+    predictability_pct: Optional[float] = None
+    velocity_delta_pct: Optional[int] = None
+    try:
+        from .predictability_engine import compute_predictability
+        pred = await compute_predictability(db, org_id, project_id)
+        if pred.score is not None:
+            predictability_pct = pred.score
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Predictability computation failed: %s", e)
+
+    # Velocity delta — unchanged: compare last vs prior sprint's completed SP
+    # from the team-health engine's trend.
     try:
         velocity_trend = (
             (health or {}).get("pillars", {})
@@ -800,13 +813,6 @@ async def collect_weekly_report_data(
             .get("velocityTrend")
             or []
         )
-        ratios = [
-            min(1.0, (t.get("completed") or 0) / (t.get("planned") or 1))
-            for t in velocity_trend
-            if (t.get("planned") or 0) > 0
-        ]
-        if ratios:
-            predictability_pct = int(sum(ratios) / len(ratios) * 100)
         if len(velocity_trend) >= 2:
             last = velocity_trend[-1]
             prev = velocity_trend[-2]
@@ -816,36 +822,10 @@ async def collect_weekly_report_data(
                     / (prev.get("completed") or 1) * 100
                 )
     except Exception as e:  # noqa: BLE001
-        logger.warning("Predictability computation failed: %s", e)
+        logger.warning("Velocity delta computation failed: %s", e)
 
-    # Fallback: derive predictability from sprint-completion ratios on the
-    # raw Iteration rows when the team-health engine didn't return a trend.
-    if predictability_pct is None:
-        try:
-            completed_sprints = [it for it in iterations
-                                 if (it.state or "").lower() in ("completed", "closed", "past")]
-            if completed_sprints:
-                sprint_ratios: list[float] = []
-                for it in completed_sprints[-5:]:  # last 5 completed
-                    wq = await db.execute(
-                        select(
-                            func.count(WorkItem.id),
-                            func.count(WorkItem.id).filter(
-                                WorkItem.status.in_(["DONE", "CLOSED"])
-                            ),
-                        ).where(WorkItem.iteration_id == it.id)
-                    )
-                    row = wq.first()
-                    planned = row[0] or 0
-                    done = row[1] or 0
-                    if planned > 0:
-                        sprint_ratios.append(min(1.0, done / planned))
-                if sprint_ratios:
-                    predictability_pct = int(sum(sprint_ratios) / len(sprint_ratios) * 100)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Predictability fallback failed: %s", e)
-
-    # Last-resort fallback: use the active sprint's current pace.
+    # Last-resort fallback: use the active sprint's current pace if the
+    # engine couldn't produce a number (no completed sprints yet).
     if predictability_pct is None and current_sprint_pct is not None:
         predictability_pct = min(100, current_sprint_pct)
 

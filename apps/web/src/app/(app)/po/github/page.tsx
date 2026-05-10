@@ -119,6 +119,42 @@ interface ActivityFilters {
   timeRange: string; // "7d" default
 }
 
+// ── Hotfix 40 — Sprint overview shape ───────────────────────────────────
+interface SprintStoryPR {
+  number: number;
+  title: string;
+  status: string;
+  url: string;
+  ageDays: number;
+  merged: boolean;
+  ciStatus: string;
+  repoName: string;
+}
+interface SprintStoryRow {
+  id: string;
+  externalId: string | null;
+  title: string;
+  type: string | null;
+  status: string | null;
+  storyPoints: number | null;
+  badge: "done" | "in_review" | "in_progress" | "no_pr";
+  prs: SprintStoryPR[];
+}
+interface SprintOverview {
+  sprint: {
+    id: string;
+    name: string;
+    startDate: string;
+    endDate: string;
+    state: string | null;
+  } | null;
+  stories: SprintStoryRow[];
+  counts: { done: number; in_review: number; in_progress: number; no_pr: number };
+  dailyCommits: { date: string; count: number; isToday: boolean }[];
+  totalCommits: number;
+  insights: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -292,6 +328,9 @@ function GitHubConnectedView() {
   }
   const [projectDevs, setProjectDevs] = useState<ProjectDeveloper[]>([]);
 
+  // Hotfix 40 — Sprint overview (story-PR linkage + heatmap + insights)
+  const [sprintOverview, setSprintOverview] = useState<SprintOverview | null>(null);
+
   // -- Fetch project developers --
   const fetchProjectDevelopers = useCallback(async () => {
     try {
@@ -303,6 +342,22 @@ function GitHubConnectedView() {
       if (res.ok) {
         const data = await res.json();
         setProjectDevs(data.developers ?? []);
+      }
+    } catch {
+      // swallow
+    }
+  }, [selectedProject]);
+
+  // -- Hotfix 40 — Fetch sprint overview ---------------------------------
+  const fetchSprintOverview = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (selectedProject?.internalId) {
+        params.set("project_id", selectedProject.internalId);
+      }
+      const res = await fetch(`/api/github/sprint-overview?${params.toString()}`);
+      if (res.ok) {
+        setSprintOverview(await res.json());
       }
     } catch {
       // swallow
@@ -395,20 +450,23 @@ function GitHubConnectedView() {
     }
   }, [selectedRepo, repos]);
 
-  // Mount: fetch repos + overview + activity + project developers
+  // Mount: fetch repos + overview + activity + project developers + sprint overview
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchRepos(), fetchOverview(), fetchProjectDevelopers()]).finally(() =>
-      setLoading(false)
-    );
-  }, [fetchRepos, fetchOverview, fetchProjectDevelopers]);
+    Promise.all([
+      fetchRepos(),
+      fetchOverview(),
+      fetchProjectDevelopers(),
+      fetchSprintOverview(),
+    ]).finally(() => setLoading(false));
+  }, [fetchRepos, fetchOverview, fetchProjectDevelopers, fetchSprintOverview]);
 
-  // Re-fetch project developers when project changes
+  // Re-fetch project-scoped data when project changes
   useEffect(() => {
     fetchProjectDevelopers();
-    // Reset developer filter when project changes
+    fetchSprintOverview();
     setActivityFilters((f) => ({ ...f, developer: "" }));
-  }, [selectedProject, fetchProjectDevelopers]);
+  }, [selectedProject, fetchProjectDevelopers, fetchSprintOverview]);
 
   // Repo data on repo change
   useEffect(() => {
@@ -438,6 +496,7 @@ function GitHubConnectedView() {
       fetchOverview(activityFilters.developer || undefined),
       fetchActivity(activityFilters),
       fetchProjectDevelopers(),
+      fetchSprintOverview(),
     ]);
     setRefreshing(false);
   };
@@ -609,6 +668,163 @@ function GitHubConnectedView() {
             ))}
           </div>
         </div>
+
+        {/* ── Sprint Tracker — only visible when "Sprint" tab is active ── */}
+        {activityFilters.timeRange === "sprint" && sprintOverview?.sprint && (
+          <div className="mb-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/30 p-4 space-y-5">
+            {/* Header */}
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <GitBranch size={14} className="text-[var(--color-brand-secondary)]" />
+                <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+                  Sprint Tracker — {sprintOverview.sprint.name}
+                </h3>
+              </div>
+              <span className="text-xs font-medium text-[var(--text-secondary)]">
+                {formatDate(sprintOverview.sprint.startDate)} → {formatDate(sprintOverview.sprint.endDate)}
+              </span>
+            </div>
+
+            {/* Status counts strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="rounded-lg border border-[var(--color-rag-green)]/30 bg-[var(--color-rag-green)]/5 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">Done</p>
+                <p className="text-lg font-bold tabular-nums text-[var(--color-rag-green)]">{sprintOverview.counts.done}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--color-brand-secondary)]/30 bg-[var(--color-brand-secondary)]/5 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">In Review</p>
+                <p className="text-lg font-bold tabular-nums text-[var(--color-brand-secondary)]">{sprintOverview.counts.in_review}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--color-rag-amber)]/30 bg-[var(--color-rag-amber)]/5 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">In Progress</p>
+                <p className="text-lg font-bold tabular-nums text-[var(--color-rag-amber)]">{sprintOverview.counts.in_progress}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/30 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">No PR</p>
+                <p className="text-lg font-bold tabular-nums text-[var(--text-primary)]">{sprintOverview.counts.no_pr}</p>
+              </div>
+            </div>
+
+            {/* Daily commit heatmap */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                  Daily Commits
+                </p>
+                <p className="text-xs text-[var(--text-tertiary)]">
+                  {sprintOverview.totalCommits} total this sprint
+                </p>
+              </div>
+              <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, sprintOverview.dailyCommits.length)}, minmax(0, 1fr))` }}>
+                {sprintOverview.dailyCommits.map((d) => {
+                  const max = Math.max(1, ...sprintOverview.dailyCommits.map(x => x.count));
+                  const intensity = d.count / max;
+                  let bg = "bg-[var(--bg-surface-raised)]";
+                  if (d.count > 0) {
+                    if (intensity > 0.66) bg = "bg-[var(--color-rag-green)]";
+                    else if (intensity > 0.33) bg = "bg-[var(--color-rag-green)]/60";
+                    else bg = "bg-[var(--color-rag-green)]/30";
+                  }
+                  return (
+                    <div
+                      key={d.date}
+                      className={cn(
+                        "h-10 rounded flex flex-col items-center justify-center text-[10px] font-semibold",
+                        bg,
+                        d.isToday && "ring-2 ring-[var(--color-brand-secondary)]"
+                      )}
+                      title={`${d.date}: ${d.count} commit${d.count === 1 ? "" : "s"}`}
+                    >
+                      <span className={cn("tabular-nums", d.count > 0 ? "text-white" : "text-[var(--text-tertiary)]")}>
+                        {d.count}
+                      </span>
+                      <span className="text-[8px] text-[var(--text-tertiary)] leading-none mt-0.5">
+                        {new Date(d.date).toLocaleDateString(undefined, { weekday: "short" }).charAt(0)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* AI Insights */}
+            {sprintOverview.insights.length > 0 && (
+              <div className="rounded-lg border border-[var(--color-brand-secondary)]/20 bg-[var(--color-brand-secondary)]/5 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-brand-secondary)] mb-2">
+                  Insights
+                </p>
+                <ul className="space-y-1">
+                  {sprintOverview.insights.map((line, i) => (
+                    <li key={i} className="text-xs text-[var(--text-primary)] leading-relaxed">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Story-PR linkage list */}
+            {sprintOverview.stories.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-2">
+                  Stories &amp; PRs
+                </p>
+                <div className="rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)] max-h-[280px] overflow-y-auto bg-[var(--bg-surface)]">
+                  {sprintOverview.stories.map((s) => {
+                    const badgeCfg: Record<typeof s.badge, { variant: "rag-green" | "brand" | "rag-amber" | "rag-red"; label: string }> = {
+                      done: { variant: "rag-green", label: "Done" },
+                      in_review: { variant: "brand", label: "In Review" },
+                      in_progress: { variant: "rag-amber", label: "In Progress" },
+                      no_pr: { variant: "rag-red", label: "No PR" },
+                    };
+                    const cfg = badgeCfg[s.badge];
+                    return (
+                      <div key={s.id} className="px-3 py-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-[var(--text-primary)] truncate">
+                              {s.externalId && (
+                                <span className="text-[var(--color-brand-secondary)] mr-1.5">{s.externalId}</span>
+                              )}
+                              {s.title}
+                            </p>
+                            {s.prs.length === 0 ? (
+                              <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">No PR linked</p>
+                            ) : (
+                              <div className="mt-1 space-y-0.5">
+                                {s.prs.slice(0, 3).map((pr) => (
+                                  <a
+                                    key={pr.number}
+                                    href={pr.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] hover:text-[var(--color-brand-secondary)] cursor-pointer"
+                                  >
+                                    {pr.merged ? (
+                                      <GitMerge size={11} className="text-[var(--color-rag-green)]" />
+                                    ) : (
+                                      <GitPullRequest size={11} className="text-[var(--color-brand-secondary)]" />
+                                    )}
+                                    <span className="truncate">
+                                      PR #{pr.number} {pr.repoName && `· ${pr.repoName}`} · {pr.merged ? "merged" : `${pr.ageDays}d ${pr.status.toLowerCase()}`}
+                                    </span>
+                                  </a>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <Badge variant={cfg.variant} className="text-[10px] shrink-0">
+                            {cfg.label}
+                          </Badge>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Activity list */}
         {activityLoading ? (

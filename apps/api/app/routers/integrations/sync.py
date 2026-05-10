@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from ...auth.supabase import get_current_user
+from ...auth.supabase import get_current_user, require_po
 from ...database import get_db
 from ...models import ToolConnection
 from ...models.imported_project import ImportedProject
@@ -210,6 +210,10 @@ async def auto_sync_project(
 
     Body: { "projectId": "internal-cuid" }
     """
+    # Hotfix 81 — reverted the require_po gate. Required for devs to
+    # complete the modal's import flow (Select Projects → Import →
+    # data sync). Stored credentials belong to whoever last OAuthed,
+    # so the sync uses their access scope appropriately.
     org_id = current_user.get("organization_id", "demo-org")
     project_id = body.get("projectId")
 

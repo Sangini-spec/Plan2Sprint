@@ -23,7 +23,7 @@ import json
 from datetime import datetime
 from urllib.parse import urlencode, quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select as sa_select
@@ -33,6 +33,58 @@ from ...config import settings
 import httpx
 
 router = APIRouter()
+
+
+# ===================================================================
+# WEBHOOK CONSTANTS — Hotfix 7
+# ===================================================================
+# Public URL where GitHub will POST webhook events. We hard-code the
+# Container Apps FQDN so we don't depend on a request-time URL (which
+# may not be available outside the request scope, e.g. when auto-
+# installing during /update-linked-repos).
+#
+# If the deployment moves to a custom domain, update this constant +
+# re-run install for each linked repo via /install-webhook.
+GITHUB_WEBHOOK_URL = (
+    "https://plan2sprint-api.purplebeach-150945ee.westus3.azurecontainerapps.io"
+    "/api/integrations/github/webhooks"
+)
+GITHUB_WEBHOOK_EVENTS = [
+    "push",
+    "pull_request",
+    "pull_request_review",
+    "check_run",
+    "check_suite",
+]
+
+
+def _new_webhook_secret() -> str:
+    """Generate a 64-char hex secret for HMAC signing GitHub webhooks.
+
+    Stored once per org in ``tool_connections.config["webhook_secret"]``.
+    The same secret is set on every webhook GitHub creates for that org's
+    repos, so the receiver can verify any incoming event by looking up
+    the org by repo and checking the signature against this single key.
+    """
+    import secrets
+    return secrets.token_hex(32)
+
+
+def _verify_github_signature(body_bytes: bytes, signature: str, secret: str) -> bool:
+    """Constant-time HMAC-SHA256 verify of a GitHub webhook payload.
+
+    GitHub's ``X-Hub-Signature-256`` header is in the form
+    ``sha256=<hex>``. We compute the same and compare with
+    ``hmac.compare_digest`` to avoid timing leaks.
+    """
+    import hmac
+    import hashlib
+    if not signature or not signature.startswith("sha256="):
+        return False
+    expected = "sha256=" + hmac.new(
+        secret.encode("utf-8"), body_bytes, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 # ===================================================================
@@ -73,28 +125,87 @@ async def _save_github_connection(
     user_login: str = "", user_name: str = "", avatar_url: str = "",
     linked_repos: list[str] | None = None,
 ):
-    """Create or update GitHub ToolConnection with access token."""
+    """Create or update GitHub ToolConnection with access token.
+
+    Hotfix 6 — per-developer repo persistence.
+    --------------------------------------------
+    Previously this stored `linked_repos` as a single org-level array. When
+    multiple developers each bootstrapped their browser's localStorage to
+    the backend, whichever dev called last would clobber the others'
+    selection — which is exactly the "repos disappear after re-login"
+    symptom we were chasing.
+
+    Now we keep two structures inside ``config``:
+
+      * ``linked_repos_by_user`` : ``{github_username: [repos]}``
+        The authoritative per-developer selection. Each dev's bootstrap
+        only mutates their own bucket — Pallavi's selection can never
+        erase Mike's.
+
+      * ``linked_repos`` : ``[unique_repos]``
+        Auto-derived union of every developer's bucket. Kept for
+        backward compatibility — the sync loop, the webhook
+        `_resolve_org_from_repo`, and the existing PO activity feed
+        all read from here, so they keep working unchanged.
+
+    The helper rebuilds the union every time, so it never grows stale.
+    """
     from ...models.tool_connection import ToolConnection
     from ...models.base import generate_cuid
 
     conn = await _get_github_connection(db, org_id)
-    config = {
-        "user_login": user_login,
-        "user_name": user_name,
-        "avatar_url": avatar_url,
-        "linked_repos": linked_repos or [],
+    existing_config = (conn.config or {}) if conn else {}
+    repos_by_user: dict[str, list[str]] = dict(
+        existing_config.get("linked_repos_by_user") or {}
+    )
+    existing_org_repos: list[str] = list(
+        existing_config.get("linked_repos") or []
+    )
+
+    # Only write into the calling developer's bucket. If user_login is
+    # blank (legacy callers without it) we fall back to the org-level
+    # array so behaviour is unchanged for them.
+    if user_login:
+        repos_by_user[user_login] = list(linked_repos or [])
+        # Migration safety — pre-Hotfix-6 configs only had the org-level
+        # ``linked_repos`` array. The very first dev to save under the new
+        # scheme would otherwise shrink the union to just their own
+        # selection, dropping repos other devs had previously added. We
+        # union the existing org-level array in too so nothing disappears.
+        # If the legacy bucket was already migrated (i.e. sum of per-user
+        # buckets ⊇ existing_org_repos) this is a no-op.
+        merged_union = sorted(
+            {r for v in repos_by_user.values() for r in v}.union(
+                existing_org_repos
+            )
+        )
+    else:
+        # No user attribution → keep behaviour: replace org-level array.
+        merged_union = sorted(set(linked_repos or []))
+
+    new_config = {
+        **existing_config,
+        "user_login": user_login or existing_config.get("user_login", ""),
+        "user_name": user_name or existing_config.get("user_name", ""),
+        "avatar_url": avatar_url or existing_config.get("avatar_url", ""),
+        "linked_repos_by_user": repos_by_user,
+        "linked_repos": merged_union,
     }
 
     if conn:
-        conn.access_token = access_token
-        conn.config = {**(conn.config or {}), **config}
+        # Only overwrite the access_token when the caller actually passed one
+        # — bootstraps that just want to update repos shouldn't blank the
+        # org-level token.
+        if access_token:
+            conn.access_token = access_token
+        conn.config = new_config
     else:
         conn = ToolConnection(
             id=generate_cuid(),
             organization_id=org_id,
             source_tool="GITHUB",
             access_token=access_token,
-            config=config,
+            config=new_config,
         )
         db.add(conn)
 
@@ -157,7 +268,14 @@ async def github_status(
     Returns whether a GitHub ToolConnection exists for this org.
     The PO's integration context uses this to decide if the GitHub
     page should show the connected view.
+
+    Hotfix 6 — when the calling user has their own bucket in
+    ``linked_repos_by_user``, return THAT list instead of the org-wide
+    union, so the developer page rehydrates with their own selection
+    rather than every other developer's repos pooled together.
     """
+    from ...models.team_member import TeamMember
+
     org_id = current_user.get("organization_id", "")
     conn = await _get_github_connection(db, org_id)
     if conn and conn.access_token:
@@ -169,12 +287,45 @@ async def github_status(
         except Exception:
             # Token may be stored unencrypted (legacy) — use as-is
             decrypted_token = conn.access_token or ""
+
+        # Resolve the calling developer's GitHub login (if any) so we can
+        # return their own bucket rather than the org union.
+        # Hotfix 38 — a user may have MULTIPLE TeamMember rows in the
+        # same org (one per project they're on); ``scalar_one_or_none()``
+        # raises ``MultipleResultsFound`` in that case and crashed the
+        # endpoint with 500. Take the first matching row that has a
+        # github_username, or just the first row if none are linked.
+        repos_by_user = cfg.get("linked_repos_by_user") or {}
+        caller_login = ""
+        email = (current_user.get("email") or "").lower()
+        if email:
+            tms = (
+                await db.execute(
+                    sa_select(TeamMember).where(
+                        TeamMember.organization_id == org_id,
+                        TeamMember.email.ilike(email),
+                    )
+                )
+            ).scalars().all()
+            # Prefer a row that already has a github_username linked.
+            tm = next((t for t in tms if t.github_username), tms[0] if tms else None)
+            if tm and tm.github_username:
+                caller_login = tm.github_username
+
+        if caller_login and caller_login in repos_by_user:
+            personal_repos = list(repos_by_user[caller_login])
+        else:
+            personal_repos = cfg.get("linked_repos", [])
+
         return {
             "connected": True,
             "user_login": cfg.get("user_login", ""),
             "user_name": cfg.get("user_name", ""),
             "avatar_url": cfg.get("avatar_url", ""),
-            "linked_repos": cfg.get("linked_repos", []),
+            "linked_repos": personal_repos,
+            "linked_repos_org": cfg.get("linked_repos", []),
+            "linked_repos_by_user": repos_by_user,
+            "caller_login": caller_login or None,
             "access_token": decrypted_token,
             "connected_at": conn.created_at.isoformat() if conn.created_at else None,
         }
@@ -404,22 +555,576 @@ async def save_github_token(
     return {"ok": True}
 
 
+async def _ensure_webhook_secret(conn) -> str:
+    """Return (and lazily seed) the HMAC secret for this org's webhooks.
+
+    Stored inside ``ToolConnection.config["webhook_secret"]`` so it's
+    encrypted-at-rest in the same row as the access token. Generated
+    once per org; same secret used for every webhook GitHub creates
+    against any of that org's linked repos.
+    """
+    cfg = dict(conn.config or {})
+    secret = cfg.get("webhook_secret")
+    if not secret:
+        secret = _new_webhook_secret()
+        cfg["webhook_secret"] = secret
+        conn.config = cfg
+    return secret
+
+
+async def _install_github_webhook_for_repo(
+    repo_full_name: str,
+    access_token: str,
+    secret: str,
+) -> dict:
+    """Install (or detect existing) Plan2Sprint webhook on a single repo.
+
+    Returns a dict describing the outcome — never raises — so the caller
+    can keep going across other repos in a batch even if one fails (e.g.
+    no admin permission on a fork).
+
+    Outcomes:
+      * ``{"status": "created", "hookId": <int>}`` — fresh install
+      * ``{"status": "exists", "hookId": <int>}`` — Plan2Sprint hook
+        was already there (idempotent re-run)
+      * ``{"status": "permission_denied"}`` — 403/404 from GitHub; the
+        access token doesn't have admin on this repo
+      * ``{"status": "error", "detail": "<msg>"}`` — anything else
+    """
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"Bearer {access_token}",
+    }
+    list_url = f"https://api.github.com/repos/{repo_full_name}/hooks"
+    create_url = list_url
+    config_payload = {
+        "url": GITHUB_WEBHOOK_URL,
+        "content_type": "json",
+        "secret": secret,
+        "insecure_ssl": "0",
+    }
+    body = {
+        "name": "web",
+        "active": True,
+        "events": GITHUB_WEBHOOK_EVENTS,
+        "config": config_payload,
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # Idempotency — if a webhook with our URL already exists, reuse
+        # it rather than creating a duplicate. Just match on the URL field
+        # so a manually-added entry pointing at us also gets adopted.
+        try:
+            existing = await client.get(list_url, headers=headers)
+        except Exception as e:
+            return {"status": "error", "detail": f"network: {e!r}"}
+        if existing.status_code in (403, 404):
+            return {"status": "permission_denied"}
+        if existing.is_success:
+            for hook in existing.json():
+                hcfg = (hook or {}).get("config") or {}
+                if hcfg.get("url") == GITHUB_WEBHOOK_URL:
+                    # Already installed; rotate the secret so the new
+                    # value matches what we just persisted, in case the
+                    # org rotated keys.
+                    hook_id = hook.get("id")
+                    try:
+                        await client.patch(
+                            f"{list_url}/{hook_id}",
+                            headers=headers,
+                            json={
+                                "active": True,
+                                "events": GITHUB_WEBHOOK_EVENTS,
+                                "config": config_payload,
+                            },
+                        )
+                    except Exception:
+                        # Even if patch fails, we still consider the hook
+                        # present — caller decides whether to retry.
+                        pass
+                    return {"status": "exists", "hookId": hook_id}
+
+        # No matching hook → create.
+        try:
+            resp = await client.post(create_url, headers=headers, json=body)
+        except Exception as e:
+            return {"status": "error", "detail": f"network: {e!r}"}
+        if resp.status_code in (403, 404):
+            return {"status": "permission_denied"}
+        if resp.status_code == 422:
+            # Per GitHub docs this fires when the hook already exists by
+            # URL. Treat as idempotent success.
+            return {"status": "exists"}
+        if not resp.is_success:
+            return {
+                "status": "error",
+                "detail": f"github {resp.status_code}: {resp.text[:200]}",
+            }
+        data = resp.json() or {}
+        return {"status": "created", "hookId": data.get("id")}
+
+
+async def _install_webhooks_for_repos(
+    db: AsyncSession,
+    conn,
+    repos: list[str],
+    access_token: str,
+) -> dict[str, dict]:
+    """Install webhooks for each repo in ``repos`` and persist hook IDs.
+
+    Per-repo outcome saved into ``conn.config["webhooks_by_repo"]`` so we
+    can show install state in the UI later and avoid re-installing on
+    every refresh.
+    """
+    if not repos or not access_token:
+        return {}
+
+    secret = await _ensure_webhook_secret(conn)
+    cfg = dict(conn.config or {})
+    by_repo: dict[str, dict] = dict(cfg.get("webhooks_by_repo") or {})
+
+    results: dict[str, dict] = {}
+    for repo in repos:
+        # Skip if we already have a confirmed-installed record AND the URL
+        # constant hasn't changed since (rare). This keeps the batch fast
+        # when called from /update-linked-repos.
+        prev = by_repo.get(repo) or {}
+        if prev.get("status") in ("created", "exists") and prev.get("url") == GITHUB_WEBHOOK_URL:
+            results[repo] = prev
+            continue
+        outcome = await _install_github_webhook_for_repo(repo, access_token, secret)
+        outcome["url"] = GITHUB_WEBHOOK_URL
+        from datetime import datetime as _dt, timezone as _tz
+        outcome["lastAttemptAt"] = _dt.now(_tz.utc).isoformat()
+        by_repo[repo] = outcome
+        results[repo] = outcome
+
+    cfg["webhooks_by_repo"] = by_repo
+    conn.config = cfg
+    await db.commit()
+    return results
+
+
+async def _lazy_migrate_webhook_secret(org_id: str) -> None:
+    """Hotfix 50 — Background task that backfills the webhook secret for
+    a legacy connection on its first inbound webhook event.
+
+    Runs from FastAPI BackgroundTasks after the webhook response has
+    already been returned, so the user-facing event handler stays fast
+    and never waits on GitHub's API.
+
+    Race-protection: stamps ``cfg["webhook_migration_started_at"]`` before
+    starting and refuses to start again if the previous attempt began
+    within the last 5 minutes. Worst case if both attempts run is the
+    last-write-wins race on the secret, which is fine because both
+    attempts use the same ``_install_github_webhook_for_repo`` PATCH path
+    and GitHub stores whichever secret got there last.
+    """
+    from datetime import datetime, timezone, timedelta
+    from ...database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        # Re-fetch the connection in this task's session.
+        from sqlalchemy import select as _sa_select
+        from ...models.tool_connection import ToolConnection
+        result = await db.execute(
+            _sa_select(ToolConnection).where(
+                ToolConnection.organization_id == org_id,
+                ToolConnection.source_tool == "GITHUB",
+            )
+        )
+        conn = result.scalar_one_or_none()
+        if not conn or not conn.access_token:
+            _logger.warning(
+                f"[lazy-migrate] org={org_id}: no GitHub connection "
+                f"found, skipping migration"
+            )
+            return
+
+        cfg = dict(conn.config or {})
+
+        # Already migrated? Nothing to do.
+        if cfg.get("webhook_secret"):
+            _logger.info(
+                f"[lazy-migrate] org={org_id}: webhook_secret already set, "
+                f"skipping"
+            )
+            return
+
+        # Race guard — skip if another attempt started within the last 5 min.
+        started_at_iso = cfg.get("webhook_migration_started_at") or ""
+        if started_at_iso:
+            try:
+                started_at = datetime.fromisoformat(started_at_iso)
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - started_at < timedelta(minutes=5):
+                    _logger.info(
+                        f"[lazy-migrate] org={org_id}: another migration "
+                        f"started at {started_at_iso}, skipping (race guard)"
+                    )
+                    return
+            except Exception:
+                pass
+
+        # Mark started, persist, then run.
+        cfg["webhook_migration_started_at"] = datetime.now(timezone.utc).isoformat()
+        conn.config = cfg
+        await db.commit()
+
+        # Hotfix 57 — uniform token resolution via decrypt_token_safe.
+        from ...services.encryption import decrypt_token_safe
+        access_token = decrypt_token_safe(conn.access_token or "")
+        if not access_token:
+            _logger.warning(
+                f"[lazy-migrate] org={org_id}: empty/unresolvable access token, "
+                f"aborting migration"
+            )
+            return
+
+        # Pick repos to migrate.
+        repos = list(cfg.get("linked_repos") or [])
+        if not repos:
+            wbr = cfg.get("webhooks_by_repo") or {}
+            repos = list(wbr.keys())
+        if not repos:
+            _logger.info(
+                f"[lazy-migrate] org={org_id}: no linked repos to migrate"
+            )
+            return
+
+        new_secret = _new_webhook_secret()
+        results: dict[str, dict] = {}
+        for repo in repos:
+            outcome = await _install_github_webhook_for_repo(
+                repo, access_token, new_secret
+            )
+            if outcome.get("status") == "exists":
+                outcome["status"] = "rotated"
+            outcome["url"] = GITHUB_WEBHOOK_URL
+            outcome["rotatedAt"] = datetime.now(timezone.utc).isoformat()
+            results[repo] = outcome
+
+        # Persist new secret only if at least one repo succeeded.
+        any_success = any(
+            r.get("status") in ("rotated", "created") for r in results.values()
+        )
+        if any_success:
+            cfg["webhook_secret"] = new_secret
+            cfg["webhooks_by_repo"] = {**(cfg.get("webhooks_by_repo") or {}), **results}
+            cfg["webhook_secret_rotated_at"] = datetime.now(timezone.utc).isoformat()
+            cfg["webhook_secret_rotated_by"] = "lazy-auto-migration"
+            cfg.pop("webhook_migration_started_at", None)
+            conn.config = cfg
+            await db.commit()
+            _logger.info(
+                f"[lazy-migrate] org={org_id}: SUCCESS — "
+                f"rotated {sum(1 for r in results.values() if r.get('status')=='rotated')} "
+                f"created {sum(1 for r in results.values() if r.get('status')=='created')} "
+                f"perm_denied {sum(1 for r in results.values() if r.get('status')=='permission_denied')} "
+                f"err {sum(1 for r in results.values() if r.get('status')=='error')}"
+            )
+        else:
+            # Clear the in-progress marker so a future event can retry.
+            cfg.pop("webhook_migration_started_at", None)
+            conn.config = cfg
+            await db.commit()
+            _logger.warning(
+                f"[lazy-migrate] org={org_id}: FAILED — no repos rotated. "
+                f"Per-repo outcomes: {results}"
+            )
+
+
+@router.post("/install-webhook")
+async def install_webhook(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """POST /install-webhook — manually (re-)install webhooks for one or more repos.
+
+    Body shape::
+        { "repos": ["owner/name", ...] }   # explicit list, OR
+        { }                                # empty → install for ALL
+                                           # currently-linked repos
+
+    Used both as an automatic step from /update-linked-repos and as a
+    manual "Reinstall webhook" action from the UI when a previous
+    install hit a permission error.
+    """
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_github_connection(db, org_id)
+    if not conn or not conn.access_token:
+        raise HTTPException(400, "GitHub not connected for this org.")
+
+    # Resolve a usable token. Prefer the per-developer token of the
+    # caller (since that's whose admin scope GitHub will check); fall
+    # back to the org-level token.
+    from ...services.encryption import decrypt_token
+    from ...models.team_member import TeamMember
+
+    access_token: str = ""
+    email = (current_user.get("email") or "").lower()
+    if email:
+        tm = (
+            await db.execute(
+                sa_select(TeamMember).where(
+                    TeamMember.organization_id == org_id,
+                    TeamMember.email.ilike(email),
+                )
+            )
+        ).scalar_one_or_none()
+        if tm and tm.github_access_token:
+            # Hotfix 57 (HIGH-5) — was reading plaintext directly.
+            from ...services.encryption import decrypt_token_safe
+            access_token = decrypt_token_safe(tm.github_access_token)
+    if not access_token:
+        from ...services.encryption import decrypt_token_safe
+        access_token = decrypt_token_safe(conn.access_token or "")
+
+    repos = body.get("repos")
+    if not repos:
+        cfg = conn.config or {}
+        repos = list(cfg.get("linked_repos") or [])
+    if not repos:
+        return {"ok": True, "installed": {}, "skipped": "no-repos"}
+
+    results = await _install_webhooks_for_repos(db, conn, repos, access_token)
+    return {"ok": True, "installed": results}
+
+
+@router.post("/backfill-webhook-secrets")
+async def backfill_webhook_secrets(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hotfix 48 — One-time migration: rotate webhook signing secrets onto
+    every existing GitHub webhook for the caller's org.
+
+    Unlike ``/install-webhook``, this **forces** a per-repo PATCH against
+    GitHub (no skip-optimization), guaranteeing the secret stored on
+    ``ToolConnection.config["webhook_secret"]`` matches the secret GitHub
+    will use to sign events. This is what unblocks the strict-rejection
+    behaviour that Hotfix 47 attempted to ship before Hotfix 47b reverted
+    it.
+
+    Operator flow:
+      1. Hit this endpoint once (PO/admin role).
+      2. Inspect the per-repo report — every repo should be ``rotated`` or
+         ``exists`` (which means PATCH succeeded).
+      3. Once all 5 production connections show clean reports, ship
+         Hotfix 49 to flip ``STRICT_GITHUB_WEBHOOK_VERIFICATION`` on.
+
+    Per-repo outcomes mirror ``_install_github_webhook_for_repo`` plus a
+    ``rotated`` status to distinguish "we PATCHed an existing hook" from
+    "we created a new one".
+    """
+    from ...services.encryption import decrypt_token
+    from ...models.team_member import TeamMember
+
+    org_id = current_user.get("organization_id", "demo-org")
+    conn = await _get_github_connection(db, org_id)
+    if not conn or not conn.access_token:
+        raise HTTPException(400, "GitHub not connected for this org.")
+
+    # Resolve a usable token. Prefer the caller's per-developer token
+    # (admin scope on their own repos), fall back to org-level token.
+    access_token: str = ""
+    email = (current_user.get("email") or "").lower()
+    if email:
+        tm = (
+            await db.execute(
+                sa_select(TeamMember).where(
+                    TeamMember.organization_id == org_id,
+                    TeamMember.email.ilike(email),
+                )
+            )
+        ).scalar_one_or_none()
+        if tm and tm.github_access_token:
+            # Hotfix 57 (HIGH-5) — handle both encrypted and legacy plaintext.
+            from ...services.encryption import decrypt_token_safe
+            access_token = decrypt_token_safe(tm.github_access_token)
+    if not access_token:
+        from ...services.encryption import decrypt_token_safe
+        access_token = decrypt_token_safe(conn.access_token or "")
+        if not access_token:
+            raise HTTPException(500, "Cannot resolve GitHub access token")
+
+    # Generate a fresh secret. ``_ensure_webhook_secret`` only creates one
+    # if missing — we want a rotation regardless, so override directly.
+    new_secret = _new_webhook_secret()
+    cfg = dict(conn.config or {})
+    by_repo: dict[str, dict] = dict(cfg.get("webhooks_by_repo") or {})
+
+    # Determine which repos to migrate. Prefer the explicit list in
+    # ``webhooks_by_repo``; fall back to ``linked_repos`` so connections
+    # whose webhook records were never persisted still get covered.
+    repos_to_migrate: list[str] = list(by_repo.keys())
+    if not repos_to_migrate:
+        repos_to_migrate = list(cfg.get("linked_repos") or [])
+
+    results: dict[str, dict] = {}
+    for repo in repos_to_migrate:
+        outcome = await _install_github_webhook_for_repo(
+            repo, access_token, new_secret
+        )
+        # Promote "exists" → "rotated" so the caller can tell at-a-glance
+        # that we actively pushed the new secret to GitHub.
+        if outcome.get("status") == "exists":
+            outcome["status"] = "rotated"
+        outcome["url"] = GITHUB_WEBHOOK_URL
+        from datetime import datetime as _dt, timezone as _tz
+        outcome["rotatedAt"] = _dt.now(_tz.utc).isoformat()
+        by_repo[repo] = outcome
+        results[repo] = outcome
+
+    # Persist the new secret + the per-repo outcomes only after we've
+    # attempted GitHub. If GitHub rejected every PATCH (e.g. expired
+    # token), keep the old secret in place so the live integration
+    # doesn't break further.
+    any_success = any(
+        r.get("status") in ("rotated", "created") for r in results.values()
+    )
+    if any_success:
+        cfg["webhook_secret"] = new_secret
+        cfg["webhooks_by_repo"] = by_repo
+        cfg["webhook_secret_rotated_at"] = (
+            __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat()
+        )
+        conn.config = cfg
+        await db.commit()
+
+    summary = {
+        "ok": any_success,
+        "orgId": org_id,
+        "reposAttempted": len(repos_to_migrate),
+        "reposRotated": sum(1 for r in results.values() if r.get("status") == "rotated"),
+        "reposCreated": sum(1 for r in results.values() if r.get("status") == "created"),
+        "reposPermissionDenied": sum(1 for r in results.values() if r.get("status") == "permission_denied"),
+        "reposError": sum(1 for r in results.values() if r.get("status") == "error"),
+        "secretPersisted": any_success,
+        "perRepo": results,
+    }
+    return summary
+
+
 @router.post("/update-linked-repos")
 async def update_linked_repos(
     body: dict,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """POST /update-linked-repos — update the list of repos tracked for PO monitoring."""
+    """POST /update-linked-repos — update the list of repos tracked for PO monitoring.
+
+    Hotfix 6 — scope writes to the calling developer's bucket so other
+    developers' selections aren't erased. The body may pass an explicit
+    ``userLogin`` (the GitHub login the repo selection belongs to);
+    otherwise we resolve it from the caller's ``team_members`` row.
+
+    Hotfix 7 — after persisting, auto-install webhooks for any newly
+    added repos. Failures (permission, network) are recorded in
+    ``config.webhooks_by_repo`` but don't fail the request.
+    """
+    from ...models.team_member import TeamMember
+
     linked_repos = body.get("linkedRepos", [])
+    explicit_login = (body.get("userLogin") or "").strip()
     org_id = current_user.get("organization_id", "demo-org")
+
+    # Prefer the explicit github login from the body (the dev page knows it
+    # because it just OAuth'd). Fall back to looking it up from the caller's
+    # TeamMember row by email.
+    user_login = explicit_login
+    if not user_login:
+        email = (current_user.get("email") or "").lower()
+        if email:
+            tm = (
+                await db.execute(
+                    sa_select(TeamMember).where(
+                        TeamMember.organization_id == org_id,
+                        TeamMember.email.ilike(email),
+                    )
+                )
+            ).scalar_one_or_none()
+            if tm and tm.github_username:
+                user_login = tm.github_username
+
     conn = await _get_github_connection(db, org_id)
-    if conn:
-        config = conn.config or {}
-        config["linked_repos"] = linked_repos
-        conn.config = config
-        await db.commit()
-    return {"ok": True}
+    if not conn:
+        return {"ok": True, "skipped": "no-connection"}
+
+    config = dict(conn.config or {})
+    repos_by_user: dict[str, list[str]] = dict(
+        config.get("linked_repos_by_user") or {}
+    )
+    existing_org_repos: list[str] = list(config.get("linked_repos") or [])
+    if user_login:
+        repos_by_user[user_login] = list(linked_repos)
+        config["linked_repos_by_user"] = repos_by_user
+        # Recompute the union, but UNION it with the legacy org-level array
+        # too so we don't lose repos that pre-date the per-user scheme.
+        new_org_repos = sorted(
+            {r for v in repos_by_user.values() for r in v}.union(
+                existing_org_repos
+            )
+        )
+        config["linked_repos"] = new_org_repos
+    else:
+        # Last-resort fallback: no attribution → preserve old behaviour.
+        new_org_repos = sorted(set(linked_repos))
+        config["linked_repos"] = new_org_repos
+
+    conn.config = config
+    await db.commit()
+
+    # Hotfix 7 — auto-install webhooks on any repos that don't already
+    # have a Plan2Sprint hook registered. We only attempt newly-added
+    # repos to keep the sync responsive; existing entries with
+    # ``status: created`` or ``status: exists`` are skipped by
+    # ``_install_webhooks_for_repos``. Failures land in
+    # ``config.webhooks_by_repo[repo].status`` and don't fail the
+    # parent request — the PO can retry via /install-webhook later.
+    install_results: dict[str, dict] = {}
+    if new_org_repos:
+        # Determine which token to use for installation:
+        # 1) explicit accessToken from body (dev page passes this on bootstrap)
+        # 2) caller's per-developer token from team_members
+        # 3) org-level token (decrypted)
+        access_token = (body.get("accessToken") or "").strip()
+        if not access_token:
+            from ...models.team_member import TeamMember
+            email = (current_user.get("email") or "").lower()
+            if email:
+                tm = (
+                    await db.execute(
+                        sa_select(TeamMember).where(
+                            TeamMember.organization_id == org_id,
+                            TeamMember.email.ilike(email),
+                        )
+                    )
+                ).scalar_one_or_none()
+                if tm and tm.github_access_token:
+                    from ...services.encryption import decrypt_token_safe
+                    access_token = decrypt_token_safe(tm.github_access_token)
+        if not access_token:
+            from ...services.encryption import decrypt_token_safe
+            access_token = decrypt_token_safe(conn.access_token or "")
+        if access_token:
+            try:
+                install_results = await _install_webhooks_for_repos(
+                    db, conn, new_org_repos, access_token
+                )
+            except Exception:
+                # Never let webhook install fail the repo-link save.
+                install_results = {}
+
+    return {
+        "ok": True,
+        "userLogin": user_login or None,
+        "webhooksInstalled": install_results,
+    }
 
 
 # ===================================================================
@@ -484,8 +1189,14 @@ async def link_developer_github(
             detail="No team member record found for your account. Ask your PO to add you to a project first.",
         )
 
+    # Hotfix 57 (HIGH-5) — encrypt the per-developer GitHub token at
+    # rest. Previously stored plaintext: a SQL injection / DB-read
+    # compromise leaked every developer's GitHub PAT. ``ensure_encrypted``
+    # is idempotent (no-op if already ciphertext) so this is safe to
+    # apply uniformly.
+    from ...services.encryption import ensure_encrypted
     member.github_username = user_login
-    member.github_access_token = access_token
+    member.github_access_token = ensure_encrypted(access_token)
     await db.commit()
 
     return {"ok": True, "githubUsername": user_login}
@@ -1113,6 +1824,7 @@ async def fetch_events(
 @router.post("/webhooks")
 async def receive_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -1131,19 +1843,18 @@ async def receive_webhook(
     _logger = logging.getLogger(__name__)
 
     try:
-        signature = request.headers.get("x-hub-signature-256")
+        signature = request.headers.get("x-hub-signature-256") or ""
         event = request.headers.get("x-github-event")
         body_bytes = await request.body()
         body_text = body_bytes.decode("utf-8")
 
-        # TODO: Verify webhook HMAC-SHA256 signature when webhook_secret is configured
-        # webhook_secret = getattr(settings, "github_webhook_secret", None)
-        # if webhook_secret and not verify_github_signature(body_text, signature, webhook_secret):
-        #     raise HTTPException(status_code=401, detail="Invalid signature")
-
         payload = json.loads(body_text)
 
-        # Determine org_id from the repository's linked connection
+        # Determine org_id from the repository's linked connection.
+        # Resolution happens BEFORE signature verification because we need
+        # the org's webhook_secret (stored on the ToolConnection) to
+        # verify against. If we can't resolve an org, the event isn't for
+        # us → respond 200 so GitHub doesn't endlessly retry.
         repo_full_name = payload.get("repository", {}).get("full_name", "")
         org_id = await _resolve_org_from_repo(db, repo_full_name)
 
@@ -1152,6 +1863,64 @@ async def receive_webhook(
                 f"GitHub webhook for unknown repo '{repo_full_name}' — no org match"
             )
             return {"received": True, "event": event, "skipped": True}
+
+        # Hotfix 49 — Feature-flagged strict signature verification.
+        #
+        # Behaviour matrix:
+        #   | secret stored | STRICT_GITHUB_WEBHOOK_VERIFICATION | action       |
+        #   | yes           | (any)                              | verify HMAC  |
+        #   | no            | "true"                             | reject (401) |
+        #   | no            | (default false)                    | warn + accept|
+        #
+        # Operator workflow:
+        #   1. Run the backfill migration so every active connection has
+        #      a ``webhook_secret`` matching what GitHub holds.
+        #   2. Set ``STRICT_GITHUB_WEBHOOK_VERIFICATION=true`` on the
+        #      Container App env vars and restart.
+        #   3. From that point any inbound webhook for an unmigrated
+        #      legacy connection is rejected with 401.
+        #
+        # The flag lives in env so it can be toggled without redeploying
+        # or even restarting code — just bumping the Container App env
+        # triggers a new revision.
+        import os as _os
+        strict_mode = _os.environ.get(
+            "STRICT_GITHUB_WEBHOOK_VERIFICATION", "false"
+        ).strip().lower() in ("true", "1", "yes", "on")
+
+        conn = await _get_github_connection(db, org_id)
+        cfg = (conn.config or {}) if conn else {}
+        webhook_secret = cfg.get("webhook_secret") or ""
+
+        if webhook_secret:
+            if not _verify_github_signature(body_bytes, signature, webhook_secret):
+                _logger.warning(
+                    f"GitHub webhook signature MISMATCH for repo "
+                    f"'{repo_full_name}'. Ignoring event."
+                )
+                raise HTTPException(status_code=401, detail="Invalid signature")
+        elif strict_mode:
+            _logger.warning(
+                f"[SECURITY] GitHub webhook REJECTED (strict mode) for "
+                f"repo '{repo_full_name}' — connection has no stored "
+                f"secret. Run /backfill-webhook-secrets to migrate."
+            )
+            raise HTTPException(
+                status_code=401,
+                detail="Webhook signing secret not configured for this connection",
+            )
+        else:
+            # Hotfix 50 — schedule a background lazy-migration so the
+            # NEXT event from this connection comes signed and validates.
+            # The current event is accepted unverified (one-shot exposure
+            # window) but every subsequent event is locked down.
+            _logger.warning(
+                f"[SECURITY] GitHub webhook for '{repo_full_name}' has "
+                f"NO stored secret on its connection — accepting THIS "
+                f"event unverified, scheduling background secret "
+                f"migration so future events validate."
+            )
+            background_tasks.add_task(_lazy_migrate_webhook_secret, org_id)
 
         from ...services.github_tracker import (
             process_push_event,

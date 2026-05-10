@@ -32,6 +32,21 @@ class ImportedProject(Base):
     slack_channel_name: Mapped[str | None] = mapped_column(String, nullable=True)  # e.g. "proj-medicare"
     teams_channel_id: Mapped[str | None] = mapped_column(String, nullable=True)  # MS Teams channel ID
     teams_channel_name: Mapped[str | None] = mapped_column(String, nullable=True)  # e.g. "proj-medicare"
+    # Timeline revamp (Sprint 1): the enforceable "ship by" date the dashboard
+    # timeline is measured against. Set automatically when the first AI plan is
+    # approved (copied from SprintPlan.estimated_end_date) and overwritten on
+    # rebalance acceptance. Source=MANUAL when the PO overrode it from the UI —
+    # in that case we keep it across plan regenerations until they reset.
+    target_launch_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    target_launch_source: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "AUTO" | "MANUAL"
+    # Hotfix 83 — idempotency key for the "project past target launch" email.
+    # Holds the ``target_launch_date`` value that was active when we last
+    # fired the alert. The next overdue check sends a new email only when
+    # ``target_launch_date != last_overdue_alert_target_date``, so the
+    # PO never gets two emails for the same missed launch — but if they
+    # rebalance to a new target and that new target ALSO slips, a fresh
+    # email is sent (different key).
+    last_overdue_alert_target_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

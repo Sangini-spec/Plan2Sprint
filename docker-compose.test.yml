@@ -1,0 +1,39 @@
+# =============================================================================
+# Plan2Sprint — Local Test Database
+#
+# Boots a sandboxed Postgres on port 5433 (NOT 5432, so it can't conflict
+# with a local dev DB). Used by:
+#   - apps/api/scripts/seed_test_data.py  → seeds fixture orgs/users/etc.
+#   - apps/api/tests/test_isolation.py    → Pytest cross-tenant + RBAC suite
+#
+# This container is ENTIRELY independent of the production Supabase Postgres.
+# Nothing here ever touches prod data.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d
+#   cd apps/api && DATABASE_URL=postgresql+asyncpg://test:test@localhost:5433/p2s_test alembic upgrade head
+#   cd apps/api && DATABASE_URL=postgresql+asyncpg://test:test@localhost:5433/p2s_test python scripts/seed_test_data.py
+#   cd apps/api && DATABASE_URL=postgresql+asyncpg://test:test@localhost:5433/p2s_test pytest tests/
+#
+#   docker compose -f docker-compose.test.yml down -v   # tear down + delete data
+# =============================================================================
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: plan2sprint-postgres-test
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: p2s_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d p2s_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    tmpfs:
+      # Use a tmpfs volume so wipe-on-restart is instant. Test data is
+      # disposable; we don't need durability.
+      - /var/lib/postgresql/data

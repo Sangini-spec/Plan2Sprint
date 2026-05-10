@@ -301,6 +301,16 @@ export function PhaseManagerSheet({ open, onClose, onPhasesChanged }: PhaseManag
   const [newPhaseName, setNewPhaseName] = useState("");
   const [reassigning, setReassigning] = useState(false);
   const [importing, setImporting] = useState(false);
+  // Two-step import flow (Sprint C): preview the board columns first,
+  // then commit. ``previewing`` = fetching the columns; ``preview`` =
+  // the result waiting for the PO to confirm or cancel.
+  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState<{
+    source: string;
+    columns: string[];
+    existingPhaseCount: number;
+  } | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const apiBase = `/api/projects/${projectId}/phases`;
 
@@ -389,13 +399,64 @@ export function PhaseManagerSheet({ open, onClose, onPhasesChanged }: PhaseManag
     onPhasesChanged?.();
   };
 
-  const handleImportFromBoard = async () => {
+  // Sprint C — Import from Board is now two clicks:
+  //   1) handleStartImport(): fetch the columns from ADO/Jira and show
+  //      them in a confirmation panel inside this sheet (no DB writes).
+  //   2) handleConfirmImport(): commit — wipe existing phases, create
+  //      one phase per column verbatim. The board_column rule attached
+  //      to each phase matches the source_status by exact name (case-
+  //      insensitive), so no keyword guessing happens. Items that don't
+  //      match any column drop into the existing "Unassigned" bucket.
+  const handleStartImport = async () => {
     if (!projectId) return;
+    setPreviewError(null);
+    setPreview(null);
+    setPreviewing(true);
+    try {
+      const res = await fetch(`${apiBase}/board-preview`, {
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        setPreviewError(
+          (detail as { detail?: string })?.detail ||
+            `Could not fetch board columns (HTTP ${res.status}).`
+        );
+        return;
+      }
+      const data = (await res.json()) as {
+        source: string;
+        columns: string[];
+        existingPhaseCount: number;
+      };
+      if (!data.columns?.length) {
+        setPreviewError("No columns returned from the board.");
+        return;
+      }
+      setPreview(data);
+    } catch (e) {
+      setPreviewError(
+        e instanceof Error ? e.message : "Network error fetching board columns."
+      );
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!projectId || !preview) return;
     setImporting(true);
     await apiFetch(`${apiBase}/import-from-board`, { method: "POST" });
     setImporting(false);
+    setPreview(null);
     await fetchPhases();
     onPhasesChanged?.();
+  };
+
+  const handleCancelImport = () => {
+    setPreview(null);
+    setPreviewError(null);
   };
 
   return (
@@ -404,12 +465,16 @@ export function PhaseManagerSheet({ open, onClose, onPhasesChanged }: PhaseManag
         {/* Actions bar */}
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={handleImportFromBoard}
-            disabled={importing}
+            onClick={handleStartImport}
+            disabled={previewing || importing}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--color-brand-secondary)] text-white hover:bg-[var(--color-brand-secondary)]/90 transition-colors disabled:opacity-50"
           >
-            <Import className={cn("h-3.5 w-3.5", importing && "animate-spin")} />
-            {importing ? "Importing..." : "Import from ADO/Jira Board"}
+            <Import className={cn("h-3.5 w-3.5", (previewing || importing) && "animate-spin")} />
+            {previewing
+              ? "Loading columns..."
+              : importing
+                ? "Importing..."
+                : "Import from ADO/Jira Board"}
           </button>
           <button
             onClick={handleReassign}
@@ -427,6 +492,63 @@ export function PhaseManagerSheet({ open, onClose, onPhasesChanged }: PhaseManag
             Delete All & Start Fresh
           </button>
         </div>
+
+        {/* Preview error (shown when fetching columns failed) */}
+        {previewError && (
+          <div className="rounded-lg border border-[var(--color-rag-red)]/30 bg-[var(--color-rag-red)]/5 px-3 py-2 text-xs text-[var(--color-rag-red)]">
+            {previewError}
+          </div>
+        )}
+
+        {/* Preview & confirm panel — shown after the user clicks
+            "Import from ADO/Jira Board" and the columns have been
+            fetched successfully. NO DB writes have happened yet. */}
+        {preview && (
+          <div className="rounded-xl border border-[var(--color-brand-secondary)]/40 bg-[var(--color-brand-secondary)]/[0.04] p-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <Sparkles className="h-4 w-4 text-[var(--color-brand-secondary)] mt-0.5 shrink-0" />
+              <div className="text-xs text-[var(--text-primary)]">
+                <p className="font-semibold">
+                  Found {preview.columns.length} column{preview.columns.length === 1 ? "" : "s"} on your {preview.source.toUpperCase()} board.
+                </p>
+                <p className="mt-1 text-[var(--text-secondary)]">
+                  Replace your current {preview.existingPhaseCount} phase{preview.existingPhaseCount === 1 ? "" : "s"} with these columns? Your work items will be re-bucketed by their <code className="px-1 py-0.5 rounded bg-[var(--bg-surface-raised)] text-[10px]">source_status</code>; anything that does not match a column lands in Unassigned.
+                </p>
+              </div>
+            </div>
+
+            <ul className="flex flex-wrap gap-2">
+              {preview.columns.map((c, i) => (
+                <li
+                  key={`${c}-${i}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-1 text-[11px] font-medium text-[var(--text-primary)]"
+                >
+                  <span className="text-[var(--text-tertiary)] tabular-nums">{i + 1}.</span>
+                  {c}
+                </li>
+              ))}
+            </ul>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                onClick={handleCancelImport}
+                disabled={importing}
+                className="inline-flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--bg-surface-raised)] text-[var(--text-secondary)] hover:bg-[var(--bg-surface-raised)]/80 transition-colors disabled:opacity-50"
+              >
+                <X className="h-3.5 w-3.5" />
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmImport}
+                disabled={importing}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-[var(--color-brand-secondary)] text-white hover:bg-[var(--color-brand-secondary)]/90 transition-colors disabled:opacity-50"
+              >
+                <Import className={cn("h-3.5 w-3.5", importing && "animate-spin")} />
+                {importing ? "Replacing..." : `Replace with ${preview.columns.length} board columns`}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Delete all confirmation */}
         <DeleteAllDialog

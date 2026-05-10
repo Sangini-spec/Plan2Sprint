@@ -32,6 +32,13 @@ class Organization(Base):
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     slug: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    # Hotfix 85 — canonical form of ``name`` (lower-cased, trimmed) used
+    # as the matching key during signup AND at Settings → org-rename. Two
+    # POs typing the same organisation name are mapped to the same row
+    # via this column; without it, the original signup logic appended a
+    # random ID suffix to the slug and produced parallel "C2A" orgs.
+    # Always set together with ``name`` via ``services.org_lookup``.
+    name_canonical: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
     timezone: Mapped[str] = mapped_column(
         String, nullable=False, default="America/New_York"
     )

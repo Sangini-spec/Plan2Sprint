@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge, Button } from "@/components/ui";
 import { useSelectedProject } from "@/lib/project/context";
+import { useAuth } from "@/lib/auth/context";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,7 +35,9 @@ interface StandupItem {
 }
 
 interface IndividualReport {
+  id?: string;
   teamMemberId: string;
+  email?: string;
   displayName: string;
   completed: StandupItem[];
   inProgress: StandupItem[];
@@ -117,6 +120,9 @@ function formatTime(iso: string): string {
 
 export function MyStandupReport() {
   const { selectedProject } = useSelectedProject();
+  const { appUser } = useAuth();
+  const userEmail = (appUser?.email ?? "").toLowerCase();
+  const userName = appUser?.full_name ?? "";
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewMonth, setViewMonth] = useState(new Date().getMonth());
   const [viewYear, setViewYear] = useState(new Date().getFullYear());
@@ -164,29 +170,41 @@ export function MyStandupReport() {
   // ---------- Fetch standup data from API ----------
   const projectId = selectedProject?.internalId || "";
 
-  const fetchStandup = useCallback(async (dateKey: string) => {
+  const fetchStandup = useCallback(async (dateKey: string, force = false) => {
     setLoading(true);
     try {
       const pidParam = projectId ? `&projectId=${projectId}` : "";
-      const res = await fetch(`/api/standups?date=${dateKey}${pidParam}`);
+      const forceParam = force ? "&forceRefresh=true" : "";
+      const res = await fetch(`/api/standups?date=${dateKey}${pidParam}${forceParam}`);
       const data = await res.json();
 
+      // Hotfix 42: pick the LOGGED-IN USER's report — was previously
+      // grabbing reports[0], which surfaced whichever developer's report
+      // happened to be first in the list (e.g. someone else entirely).
+      // Hotfix 43: dropped displayName fallback for the same identity-leak
+      // reason as my-standup-compact.tsx — strict email match only.
+      // Hotfix (today): backend now resolves `mine` server-side using
+      // email + displayName fallback. Use that first; fall back to
+      // local email scan for older API revisions.
       const reports: IndividualReport[] = data.individualReports ?? [];
-      if (reports.length > 0) {
-        const r = reports[0];
+      let r: IndividualReport | undefined =
+        (data.mine as IndividualReport | undefined) ?? undefined;
+      if (!r && userEmail) {
+        r = reports.find((x) => (x.email ?? "").toLowerCase() === userEmail);
+      }
+      if (r) {
         setReport(r);
-        // Build a project-aware summary from the filtered items
         const cCount = r.completed?.length ?? 0;
         const ipCount = r.inProgress?.length ?? 0;
         const bCount = r.blockers?.length ?? 0;
         if (cCount + ipCount + bCount > 0) {
-          setNarrative(r.narrativeText || data.summaryText || "");
+          setNarrative(r.narrativeText || "");
         } else {
           setNarrative("No tracked activity for this project on this date.");
         }
       } else {
         setReport(null);
-        setNarrative("No standup data for this date.");
+        setNarrative("No standup data for you on this date.");
       }
       setNotes(data.submittedNotes ?? []);
     } catch {
@@ -198,6 +216,11 @@ export function MyStandupReport() {
   }, [projectId]);
 
   useEffect(() => { fetchStandup(selectedKey); }, [selectedKey, fetchStandup]);
+
+  // Hotfix 42: refetch when the user identity becomes available — the very
+  // first render runs with empty user, which previously cached a wrong-user
+  // result and never refreshed.
+  useEffect(() => { if (userEmail) fetchStandup(selectedKey); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [userEmail, userName]);
 
   // ---------- Submit note ----------
   const handleSubmit = async () => {
@@ -383,7 +406,7 @@ export function MyStandupReport() {
             icon={MessageSquareText}
             actions={
               <button
-                onClick={() => fetchStandup(selectedKey)}
+                onClick={() => fetchStandup(selectedKey, true)}
                 className="flex items-center gap-1 text-[10px] text-[var(--text-tertiary)] hover:text-[var(--color-brand-secondary)] transition-colors cursor-pointer"
               >
                 <RefreshCw size={10} /> Refresh

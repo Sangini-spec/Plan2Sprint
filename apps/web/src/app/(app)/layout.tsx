@@ -96,7 +96,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
           <AppTopbar onMenuClick={() => setMobileOpen(!mobileOpen)} />
           <main className="flex-1 overflow-y-auto">
-            <div className="p-4 sm:p-5 lg:p-6">
+            {/* Hotfix 8 — cap content width for laptop consistency.
+                Without this, a 13" / 15" / 17" laptop each stretches
+                content edge-to-edge → "different boundary on different
+                devices" symptom. 1600px is wide enough to keep dense
+                Gantt grids comfortable but narrow enough that the
+                content doesn't drift to the edges of an ultrawide
+                monitor. mx-auto centres it; padding is preserved
+                from the previous setup so phones still get tight
+                gutters. */}
+            <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-5 lg:p-6">
               {children}
             </div>
           </main>

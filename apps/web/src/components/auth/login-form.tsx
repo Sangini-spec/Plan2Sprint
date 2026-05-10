@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import { getSupabase } from "@/lib/supabase/shared-client";
 import {
   Eye,
   EyeOff,
   AlertCircle,
   ArrowRight,
+  Loader2,
 } from "lucide-react";
 import { ROLE_DASHBOARD_ROUTES, type UserRole } from "@/lib/types/auth";
 
@@ -16,20 +17,51 @@ const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
-// Singleton Supabase client
-let _supabase: ReturnType<typeof createClient> | null = null;
-function getSupabase() {
-  if (!_supabase) _supabase = createClient();
-  return _supabase;
+// Hotfix 61 — only allow ``next`` redirects to internal app paths so a
+// malicious crafted ``/login?next=https://attacker.com`` link can't
+// hijack the post-login navigation. Anything that isn't a same-origin
+// path falls back to the role-based default.
+function safeNextPath(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("/")) return null;
+  if (raw.startsWith("//")) return null;
+  return raw;
+}
+
+// Hotfix 88 — recognise PKCE-flavoured failures from /auth/callback so
+// we can auto-retry rather than bouncing the user back without explanation.
+// Common values logged by /auth/callback's exchangeCodeForSession when
+// the verifier cookie went missing (Brave's strict cookies; Chrome with
+// third-party cookies blocked; race between dual Supabase singletons).
+const PKCE_FAILURE_REASONS = [
+  "invalid_grant",
+  "invalid_request",
+  "expired_token",
+  "code verifier",
+  "exchange_failed",
+];
+function looksLikePkceFailure(reason: string | null): boolean {
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return PKCE_FAILURE_REASONS.some((p) => r.includes(p));
 }
 
 export function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const nextPath = safeNextPath(searchParams.get("next"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Hotfix 88 — surface OAuth callback failures + drive the silent retry.
+  // ``oauthFailure`` is the formatted message we render in the red banner;
+  // ``autoRetrying`` is the brief "Completing sign-in…" indicator while
+  // signInWithOAuth fires again under the hood.
+  const [oauthFailure, setOauthFailure] = useState<string | null>(null);
+  const [autoRetrying, setAutoRetrying] = useState(false);
+  const autoRetryFiredRef = useRef(false);
 
   const demoFallback = (userEmail: string) => {
     localStorage.setItem(
@@ -47,14 +79,49 @@ export function LoginForm() {
     router.push("/po");
   };
 
+  // Hotfix 61 — propagate ?next=/invite/<token> through the OAuth round
+  // trip so Google / Microsoft invitees also land on the invite-accept
+  // page after auth completes (not just password-login users).
+  const oauthRedirect = () => {
+    const base = `${window.location.origin}/auth/callback`;
+    return nextPath ? `${base}?next=${encodeURIComponent(nextPath)}` : base;
+  };
+
+  // ``promptMode`` defaults to "select_account" so the picker shows on
+  // a fresh sign-in (Hotfix 14), but is set to "none" during the
+  // Hotfix 88 auto-retry path so Google reuses the just-established
+  // session instead of asking the user to pick again.
+  const triggerGoogleOAuth = async (promptMode: "select_account" | "none" = "select_account") => {
+    const supabase = getSupabase();
+    const opts: Record<string, string> = {};
+    if (promptMode !== "none") opts.prompt = promptMode;
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: oauthRedirect(),
+        queryParams: opts,
+      },
+    });
+  };
+
+  const triggerMicrosoftOAuth = async (promptMode: "select_account" | "none" = "select_account") => {
+    const supabase = getSupabase();
+    const opts: Record<string, string> = { scope: "email profile openid" };
+    if (promptMode !== "none") opts.prompt = promptMode;
+    await supabase.auth.signInWithOAuth({
+      provider: "azure",
+      options: {
+        scopes: "email profile openid",
+        redirectTo: oauthRedirect(),
+        queryParams: opts,
+      },
+    });
+  };
+
   const handleGoogleLogin = async () => {
     if (isDemoMode) { demoFallback(""); return; }
     try {
-      const supabase = getSupabase();
-      await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
-      });
+      await triggerGoogleOAuth("select_account");
     } catch {
       console.warn("Google OAuth failed, falling back to demo");
       demoFallback("");
@@ -64,19 +131,61 @@ export function LoginForm() {
   const handleMicrosoftLogin = async () => {
     if (isDemoMode) { demoFallback(""); return; }
     try {
-      const supabase = getSupabase();
-      await supabase.auth.signInWithOAuth({
-        provider: "azure",
-        options: {
-          scopes: "email profile openid",
-          redirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
+      await triggerMicrosoftOAuth("select_account");
     } catch {
       console.warn("Microsoft OAuth failed, falling back to demo");
       demoFallback("");
     }
   };
+
+  // Hotfix 88 — when the user lands here with ``?error=auth_callback_failed``,
+  // surface a banner explaining the bounceback AND, for known PKCE
+  // races, fire one silent retry of the OAuth flow without
+  // ``prompt=select_account``. Google reuses the recent session and
+  // typically lands on /dashboard without making the user pick again.
+  // We only fire ONCE per page load (autoRetryFiredRef) so we don't
+  // create a redirect loop if the retry also fails.
+  useEffect(() => {
+    if (isDemoMode) return;
+    const errParam = searchParams.get("error");
+    const reason = searchParams.get("reason");
+    if (errParam !== "auth_callback_failed") return;
+
+    // Always display a banner so the user understands what happened.
+    if (looksLikePkceFailure(reason)) {
+      setOauthFailure(
+        "Sign-in didn't complete on the first try. Trying again automatically…",
+      );
+    } else {
+      setOauthFailure(
+        `Sign-in failed${reason ? ` (${decodeURIComponent(reason)})` : ""}. ` +
+          "Please try again.",
+      );
+    }
+
+    // Auto-retry only on PKCE-style failures, only once per page load.
+    if (looksLikePkceFailure(reason) && !autoRetryFiredRef.current) {
+      autoRetryFiredRef.current = true;
+      setAutoRetrying(true);
+      // Best-effort guess the provider — most users are on Google.
+      // Microsoft users will see the banner + can click manually.
+      const provider = (searchParams.get("provider") || "google").toLowerCase();
+      const fire = provider === "azure" || provider === "microsoft"
+        ? () => triggerMicrosoftOAuth("none")
+        : () => triggerGoogleOAuth("none");
+      // Small delay so the banner renders before the redirect kicks in.
+      const t = setTimeout(() => {
+        fire().catch(() => {
+          setAutoRetrying(false);
+          setOauthFailure(
+            "Automatic retry didn't work. Please click Continue with Google manually."
+          );
+        });
+      }, 350);
+      return () => clearTimeout(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,7 +221,11 @@ export function LoginForm() {
 
       const userRole = data?.user?.user_metadata?.role as UserRole | undefined;
       const dashboardRoute = userRole ? (ROLE_DASHBOARD_ROUTES[userRole] ?? "/po") : "/po";
-      router.push(dashboardRoute);
+      // Hotfix 61 — honour ?next=/invite/<token> so an unauthenticated
+      // invitee who hits the invite page lands back on it after login,
+      // instead of being dumped on /po and having to find their email
+      // again.
+      router.push(nextPath || dashboardRoute);
       router.refresh();
     } catch {
       console.warn("Supabase auth unreachable, falling back to demo login");
@@ -170,6 +283,27 @@ export function LoginForm() {
           <span className="bg-[var(--bg-base)] px-4 text-[var(--text-secondary)]">or</span>
         </div>
       </div>
+
+      {/* Hotfix 88 — OAuth callback failure banner. ``autoRetrying``
+          shows a calmer "Completing sign-in…" indicator while the
+          silent re-attempt is in flight; otherwise the banner is the
+          standard red error. */}
+      {oauthFailure && (
+        <div
+          className={
+            autoRetrying
+              ? "flex items-center gap-2 rounded-lg border border-[var(--color-rag-amber)]/30 bg-[var(--color-rag-amber)]/10 px-4 py-3 text-sm text-[var(--color-rag-amber)] mb-3"
+              : "flex items-center gap-2 rounded-lg border border-[var(--color-rag-red)]/30 bg-[var(--color-rag-red)]/10 px-4 py-3 text-sm text-[var(--color-rag-red)] mb-3"
+          }
+        >
+          {autoRetrying ? (
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          ) : (
+            <AlertCircle className="h-4 w-4 shrink-0" />
+          )}
+          {oauthFailure}
+        </div>
+      )}
 
       {/* Email/Password form */}
       <form onSubmit={handleSubmit} className="space-y-3">
@@ -242,7 +376,16 @@ export function LoginForm() {
       {/* Sign up link */}
       <p className="mt-6 text-center text-sm text-[var(--text-secondary)]">
         Don&apos;t have an account?{" "}
-        <Link href="/signup" className="font-medium text-[var(--color-brand-secondary)] hover:underline">
+        {/* Hotfix 65C — preserve ?next= through to the signup page so
+            an invitee who clicked their email link, got bounced to
+            /login, and then hits "Create free account" still ends up
+            back on /invite/<token> after auth (where Hotfix 65A's
+            invitation auto-consume took care of dropping them into the
+            inviter's org). */}
+        <Link
+          href={nextPath ? `/signup?next=${encodeURIComponent(nextPath)}` : "/signup"}
+          className="font-medium text-[var(--color-brand-secondary)] hover:underline"
+        >
           Create free account
         </Link>
       </p>

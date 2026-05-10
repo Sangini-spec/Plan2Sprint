@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from ...auth.supabase import get_current_user
+from ...auth.supabase import get_current_user, require_po
 from ...database import get_db
 from ...config import settings
 from ...models import ToolConnection
@@ -151,6 +151,7 @@ async def delete_connection(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_po(current_user)  # Hotfix 56 (MED-3) — PO/admin only
     org_id = current_user.get("organization_id", "demo-org")
     query = select(ToolConnection).where(
         ToolConnection.id == connection_id,

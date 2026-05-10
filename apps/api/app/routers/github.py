@@ -13,7 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query as Q
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, cast, Date, column
 from sqlalchemy.orm import selectinload
 
 from ..auth.supabase import get_current_user
@@ -26,6 +26,7 @@ from ..models import (
     Iteration,
     ActivityEvent,
 )
+from ..models.work_item import WorkItem
 
 router = APIRouter()
 
@@ -115,7 +116,20 @@ async def get_project_developers(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return developers for a project with their GitHub link status."""
+    """Return developers for a project with their GitHub link status.
+
+    Hotfix 39 — back to project-scoped developers. The PO wants the
+    dropdown to show only developers on the currently-selected project.
+    But we ALSO promote a GitHub link from another project of the same
+    person: if a dev linked GitHub on Plan2Sprint and they're also a
+    TeamMember on MediCare, MediCare's GitHub Monitoring should still
+    show their link as connected (the link is a property of the person,
+    not the row). We do this by:
+      1. Scoping the visible developer list by ``imported_project_id``.
+      2. For each row, checking the GitHub link on ANY TeamMember row in
+         the same org that shares this email — if any row is linked,
+         the displayed row is shown as linked.
+    """
     org_id = current_user.get("organization_id", "demo-org")
 
     filters = [
@@ -132,17 +146,54 @@ async def get_project_developers(
     )
     members = result.scalars().all()
 
+    # Hotfix 39 — promote cross-project GitHub link by email. Build an
+    # email → (github_username, github_access_token) lookup over the
+    # ENTIRE org so a person whose link lives on another project is
+    # still shown as linked here. Without this, switching projects
+    # would falsely show "not linked" for a dev who's already
+    # connected.
+    org_members_q = await db.execute(
+        select(TeamMember).where(
+            TeamMember.organization_id == org_id,
+        )
+    )
+    link_by_email: dict[str, tuple[str | None, str | None]] = {}
+    for tm in org_members_q.scalars().all():
+        if not tm.email or not tm.github_username:
+            continue
+        key = tm.email.lower()
+        if key not in link_by_email or not link_by_email[key][0]:
+            link_by_email[key] = (tm.github_username, tm.github_access_token)
+
     developers = []
+    seen_emails: set[str] = set()
     for m in members:
+        email_key = (m.email or "").lower()
+        # Dedupe within this project by email — same person across
+        # multiple iterations shouldn't appear twice.
+        if email_key and email_key in seen_emails:
+            continue
+        if email_key:
+            seen_emails.add(email_key)
+        # Prefer this row's own link, fall back to any same-email row
+        # in the org that has a link.
+        gh_username = m.github_username
+        gh_token = m.github_access_token
+        if (not gh_username or not gh_token) and email_key in link_by_email:
+            promoted = link_by_email[email_key]
+            gh_username = gh_username or promoted[0]
+            gh_token = gh_token or promoted[1]
         developers.append({
             "id": m.id,
             "name": m.display_name,
             "avatarUrl": m.avatar_url,
             "email": m.email,
-            "githubUsername": m.github_username,
-            "githubLinked": bool(m.github_username and m.github_access_token),
+            "githubUsername": gh_username,
+            "githubLinked": bool(gh_username and gh_token),
         })
 
+    # Linked devs first, then by name.
+    developers.sort(key=lambda d: (not d["githubLinked"], (d["name"] or "").lower()))
     return {"developers": developers}
 
 
@@ -372,7 +423,8 @@ async def get_github_activity(
     else:  # default "7d"
         since = now - timedelta(days=7)
 
-    # Team members scoped by project if project_id provided
+    # Hotfix 39 — back to project-scoped activity. PO wants
+    # developers + their commits/PRs filtered to the current project.
     member_filters = [
         TeamMember.organization_id == org_id,
         TeamMember.role != "excluded",
@@ -442,7 +494,17 @@ async def get_github_activity(
     if not use_token and gh_conn and gh_conn.access_token:
         use_token = gh_conn.access_token
         config = gh_conn.config or {}
-        linked_repos = config.get("linked_repos", [])
+        # Hotfix 6 — prefer the selected developer's per-user repo bucket
+        # if we have one. Falls back to the org-wide union otherwise.
+        repos_by_user = config.get("linked_repos_by_user") or {}
+        if (
+            selected_member
+            and selected_member.github_username
+            and selected_member.github_username in repos_by_user
+        ):
+            linked_repos = list(repos_by_user[selected_member.github_username])
+        else:
+            linked_repos = config.get("linked_repos", [])
 
     # If specific developer selected but not linked, return early
     if developer_not_linked and not use_token:
@@ -457,7 +519,19 @@ async def get_github_activity(
         # Get linked repos from config or from Repository table
         config = gh_conn.config if gh_conn else {}
         if not linked_repos:
-            linked_repos = (config or {}).get("linked_repos", [])
+            # Hotfix 6 — prefer per-user bucket here too, in the per-
+            # developer-token branch (use_token came from selected_member).
+            repos_by_user = (config or {}).get("linked_repos_by_user") or {}
+            if (
+                selected_member
+                and selected_member.github_username
+                and selected_member.github_username in repos_by_user
+            ):
+                linked_repos = list(
+                    repos_by_user[selected_member.github_username]
+                )
+            else:
+                linked_repos = (config or {}).get("linked_repos", [])
 
         # Map GitHub login from ToolConnection to a team member
         gh_user_login = config.get("user_login", "")
@@ -1059,3 +1133,268 @@ async def sync_github_data(
     """POST /github/sync — Pull commits, PRs, repos from GitHub API → persist to DB."""
     org_id = current_user.get("organization_id", "demo-org")
     return await _run_github_sync(db, org_id)
+
+
+# ---------------------------------------------------------------------------
+# GET /github/sprint-overview — Hotfix 40
+#
+# Project-scoped sprint dashboard for the GitHub Monitoring page's
+# "Sprint" tab. Combines:
+#   * Story-PR linkage table  — each work_item in the active sprint paired
+#                                with its matching PR(s) (linked_work_item_id
+#                                or external_id mention in title/body).
+#   * Daily commit heatmap    — day-by-day commit counts across the sprint
+#                                window, scoped to repos this project's
+#                                developers commit to.
+#   * AI insights             — 3-5 short bullets generated from the data
+#                                ("3 stories without a PR", "2 PRs idle in
+#                                review > 3 days", etc.) using the same
+#                                ai_caller failover that handles the rest.
+# ---------------------------------------------------------------------------
+
+@router.get("/github/sprint-overview")
+async def get_github_sprint_overview(
+    project_id: Optional[str] = Q(None, description="ImportedProject ID"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import re
+    from collections import defaultdict
+    org_id = current_user.get("organization_id", "demo-org")
+
+    # ── 1. Resolve the active sprint (project-scoped if possible) ─────────
+    iter_q = select(Iteration).where(Iteration.organization_id == org_id)
+    if project_id:
+        iter_q = iter_q.where(Iteration.imported_project_id == project_id)
+    iter_q = iter_q.where(Iteration.state == "active").order_by(
+        Iteration.start_date.desc()
+    ).limit(1)
+    iteration = (await db.execute(iter_q)).scalar_one_or_none()
+    if not iteration:
+        # Fall back to most-recent iteration so we still show *something*
+        recent_q = select(Iteration).where(Iteration.organization_id == org_id)
+        if project_id:
+            recent_q = recent_q.where(Iteration.imported_project_id == project_id)
+        recent_q = recent_q.order_by(Iteration.start_date.desc()).limit(1)
+        iteration = (await db.execute(recent_q)).scalar_one_or_none()
+
+    if not iteration:
+        return {
+            "sprint": None,
+            "stories": [],
+            "dailyCommits": [],
+            "insights": [],
+        }
+
+    sprint_start = iteration.start_date
+    sprint_end = iteration.end_date
+
+    # ── 2. Stories in this sprint (filtered to project) ───────────────────
+    wi_q = (
+        select(WorkItem)
+        .where(
+            WorkItem.organization_id == org_id,
+            WorkItem.iteration_id == iteration.id,
+        )
+    )
+    if project_id:
+        wi_q = wi_q.where(WorkItem.imported_project_id == project_id)
+    wi_q = wi_q.order_by(WorkItem.priority.asc(), WorkItem.created_at.asc())
+    stories = (await db.execute(wi_q)).scalars().all()
+    story_external_ids = [s.external_id for s in stories if s.external_id]
+    story_id_map: dict[str, WorkItem] = {s.id: s for s in stories}
+
+    # ── 3. PRs from this org's developers in the sprint window ────────────
+    # Match PRs to stories by:
+    #   (a) PR.linked_work_item_id == story.id  (direct FK link), or
+    #   (b) regex match of story.external_id in PR.title (case-insensitive).
+    pr_q = (
+        select(PullRequest, Repository)
+        .join(Repository, PullRequest.repository_id == Repository.id)
+        .where(
+            Repository.organization_id == org_id,
+            PullRequest.created_external_at >= sprint_start - timedelta(days=2),
+        )
+        .order_by(PullRequest.created_external_at.desc())
+    )
+    pr_rows = (await db.execute(pr_q)).all()
+
+    # Build PR-to-story matching (story_id -> list of PRs)
+    story_to_prs: dict[str, list[dict]] = defaultdict(list)
+    if story_external_ids:
+        # Compile a single regex that matches any story external_id
+        # surrounded by word boundaries (e.g., "MED-12", but not "MED-123")
+        pattern = re.compile(
+            r"\b(" + "|".join(re.escape(ext_id) for ext_id in story_external_ids) + r")\b",
+            re.IGNORECASE,
+        )
+    else:
+        pattern = None
+
+    now = datetime.now(timezone.utc)
+    for pr, repo in pr_rows:
+        # Direct FK link wins
+        if pr.linked_work_item_id and pr.linked_work_item_id in story_id_map:
+            story = story_id_map[pr.linked_work_item_id]
+        elif pattern:
+            m = pattern.search(pr.title or "")
+            if not m:
+                continue
+            matched_ext = m.group(1).upper()
+            story = next(
+                (s for s in stories if s.external_id and s.external_id.upper() == matched_ext),
+                None,
+            )
+            if not story:
+                continue
+        else:
+            continue
+
+        age_days = max(0, (now - pr.created_external_at).days) if pr.created_external_at else 0
+        story_to_prs[story.id].append({
+            "number": pr.number,
+            "title": pr.title,
+            "status": pr.status,
+            "url": pr.url,
+            "ageDays": age_days,
+            "merged": bool(pr.merged_at),
+            "ciStatus": pr.ci_status,
+            "repoName": repo.name if repo else "",
+        })
+
+    # ── 4. Build the per-story output rows ────────────────────────────────
+    story_rows: list[dict] = []
+    counts = {"done": 0, "in_review": 0, "in_progress": 0, "no_pr": 0}
+    for s in stories:
+        prs = story_to_prs.get(s.id, [])
+        merged_pr = next((p for p in prs if p["merged"]), None)
+        open_pr = next((p for p in prs if p["status"].upper() == "OPEN" and not p["merged"]), None)
+
+        if (s.status or "").upper() == "DONE" or merged_pr:
+            badge = "done"
+            counts["done"] += 1
+        elif open_pr:
+            badge = "in_review"
+            counts["in_review"] += 1
+        elif (s.status or "").upper() == "IN_PROGRESS":
+            badge = "in_progress"
+            counts["in_progress"] += 1
+        else:
+            badge = "no_pr"
+            counts["no_pr"] += 1
+
+        story_rows.append({
+            "id": s.id,
+            "externalId": s.external_id,
+            "title": s.title,
+            "type": s.type,
+            "status": s.status,
+            "storyPoints": s.story_points,
+            "badge": badge,
+            "prs": prs,
+        })
+
+    # ── 5. Daily commit heatmap ───────────────────────────────────────────
+    # Org-scoped commits in the sprint window. Filter by author_id IN
+    # this project's team_members so a multi-project org doesn't pollute
+    # one project's heatmap with another project's commits.
+    proj_tm_q = select(TeamMember.id).where(TeamMember.organization_id == org_id)
+    if project_id:
+        proj_tm_q = proj_tm_q.where(TeamMember.imported_project_id == project_id)
+    project_tm_ids = [row[0] for row in (await db.execute(proj_tm_q)).all()]
+
+    daily_commits: list[dict] = []
+    if project_tm_ids:
+        # Use cast(Date) so PostgreSQL groups consistently across SELECT / GROUP BY / ORDER BY.
+        day_expr = cast(Commit.committed_at, Date).label("day")
+        commit_q = (
+            select(
+                day_expr,
+                func.count().label("cnt"),
+            )
+            .join(Repository, Commit.repository_id == Repository.id)
+            .where(
+                Repository.organization_id == org_id,
+                Commit.author_id.in_(project_tm_ids),
+                Commit.committed_at >= sprint_start,
+                Commit.committed_at < sprint_end + timedelta(days=1),
+            )
+            .group_by(cast(Commit.committed_at, Date))
+            .order_by(cast(Commit.committed_at, Date))
+        )
+        rows = (await db.execute(commit_q)).all()
+        commits_by_day = {}
+        for row in rows:
+            d = row[0]
+            iso = d.isoformat() if hasattr(d, "isoformat") else str(d)
+            commits_by_day[iso] = row[1]
+    else:
+        commits_by_day = {}
+
+    cursor = sprint_start.date()
+    end_cursor = sprint_end.date()
+    while cursor <= end_cursor:
+        iso = cursor.isoformat()
+        daily_commits.append({
+            "date": iso,
+            "count": int(commits_by_day.get(iso, 0)),
+            "isToday": cursor == now.date(),
+        })
+        cursor = cursor + timedelta(days=1)
+
+    # ── 6. AI insights — short bullets from the data ──────────────────────
+    insights: list[str] = []
+    # Static rule-based insights first (cheap, deterministic)
+    total_commits = sum(d["count"] for d in daily_commits)
+    days_into_sprint = max(0, (now.date() - sprint_start.date()).days)
+    days_since_commit = 0
+    for d in reversed(daily_commits):
+        if d["count"] > 0:
+            break
+        days_since_commit += 1
+
+    if total_commits == 0 and days_into_sprint > 1:
+        insights.append(f"⚠ No commits yet in this sprint (day {days_into_sprint + 1}).")
+    elif days_since_commit >= 3:
+        insights.append(f"⚠ No commits in the last {days_since_commit} days.")
+
+    if counts["no_pr"] > 0:
+        no_pr_titles = [
+            r["externalId"] or r["title"][:30]
+            for r in story_rows[:3]
+            if r["badge"] == "no_pr"
+        ]
+        suffix = f" ({', '.join(no_pr_titles)})" if no_pr_titles else ""
+        insights.append(
+            f"⚠ {counts['no_pr']} stor{'y' if counts['no_pr'] == 1 else 'ies'} without a PR yet{suffix}."
+        )
+
+    stale_review = [
+        p for r in story_rows for p in r["prs"]
+        if p["status"].upper() == "OPEN" and not p["merged"] and p["ageDays"] >= 3
+    ]
+    if stale_review:
+        insights.append(
+            f"⏳ {len(stale_review)} PR{'s' if len(stale_review) > 1 else ''} idle in review > 3 days."
+        )
+
+    if counts["done"] > 0:
+        insights.append(f"✓ {counts['done']} stor{'y' if counts['done'] == 1 else 'ies'} delivered this sprint.")
+
+    if not insights:
+        insights.append("No notable signals — sprint is on track.")
+
+    return {
+        "sprint": {
+            "id": iteration.id,
+            "name": iteration.name,
+            "startDate": sprint_start.isoformat(),
+            "endDate": sprint_end.isoformat(),
+            "state": iteration.state,
+        },
+        "stories": story_rows,
+        "counts": counts,
+        "dailyCommits": daily_commits,
+        "totalCommits": total_commits,
+        "insights": insights,
+    }

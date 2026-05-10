@@ -39,6 +39,13 @@ from .sprint_constraint import SprintConstraint
 from .project_phase import ProjectPhase, PhaseAssignmentRule
 from .invitation import Invitation
 from .note import Note
+from .org_join_request import (
+    OrgJoinRequest,
+    STATUS_PENDING as JOIN_REQ_PENDING,
+    STATUS_APPROVED as JOIN_REQ_APPROVED,
+    STATUS_REJECTED as JOIN_REQ_REJECTED,
+    STATUS_CANCELLED as JOIN_REQ_CANCELLED,
+)
 
 __all__ = [
     "Base",
@@ -88,4 +95,5 @@ __all__ = [
     "PhaseAssignmentRule",
     "Invitation",
     "Note",
+    "OrgJoinRequest",
 ]

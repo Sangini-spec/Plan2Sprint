@@ -24,6 +24,7 @@ const statusBadgeVariant: Record<
   SYNCED_PARTIAL: "rag-amber",
   UNDONE: "rag-red",
   EXPIRED: "rag-red",
+  FAILED: "rag-red",
 };
 
 interface PlanData {

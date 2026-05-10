@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -16,8 +16,21 @@ const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
+// Hotfix 65C — accept ``?next=/invite/<token>`` from the chain
+// (invite → login → signup) and propagate it through Supabase email
+// confirmation back to /auth/callback. Same-origin path guard prevents
+// open-redirects.
+function safeNextPath(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("/")) return null;
+  if (raw.startsWith("//")) return null;
+  return raw;
+}
+
 export function SignupForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const nextPath = safeNextPath(searchParams.get("next"));
   const [organizationName, setOrganizationName] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -84,7 +97,14 @@ export function SignupForm() {
               organization_name: organizationName,
               role: "product_owner",
             },
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
+            // Hotfix 65C — carry ?next=/invite/<token> through the
+            // confirmation email so the post-confirm callback puts the
+            // user back on the invite page (where Hotfix 65A's
+            // server-side auto-accept already moved them into the
+            // inviter's org).
+            emailRedirectTo: nextPath
+              ? `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}`
+              : `${window.location.origin}/auth/callback`,
           },
         }),
         timeout,

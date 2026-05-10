@@ -35,10 +35,36 @@ logger = logging.getLogger(__name__)
 
 def _since_cutoff(last_report_date: datetime | None) -> datetime:
     """Determine the cutoff time for 'recent' activity.
-    If there's a previous report, use that date; otherwise look back 24h."""
-    if last_report_date:
-        return last_report_date
-    return datetime.now(timezone.utc) - timedelta(hours=24)
+
+    Returns 7 days ago. This covers:
+      • Today's closes (mid-day standup catches morning work)
+      • Yesterday's closes (Tuesday morning still shows Monday's work)
+      • A full sprint's worth of recent work — devs often want to see
+        their delivery streak from the past week, not just the prior
+        24-72 hours, because they batch closes (close 10 tickets one
+        evening) and gaps shouldn't blank the dashboard.
+
+    Three earlier iterations of this function were all too narrow:
+
+      A. `return last_report_date` (delta-since-last-regen). Combined
+         with the upsert path overwriting `completed_items`, regens
+         after the morning auto-gen wiped out the morning's items.
+
+      B. Start of today UTC. Items closed yesterday were dropped the
+         moment UTC midnight rolled over, so the dashboard read empty
+         for the developer who'd just shipped 14 tickets the night
+         before.
+
+      C. 72h rolling window. Better, but still missed work older than
+         3 days even when the developer hadn't closed anything since
+         — leaving the standup blank between batches.
+
+    7 days is the right "recent" window for daily standups: enough
+    to span weekend gaps + slow weeks, narrow enough to stay
+    relevant. Items older than 7 days are sprint history, not
+    recent activity, and belong in the retrospective view instead.
+    """
+    return datetime.now(timezone.utc) - timedelta(days=7)
 
 
 def _build_narrative(
@@ -52,13 +78,14 @@ def _build_narrative(
     """Build a readable narrative text from structured standup data."""
     parts: list[str] = []
 
-    # Opening
+    # Opening — "recently" rather than "newly" because the cutoff is
+    # a rolling 72h window (Mon morning still surfaces Friday's work).
     if completed:
         titles = ", ".join(c["title"][:40] for c in completed[:3])
         suffix = f" and {len(completed) - 3} more" if len(completed) > 3 else ""
-        parts.append(f"{member_name} completed {titles}{suffix}.")
+        parts.append(f"{member_name} recently completed {titles}{suffix}.")
     else:
-        parts.append(f"{member_name} has no newly completed items.")
+        parts.append(f"{member_name} has no recently completed items.")
 
     # In progress
     if in_progress:
@@ -210,7 +237,16 @@ async def generate_member_standup(
     commit_count = commit_count_result.scalar() or 0
 
     # ── 5. Blockers ──
-    # Check for any open blocker flags from recent standup reports
+    # Check for any open blocker flags from recent standup reports.
+    #
+    # Auto-resolution: when the underlying work item has since moved to
+    # a terminal status (DONE/CLOSED/RESOLVED), the blocker is no longer
+    # real — but BlockerFlag rows weren't being closed when their ticket
+    # got closed elsewhere in ADO. Result: stale "stalled_ticket" /
+    # "review_bottleneck" blockers persisted in the dashboard for items
+    # the developer had already shipped. We now auto-resolve those rows
+    # on the fly: set resolved_at + status="RESOLVED" so they don't show
+    # up in this report or any subsequent fetch.
     blocker_query = (
         select(BlockerFlag)
         .join(StandupReport, BlockerFlag.standup_report_id == StandupReport.id)
@@ -219,19 +255,46 @@ async def generate_member_standup(
             StandupReport.organization_id == org_id,
             BlockerFlag.status.in_(["OPEN", "ACKNOWLEDGED", "ESCALATED"]),
         )
-        .limit(10)
+        .limit(20)
     )
     blocker_result = await db.execute(blocker_query)
-    blocker_flags = blocker_result.scalars().all()
+    blocker_flags = list(blocker_result.scalars().all())
 
-    blockers = [
-        {
+    # Look up current status of every referenced ticket in one query.
+    ticket_refs = {
+        bf.ticket_reference for bf in blocker_flags if bf.ticket_reference
+    }
+    terminal_ext_ids: set[str] = set()
+    if ticket_refs:
+        from ._planning_status import TERMINAL_STATUSES
+        wi_status_rows = (
+            await db.execute(
+                select(WorkItem.external_id, WorkItem.status).where(
+                    WorkItem.organization_id == org_id,
+                    WorkItem.external_id.in_(ticket_refs),
+                )
+            )
+        ).all()
+        terminal_ext_ids = {
+            ext for ext, status in wi_status_rows
+            if (status or "").upper() in TERMINAL_STATUSES
+        }
+
+    blockers: list[dict] = []
+    now_utc = datetime.now(timezone.utc)
+    for bf in blocker_flags:
+        if bf.ticket_reference and bf.ticket_reference in terminal_ext_ids:
+            # Underlying ticket is now done. Auto-resolve the flag and
+            # skip it for this standup. The next regen won't even see
+            # it because the WHERE clause filters by status.
+            bf.status = "RESOLVED"
+            bf.resolved_at = now_utc
+            continue
+        blockers.append({
             "description": bf.description,
             "ticketId": bf.ticket_reference,
             "status": bf.status,
-        }
-        for bf in blocker_flags
-    ]
+        })
 
     # ── Skip if no activity at all ──
     if not completed and not in_progress and not blockers and commit_count == 0:
@@ -441,10 +504,17 @@ async def generate_all_standups(
     if today.weekday() in (5, 6):
         return {"generated": 0, "skipped": "weekend"}
 
-    # Find all team members
+    # Find all team members — only developers and engineering managers
+    # generate standup reports. Hotfix 46: strict allowlist prevents PO /
+    # stakeholder TM rows (which the user has confirmed exist for the same
+    # human) from ever creating a StandupReport in the first place.
+    DEV_ROLES = ("developer", "engineering_manager")
     member_result = await db.execute(
         select(TeamMember)
-        .where(TeamMember.organization_id == org_id)
+        .where(
+            TeamMember.organization_id == org_id,
+            TeamMember.role.in_(DEV_ROLES),
+        )
         .order_by(TeamMember.display_name)
     )
     members = member_result.scalars().all()

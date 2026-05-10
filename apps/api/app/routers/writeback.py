@@ -47,7 +47,13 @@ async def _execute_ado_writeback(
     """Call ADO REST API to patch a work item."""
     import httpx
 
-    access_token = conn.access_token
+    # Hotfix 55/57 — decrypt the connection's access_token before
+    # using it as a Bearer credential. ``decrypt_token_safe`` handles
+    # both encrypted ciphertext AND legacy plaintext (gho_/raw values
+    # we found in production during the schema-drift audit), so this
+    # one line covers all storage shapes.
+    from ..services.encryption import decrypt_token_safe
+    access_token = decrypt_token_safe(conn.access_token or "")
     config = conn.config or {}
     org_url = config.get("orgUrl", config.get("base_url", ""))
 
@@ -80,7 +86,9 @@ async def _execute_jira_writeback(
     """Call Jira REST API to update an issue."""
     import httpx
 
-    access_token = conn.access_token
+    # Hotfix 55/57 — see _execute_ado_writeback above.
+    from ..services.encryption import decrypt_token_safe
+    access_token = decrypt_token_safe(conn.access_token or "")
     config = conn.config or {}
     cloud_id = config.get("cloudId", config.get("cloud_id", ""))
     base_url = f"https://api.atlassian.com/ex/jira/{cloud_id}" if cloud_id else ""

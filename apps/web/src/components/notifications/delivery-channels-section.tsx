@@ -153,26 +153,31 @@ export function DeliveryChannelsSection() {
   const { role } = useAuth();
   const isAdmin = isPORole(role);
 
-  // Real connection status from backend
-  const { slack, teams, refreshStatus } = useChannelStatus();
+  // Hotfix 73/74 — non-PO callers use /me/status (per-user link state).
+  // PO callers keep the org-level /status.
+  const { slack, teams, refreshStatus } = useChannelStatus(
+    isAdmin ? "org" : "me"
+  );
 
-  // Pre-flight modal state
+  // Pre-flight modal state (PO only)
   const [preflightPlatform, setPreflightPlatform] = useState<
-    "slack" | "teams" | null
-  >(null);
-
-  // Developer org-check state
-  const [devCheckPlatform, setDevCheckPlatform] = useState<
     "slack" | "teams" | null
   >(null);
 
   function handleConnect(platform: "slack" | "teams") {
     if (isAdmin) {
-      // PO/Admin: show preflight transparency modal before OAuth
+      // PO/Admin: show preflight transparency modal before workspace OAuth
       setPreflightPlatform(platform);
     } else {
-      // Developer: check if org already has this connected
-      setDevCheckPlatform(platform);
+      // Hotfix 73/74 — Developer/Stakeholder: directly initiate per-user
+      // OAuth. The DevOrgCheckPanel email-match flow is gone — we now do
+      // proper OAuth so the user picks (and consents to) which Slack /
+      // Teams identity gets linked.
+      const endpoint =
+        platform === "slack"
+          ? "/api/integrations/slack/me/connect"
+          : "/api/integrations/teams/me/connect";
+      window.location.href = endpoint;
     }
   }
 
@@ -182,7 +187,7 @@ export function DeliveryChannelsSection() {
 
     if (!platform) return;
 
-    // Redirect to OAuth endpoint
+    // Redirect to OAuth endpoint (PO workspace install)
     const endpoint =
       platform === "slack"
         ? "/api/integrations/slack/connect"
@@ -210,20 +215,10 @@ export function DeliveryChannelsSection() {
           </p>
         </div>
 
-        {/* Developer org-check panel (shows above cards when triggered) */}
-        <AnimatePresence>
-          {devCheckPlatform && !isAdmin && (
-            <DevOrgCheckPanel
-              platform={devCheckPlatform}
-              orgConnected={
-                devCheckPlatform === "slack"
-                  ? slack.state === "connected"
-                  : teams.state === "connected"
-              }
-              onClose={() => setDevCheckPlatform(null)}
-            />
-          )}
-        </AnimatePresence>
+        {/* Hotfix 73/74 — DevOrgCheckPanel removed. Non-PO callers now go
+            through proper per-user OAuth via /me/connect, which gives them
+            consent + identity selection for free. The card itself shows
+            their per-user link state via useChannelStatus("me"). */}
 
         {/* Platform cards — side by side on sm+, stacked on mobile */}
         <div className="grid gap-4 sm:grid-cols-2">

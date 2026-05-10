@@ -22,6 +22,7 @@ const statusBadgeVariant: Record<SprintPlanStatus, "rag-green" | "rag-amber" | "
   SYNCED_PARTIAL: "rag-amber",
   UNDONE: "rag-red",
   EXPIRED: "rag-red",
+  FAILED: "rag-red",
 };
 
 interface PlanData {
@@ -36,6 +37,15 @@ interface PlanData {
   successProbability: number | null;
 }
 
+// Hotfix 32 — Step E: in-flight stub returned alongside the READY plan
+// so the badge stays correct while the data continues to display.
+interface InflightStub {
+  id: string;
+  status: "GENERATING" | "FAILED";
+  riskSummary: string | null;
+  createdAt: string | null;
+}
+
 interface SprintGenerationPanelProps {
   onViewPlan?: () => void;
 }
@@ -44,6 +54,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
   const router = useRouter();
   const { selectedProject } = useSelectedProject();
   const [plan, setPlan] = useState<PlanData | null>(null);
+  const [inflight, setInflight] = useState<InflightStub | null>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +71,9 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
       invalidateCache(`/api/sprints${params}`);
       const res = await cachedFetch(`/api/sprints${params}`);
       if (res.ok) {
-        const data = res.data as { plan?: PlanData };
+        const data = res.data as { plan?: PlanData; inflight?: InflightStub | null };
+        // Hotfix 32 — Step E: read inflight stub if present (GENERATING / FAILED).
+        setInflight(data.inflight ?? null);
         if (data.plan) {
           setPlan(data.plan);
           return;
@@ -81,6 +94,62 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
 
   // ---------- Generate / Optimize sprint plan ----------
 
+  // Hotfix 24 — backend now accepts the request and runs generation in
+  // the background, returning 202 immediately. We poll the existing
+  // ``/api/sprints/plan`` endpoint until the latest plan flips out of
+  // GENERATING. This avoids the 30-60s proxy connection drop that used
+  // to surface as "Sprint generation failed: Internal Server Error"
+  // even though the plan was successfully landing in DB.
+  const POLL_INTERVAL_MS = 3000;
+  const POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 min hard cap
+
+  // Hotfix 27 — poll a SPECIFIC plan id returned by the POST handler.
+  // Previously we waited for "any new plan id different from the one
+  // we knew about", which falsely matched stale FAILED rows from earlier
+  // attempts and killed the spinner before the new generation began.
+  const pollUntilDone = async (
+    projectId: string,
+    targetPlanId: string,
+    onSuccess: () => void,
+    onFailure: (msg: string) => void,
+  ) => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      try {
+        invalidateCache(`/api/sprints?projectId=${projectId}`);
+        const r = await fetch(`/api/sprints?projectId=${projectId}`);
+        if (!r.ok) continue;
+        const wrap = (await r.json().catch(() => null)) as
+          | { plan?: PlanData }
+          | null;
+        const latest = wrap?.plan;
+        if (!latest || !latest.id) continue;
+        // Only react when the response shows OUR plan id (the stub the
+        // POST just created). Anything else is leftover state.
+        if (latest.id !== targetPlanId) continue;
+        if (latest.status && latest.status !== "GENERATING") {
+          await fetchSprintData();
+          if (latest.status === "FAILED") {
+            onFailure(
+              latest.riskSummary ||
+                "Sprint generation failed. Try again or check API logs.",
+            );
+          } else {
+            onSuccess();
+          }
+          return;
+        }
+      } catch {
+        // network blip — keep polling until timeout
+      }
+    }
+    onFailure(
+      "Sprint generation is still running after 5 minutes. " +
+        "Refresh the page to see the latest status.",
+    );
+  };
+
   const handleOptimize = async () => {
     if (!selectedProject) return;
 
@@ -95,18 +164,37 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
         }),
       });
 
+      // Backend returns 202 Accepted (Hotfix 24) — kick off polling.
       if (res.ok) {
-        // Invalidate cache to ensure fresh data
+        const acceptedBody = (await res.json().catch(() => null)) as
+          | { planId?: string }
+          | null;
+        const targetPlanId = acceptedBody?.planId;
+        if (!targetPlanId) {
+          // Defensive — shouldn't happen post-Hotfix-27, but if backend
+          // didn't return a planId, fall back to refresh-only behaviour.
+          invalidateCache("/api/sprints");
+          await fetchSprintData();
+          setGenerating(false);
+          return;
+        }
         invalidateCache("/api/sprints");
-        // Refresh the panel to show the new plan
-        await fetchSprintData();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setError(data.detail || data.error || `Generation failed (${res.status})`);
+        await pollUntilDone(
+          selectedProject.internalId,
+          targetPlanId,
+          () => setGenerating(false),
+          (msg) => {
+            setError(msg);
+            setGenerating(false);
+          },
+        );
+        return;
       }
+      const data = await res.json().catch(() => ({}));
+      setError(data.detail || data.error || `Generation failed (${res.status})`);
+      setGenerating(false);
     } catch {
       setError("Cannot reach backend. Ensure the API server is running on port 8000.");
-    } finally {
       setGenerating(false);
     }
   };
@@ -127,15 +215,33 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
       });
 
       if (res.ok) {
+        const acceptedBody = (await res.json().catch(() => null)) as
+          | { planId?: string }
+          | null;
+        const targetPlanId = acceptedBody?.planId;
+        if (!targetPlanId) {
+          invalidateCache("/api/sprints");
+          await fetchSprintData();
+          setGenerating(false);
+          return;
+        }
         invalidateCache("/api/sprints");
-        await fetchSprintData();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setError(data.detail || data.error || `Regeneration failed (${res.status})`);
+        await pollUntilDone(
+          selectedProject.internalId,
+          targetPlanId,
+          () => setGenerating(false),
+          (msg) => {
+            setError(msg);
+            setGenerating(false);
+          },
+        );
+        return;
       }
+      const data = await res.json().catch(() => ({}));
+      setError(data.detail || data.error || `Regeneration failed (${res.status})`);
+      setGenerating(false);
     } catch {
       setError("Cannot reach backend. Ensure the API server is running on port 8000.");
-    } finally {
       setGenerating(false);
     }
   };
@@ -152,23 +258,37 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
     );
   }
 
-  // No plan exists yet — show optimize button
+  // No plan exists yet — show optimize button. Hotfix 32 — Step E:
+  // surface inflight state so the user sees "Generating..." instead of
+  // "Optimize" while the first plan is being created.
   if (!plan) {
+    const isGenerating = inflight?.status === "GENERATING" || generating;
+    const failedSummary = inflight?.status === "FAILED" ? inflight.riskSummary : null;
     return (
       <DashboardPanel
         title="Sprint Plan Generation"
         icon={Zap}
         actions={
-          selectedProject ? (
-            <Badge variant="brand">{selectedProject.name}</Badge>
-          ) : null
+          <div className="flex items-center gap-2">
+            {selectedProject && <Badge variant="brand">{selectedProject.name}</Badge>}
+            {inflight?.status === "GENERATING" && (
+              <Badge variant="brand">GENERATING</Badge>
+            )}
+            {inflight?.status === "FAILED" && (
+              <Badge variant="rag-red">GENERATION FAILED</Badge>
+            )}
+          </div>
         }
       >
         <div className="space-y-4">
           <p className="text-sm text-[var(--text-secondary)]">
-            {selectedProject
-              ? `No sprint plan generated yet for "${selectedProject.name}". Use AI to optimize assignments based on team velocity, skills, and capacity.`
-              : "Select a project to generate a sprint plan."}
+            {!selectedProject
+              ? "Select a project to generate a sprint plan."
+              : isGenerating
+                ? `The AI is analyzing the backlog for "${selectedProject.name}". This typically takes 30-90 seconds.`
+                : failedSummary
+                  ? failedSummary
+                  : `No sprint plan generated yet for "${selectedProject.name}". Use AI to optimize assignments based on team velocity, skills, and capacity.`}
           </p>
 
           <Button
@@ -176,12 +296,17 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
             size="md"
             className="w-full"
             onClick={handleOptimize}
-            disabled={!selectedProject || generating}
+            disabled={!selectedProject || isGenerating}
           >
-            {generating ? (
+            {isGenerating ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Optimizing...
+                Generating...
+              </>
+            ) : failedSummary ? (
+              <>
+                <RefreshCw className="h-4 w-4" />
+                Try Again
               </>
             ) : (
               <>
@@ -228,6 +353,14 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
           <Badge variant={statusBadgeVariant[plan.status]}>
             {plan.status.replace(/_/g, " ")}
           </Badge>
+          {/* Hotfix 32 (revised) — subtle inline inflight indicator,
+              does NOT override the plan status badge */}
+          {inflight?.status === "GENERATING" && (
+            <span className="flex items-center gap-1 text-[10px] text-[var(--color-brand-secondary)]">
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+              Generating
+            </span>
+          )}
         </div>
       }
     >
@@ -288,7 +421,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
         )}
 
         {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] p-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)] p-3">
           <div className="text-center">
             <p className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider mb-1">
               Total SP

@@ -125,7 +125,9 @@ async def get_health_dashboard(
 ):
     """Full 6-pillar team health dashboard."""
     from ..services.team_health_engine import get_full_health_dashboard
-    org_id = current_user.get("organization_id", "demo-org")
+    # Hotfix 36 — cross-org stakeholder access
+    from .dashboard import _resolve_org_for_project
+    org_id = await _resolve_org_for_project(db, current_user, projectId)
     try:
         result = await get_full_health_dashboard(db, org_id, projectId)
         logger.info(f"Health dashboard keys: {list(result.keys())}, orgWorkingHours: {result.get('orgWorkingHours')}")

@@ -12,14 +12,14 @@ PATCH /api/sprints           — Update plan status (approve/reject)
 
 import logging
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from ..auth.supabase import get_current_user
+from ..auth.supabase import get_current_user, require_po
 from ..database import get_db
 from ..models import Iteration, SprintPlan, WorkItem, TeamMember
-from ..models.sprint_plan import PlanAssignment
+from ..models.sprint_plan import PlanAssignment, SprintPlan
 from ..services.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -108,23 +108,59 @@ async def get_sprint_overview(
     else:
         health = "RED"
 
-    # Get latest non-rejected sprint plan, scoped to project if provided
-    # Skip REJECTED plans so the previous good plan surfaces after rejection
-    plan_query = (
-        select(SprintPlan)
-        .where(
-            SprintPlan.organization_id == org_id,
-            SprintPlan.status != "REJECTED",
-        )
+    # Get sprint plans for this scope. Hotfix 32 — Step B.
+    # We split plans into two buckets:
+    #   * "ready"     — plans the user actually wants to see data from
+    #                   (PENDING_REVIEW / APPROVED / SYNCED / SYNCED_PARTIAL /
+    #                    UNDONE / EXPIRED / SUPERSEDED — anything that has
+    #                    real assignments persisted)
+    #   * "inflight"  — plans currently being generated or that just failed
+    #                   (GENERATING / FAILED). These hold no useful data
+    #                   for the dashboard yet.
+    # If a regen has just been kicked off, the GENERATING stub used to
+    # win the "latest" lottery and blank out the user's display. Now we
+    # surface the ready plan as ``plan`` (so all data + rebalance flags
+    # stay visible) and put the in-flight stub on a sibling field
+    # ``inflight`` (so the frontend can still render the generating
+    # badge and poll for completion).
+    READY_STATUSES = (
+        "PENDING_REVIEW", "APPROVED", "SYNCED",
+        "SYNCED_PARTIAL", "UNDONE", "EXPIRED", "SUPERSEDED",
     )
-    # Prefer project-scoped plan; fall back to iteration-scoped
+    INFLIGHT_STATUSES = ("GENERATING", "FAILED")
+
+    base_query = select(SprintPlan).where(SprintPlan.organization_id == org_id)
     if projectId:
-        plan_query = plan_query.where(SprintPlan.project_id == projectId)
+        base_query = base_query.where(SprintPlan.project_id == projectId)
     else:
-        plan_query = plan_query.where(SprintPlan.iteration_id == iteration.id)
-    plan_query = plan_query.order_by(SprintPlan.created_at.desc()).limit(1)
-    plan_result = await db.execute(plan_query)
-    plan = plan_result.scalar_one_or_none()
+        base_query = base_query.where(SprintPlan.iteration_id == iteration.id)
+
+    ready_q = (
+        base_query
+        .where(SprintPlan.status.in_(READY_STATUSES))
+        .order_by(SprintPlan.created_at.desc())
+        .limit(1)
+    )
+    inflight_q = (
+        base_query
+        .where(SprintPlan.status.in_(INFLIGHT_STATUSES))
+        .order_by(SprintPlan.created_at.desc())
+        .limit(1)
+    )
+    plan = (await db.execute(ready_q)).scalar_one_or_none()
+    inflight_plan = (await db.execute(inflight_q)).scalar_one_or_none()
+
+    # Only surface the in-flight stub if it's STRICTLY NEWER than the
+    # ready plan. If the most recent activity is a successful approval
+    # (ready plan newer), there's no relevant in-flight work to show.
+    inflight_data = None
+    if inflight_plan and (plan is None or inflight_plan.created_at > plan.created_at):
+        inflight_data = {
+            "id": inflight_plan.id,
+            "status": inflight_plan.status,
+            "riskSummary": inflight_plan.risk_summary,
+            "createdAt": inflight_plan.created_at.isoformat() if inflight_plan.created_at else None,
+        }
 
     plan_data = None
     if plan:
@@ -173,6 +209,7 @@ async def get_sprint_overview(
         "completionPct": completion_pct,
         "daysRemaining": days_remaining,
         "plan": plan_data,
+        "inflight": inflight_data,
     }
 
 
@@ -190,41 +227,64 @@ async def get_plan_details(
     """Return a full plan with all assignments, work items, and team members."""
     org_id = current_user.get("organization_id", "demo-org")
 
-    # Find the plan — skip REJECTED plans so previous good plan surfaces
+    # Hotfix 32 — Step B: when no specific planId is requested, return
+    # the latest READY plan for the project (so dashboard data persists
+    # during regeneration), and surface any newer GENERATING/FAILED stub
+    # on a sibling ``inflight`` field. When planId IS supplied (e.g. the
+    # frontend polling loop after POST /api/sprints), return whatever
+    # that exact id holds — including GENERATING — because that's how
+    # the polling state machine sees the transition.
+    READY_STATUSES = (
+        "PENDING_REVIEW", "APPROVED", "SYNCED",
+        "SYNCED_PARTIAL", "UNDONE", "EXPIRED", "SUPERSEDED",
+    )
+    INFLIGHT_STATUSES = ("GENERATING", "FAILED")
+
+    inflight_data: dict | None = None
+
     if planId:
         plan_q = select(SprintPlan).where(
             SprintPlan.id == planId,
             SprintPlan.organization_id == org_id,
         )
-    elif projectId:
-        # Latest non-rejected plan for this project
-        plan_q = (
-            select(SprintPlan)
-            .where(
-                SprintPlan.organization_id == org_id,
-                SprintPlan.project_id == projectId,
-                SprintPlan.status != "REJECTED",
-            )
-            .order_by(SprintPlan.created_at.desc())
-            .limit(1)
-        )
+        plan_result = await db.execute(plan_q)
+        plan = plan_result.scalar_one_or_none()
     else:
-        # Default: latest non-rejected plan for this org
-        plan_q = (
+        scope_filter = [SprintPlan.organization_id == org_id]
+        if projectId:
+            scope_filter.append(SprintPlan.project_id == projectId)
+
+        ready_q = (
             select(SprintPlan)
-            .where(
-                SprintPlan.organization_id == org_id,
-                SprintPlan.status != "REJECTED",
-            )
+            .where(*scope_filter, SprintPlan.status.in_(READY_STATUSES))
             .order_by(SprintPlan.created_at.desc())
             .limit(1)
         )
+        plan = (await db.execute(ready_q)).scalar_one_or_none()
 
-    plan_result = await db.execute(plan_q)
-    plan = plan_result.scalar_one_or_none()
+        inflight_q = (
+            select(SprintPlan)
+            .where(*scope_filter, SprintPlan.status.in_(INFLIGHT_STATUSES))
+            .order_by(SprintPlan.created_at.desc())
+            .limit(1)
+        )
+        inflight_plan = (await db.execute(inflight_q)).scalar_one_or_none()
+        if inflight_plan and (plan is None or inflight_plan.created_at > plan.created_at):
+            inflight_data = {
+                "id": inflight_plan.id,
+                "status": inflight_plan.status,
+                "riskSummary": inflight_plan.risk_summary,
+                "createdAt": inflight_plan.created_at.isoformat() if inflight_plan.created_at else None,
+            }
 
     if not plan:
-        return {"plan": None, "assignments": [], "workItems": [], "teamMembers": []}
+        return {
+            "plan": None,
+            "inflight": inflight_data,
+            "assignments": [],
+            "workItems": [],
+            "teamMembers": [],
+        }
 
     # Load assignments
     assign_q = select(PlanAssignment).where(PlanAssignment.sprint_plan_id == plan.id)
@@ -242,10 +302,30 @@ async def get_plan_details(
         )
         work_items = list(wi_result.scalars().all())
 
+    # Hotfix 33f — return ALL project team_members (not just those with
+    # plan assignments). When the PO clicks "+ Include" to add a new
+    # developer, that dev has zero assignments in the current plan but
+    # MUST still appear in the Team Capacity card with 0 SP. Previously
+    # we only returned ids referenced by assignments, so the freshly
+    # added dev was missing on the next refetch and the UI silently
+    # erased them. Now we union the assignment-referenced ids with all
+    # non-excluded team_members of the plan's project.
+    tm_id_union: set[str] = set(tm_ids)
+    if plan.project_id:
+        proj_tm_q = await db.execute(
+            select(TeamMember.id).where(
+                TeamMember.organization_id == org_id,
+                TeamMember.imported_project_id == plan.project_id,
+                TeamMember.role != "excluded",
+            )
+        )
+        for (mid,) in proj_tm_q.all():
+            tm_id_union.add(mid)
+
     team_members = []
-    if tm_ids:
+    if tm_id_union:
         tm_result = await db.execute(
-            select(TeamMember).where(TeamMember.id.in_(tm_ids))
+            select(TeamMember).where(TeamMember.id.in_(list(tm_id_union)))
         )
         team_members = list(tm_result.scalars().all())
 
@@ -360,6 +440,7 @@ async def get_plan_details(
             for tm in team_members
         ],
         "sprintDetails": sprint_details,
+        "inflight": inflight_data,
     }
 
 
@@ -367,19 +448,193 @@ async def get_plan_details(
 # POST /api/sprints — Generate (optimize) sprint plan
 # ---------------------------------------------------------------------------
 
-@router.post("/sprints")
+async def _run_sprint_generation_in_background(
+    org_id: str,
+    project_id: str,
+    iteration_id: str | None,
+    feedback: str | None,
+    source_tool: str,
+    existing_plan_id: str | None = None,
+):
+    """Hotfix 24 — background runner for sprint plan generation.
+
+    Why this exists
+    ---------------
+    The previous synchronous endpoint awaited the full pipeline inline:
+    ADO refresh → velocity calc → Grok call (up to 180s) → result
+    persistence. Intermediate proxies (Container Apps front door, the
+    browser, occasionally Cloudflare-class infra) drop HTTP connections
+    around 30-60s, so the user saw "Internal Server Error" while the
+    backend was still happily generating. The plan would land in DB
+    and appear on refresh, but the UX was broken.
+
+    Now the endpoint creates a fresh DB session inside the task (the
+    request session has been closed by the time this fires), runs the
+    same pipeline, and lets the SprintPlan record's ``status`` field
+    drive the frontend polling state machine
+    (GENERATING → PENDING_REVIEW / FAILED).
+
+    Wraps the whole body in try/except so a failure marks the latest
+    plan record as FAILED rather than leaving it in GENERATING forever.
+    """
+    from ..database import AsyncSessionLocal
+    from ..services.ai_sprint_generator import generate_sprint_plan_ai
+    from ..models.sprint_plan import SprintPlan
+    from sqlalchemy import select as _select
+
+    logger.info(
+        f"[sprint generate] background task START project={project_id} "
+        f"iteration={iteration_id} feedback={'yes' if feedback else 'no'}"
+    )
+    try:
+        async with AsyncSessionLocal() as db:
+            # Refresh source data first (mirrors the old sync flow).
+            if source_tool == "ado":
+                try:
+                    from ..services.ado_fetch import fetch_sprint_context
+                    sprint_ctx = await fetch_sprint_context(db, org_id, project_id)
+                    logger.info(
+                        f"[sprint generate] ADO refresh complete: "
+                        f"{len(sprint_ctx.team_members)} members, "
+                        f"{len(sprint_ctx.current_sprint_items)} sprint items, "
+                        f"{len(sprint_ctx.backlog_items)} backlog items"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[sprint generate] ADO refresh failed, proceeding "
+                        f"with DB data: {e}"
+                    )
+
+            # Run the actual generator. It creates the SprintPlan record,
+            # calls Grok, and persists assignments + status itself.
+            #
+            # Hotfix 32 — capture the return value. The generator
+            # SILENTLY EARLY-RETURNS with ``{"error": "..."}`` on a
+            # missing-data validation failure (no iteration, no
+            # developers, no plannable work items) instead of raising.
+            # The outer try/except below only catches raised exceptions,
+            # so without this check the stub plan would stay in
+            # GENERATING forever and the user would see an infinite
+            # spinner. We now propagate the error message to the stub's
+            # ``risk_summary`` and mark it FAILED so the UI can show an
+            # actionable message ("Mark at least one team member as a
+            # developer") instead of just hanging.
+            result = await generate_sprint_plan_ai(
+                db=db,
+                org_id=org_id,
+                project_id=project_id,
+                iteration_id=iteration_id,
+                feedback=feedback,
+                existing_plan_id=existing_plan_id,
+            )
+            if isinstance(result, dict) and result.get("error"):
+                err_msg = str(result["error"])[:300]
+                logger.warning(
+                    f"[sprint generate] generator returned error for "
+                    f"project={project_id}: {err_msg}"
+                )
+                # Mark the in-flight stub FAILED with the actionable
+                # message — frontend will show it in the toolbar.
+                if existing_plan_id:
+                    stub = (
+                        await db.execute(
+                            _select(SprintPlan).where(
+                                SprintPlan.id == existing_plan_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if stub and stub.status == "GENERATING":
+                        stub.status = "FAILED"
+                        stub.risk_summary = err_msg
+                        await db.commit()
+                # Tell the frontend the in-flight job has terminated
+                # (failure case). Without this the planning page waits
+                # for a websocket event that never arrives.
+                try:
+                    await ws_manager.broadcast(org_id, {
+                        "type": "sprint_plan_updated",
+                        "data": {
+                            "planId": existing_plan_id,
+                            "newStatus": "FAILED",
+                            "error": err_msg,
+                        },
+                    })
+                except Exception:
+                    logger.exception("[sprint generate] WS broadcast (failure) failed")
+            else:
+                # Hotfix 33 — broadcast success so the planning page +
+                # dashboard refresh immediately. Previously the BG task
+                # silently finished and the frontend had no signal that
+                # the new plan was ready, so the user kept seeing the
+                # in-flight indicator until they manually reloaded. The
+                # legacy synchronous handler (now retired) used to
+                # broadcast this event; the BG-task path needs to do
+                # the same.
+                try:
+                    await ws_manager.broadcast(org_id, {
+                        "type": "sprint_plan_generated",
+                        "data": {
+                            "planId": (result or {}).get("planId") or existing_plan_id,
+                            "iterationName": (result or {}).get("iterationName"),
+                            "assignmentCount": (result or {}).get("assignmentCount", 0),
+                            "totalStoryPoints": (result or {}).get("totalStoryPoints", 0),
+                            "confidenceScore": (result or {}).get("confidenceScore", 0),
+                        },
+                    })
+                except Exception:
+                    logger.exception("[sprint generate] WS broadcast (success) failed")
+            logger.info(
+                f"[sprint generate] background DONE project={project_id}"
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.exception(
+            f"[sprint generate] background generation crashed for "
+            f"project {project_id}: {e!r}"
+        )
+        # Best-effort: mark the most recent GENERATING plan for this
+        # project as FAILED so the frontend polling sees a terminal
+        # state instead of an infinite spinner.
+        try:
+            async with AsyncSessionLocal() as db:
+                stuck = (
+                    await db.execute(
+                        _select(SprintPlan)
+                        .where(
+                            SprintPlan.organization_id == org_id,
+                            SprintPlan.project_id == project_id,
+                            SprintPlan.status == "GENERATING",
+                        )
+                        .order_by(SprintPlan.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if stuck:
+                    stuck.status = "FAILED"
+                    stuck.risk_summary = (
+                        f"Generation failed: {str(e)[:240]}"
+                    )
+                    await db.commit()
+        except Exception:
+            logger.exception(
+                "[sprint generate] failed to mark stuck plan as FAILED"
+            )
+
+
+@router.post("/sprints", status_code=202)
 async def generate_sprint_plan_endpoint(
+    background_tasks: BackgroundTasks,
     body: dict | None = None,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Generate a new AI sprint plan for the selected project.
+    Generate a new AI sprint plan for the selected project (Hotfix 24 — async).
 
-    Pipeline:
-      1. Refresh data from ADO (fetch iterations, work items, team members)
-      2. Calculate velocity profiles
-      3. Generate plan via Claude AI (falls back to deterministic optimizer)
+    Returns 202 Accepted immediately after scheduling the work. The
+    actual generation happens in a FastAPI background task. The
+    frontend should poll ``GET /api/sprints/plan?projectId=...`` every
+    few seconds until the returned plan's ``status`` flips from
+    ``GENERATING`` to ``PENDING_REVIEW`` (success) or ``FAILED``.
 
     Body:
     {
@@ -388,6 +643,7 @@ async def generate_sprint_plan_endpoint(
         "feedback": "optional-rejection-feedback-for-regen"
     }
     """
+    require_po(current_user)  # Hotfix 51 (CRIT-2)
     org_id = current_user.get("organization_id", "demo-org")
     body = body or {}
 
@@ -403,32 +659,139 @@ async def generate_sprint_plan_endpoint(
     if not project_id:
         raise HTTPException(status_code=400, detail="projectId is required")
 
-    # Step 1: Refresh data from source tool before planning
+    # Cheap project-exists check before we accept the work.
+    from ..models.imported_project import ImportedProject as IP
+    proj_result = await db.execute(
+        select(IP).where(IP.id == project_id, IP.organization_id == org_id)
+    )
+    project_record = proj_result.scalar_one_or_none()
+    if not project_record:
+        raise HTTPException(status_code=404, detail="Project not found")
+    source_tool = (project_record.source_tool or "ado").lower()
+
+    # Hotfix 27 — create the SprintPlan stub SYNCHRONOUSLY here so the
+    # planId is committed to the DB before we return to the frontend.
+    # Previously the generator created the plan record deep in its prep
+    # work (after several seconds), and the frontend's poll loop would
+    # find a stale FAILED plan from a previous attempt and exit
+    # immediately, killing the spinner. Now POST returns a fresh
+    # planId that the polling can wait for specifically.
+    #
+    # Hotfix 28b — resolve the iteration HERE because the schema has a
+    # NOT NULL constraint on ``iteration_id``. Hotfix 27 had set it to
+    # None and let the generator fill it in later, but the INSERT was
+    # failing immediately with NotNullViolationError. Now we look up
+    # the iteration synchronously (mirroring the generator's logic),
+    # which keeps the stub valid AND saves the generator one query.
+    from ..models.sprint_plan import SprintPlan
+    from ..models.base import generate_cuid
+    from ..models.iteration import Iteration
+
+    resolved_iteration_id: str | None = None
+    if iteration_id:
+        result = await db.execute(
+            select(Iteration).where(Iteration.id == iteration_id)
+        )
+        it = result.scalar_one_or_none()
+        if it:
+            resolved_iteration_id = it.id
+    if not resolved_iteration_id:
+        # Pick the most recent iteration for this project — same rule
+        # the generator uses internally.
+        q = (
+            select(Iteration)
+            .where(Iteration.organization_id == org_id)
+            .where(Iteration.imported_project_id == project_id)
+            .order_by(Iteration.start_date.desc())
+            .limit(1)
+        )
+        latest = (await db.execute(q)).scalar_one_or_none()
+        if latest:
+            resolved_iteration_id = latest.id
+
+    if not resolved_iteration_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Project has no iterations / sprints configured. "
+                "Sync from ADO/Jira first or create one before generating a plan."
+            ),
+        )
+
+    stub_plan = SprintPlan(
+        id=generate_cuid(),
+        organization_id=org_id,
+        project_id=project_id,
+        iteration_id=resolved_iteration_id,
+        status="GENERATING",
+        ai_model_used="grok-4-1-fast-reasoning",
+        tool=source_tool,
+        rejection_feedback=feedback,
+    )
+    db.add(stub_plan)
+    await db.commit()
+    new_plan_id = stub_plan.id
+
+    # Schedule the heavy generation work as a background task. The task
+    # mutates the stub we just created (existing_plan_id) instead of
+    # making its own row.
+    background_tasks.add_task(
+        _run_sprint_generation_in_background,
+        org_id,
+        project_id,
+        iteration_id,
+        feedback,
+        source_tool,
+        new_plan_id,
+    )
+
+    return {
+        "queued": True,
+        "projectId": project_id,
+        "planId": new_plan_id,
+        "status": "GENERATING",
+        "message": (
+            "Sprint plan generation queued. Poll "
+            "/api/sprints?projectId=... until plan.status is no longer GENERATING."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Legacy synchronous sprint generation (kept for any internal callers; new
+# clients should use the async endpoint above).
+# ---------------------------------------------------------------------------
+
+async def _legacy_sync_generate_unused(
+    body: dict | None = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Old synchronous handler — preserved for reference, no route binding.
+    See /sprints (async) endpoint above for the live implementation.
+    """
+    org_id = current_user.get("organization_id", "demo-org")
+    body = body or {}
+    project_id = body.get("projectId")
+    iteration_id = body.get("iterationId")
+    feedback = body.get("feedback")
+    if feedback:
+        feedback = f"{feedback}\n[Regeneration requested at {datetime.now(timezone.utc).isoformat()}]"
+    if not project_id:
+        raise HTTPException(status_code=400, detail="projectId is required")
     from ..models.imported_project import ImportedProject as IP
     proj_result = await db.execute(
         select(IP).where(IP.id == project_id, IP.organization_id == org_id)
     )
     project_record = proj_result.scalar_one_or_none()
     source_tool = (project_record.source_tool or "ado").lower() if project_record else "ado"
-
     if source_tool == "ado":
         try:
             from ..services.ado_fetch import fetch_sprint_context
-            logger.info(f"Refreshing ADO data for project {project_id} before plan generation")
-            sprint_ctx = await fetch_sprint_context(db, org_id, project_id)
-            logger.info(
-                f"ADO refresh complete: {len(sprint_ctx.team_members)} members, "
-                f"{len(sprint_ctx.current_sprint_items)} sprint items, "
-                f"{len(sprint_ctx.backlog_items)} backlog items"
-            )
+            await fetch_sprint_context(db, org_id, project_id)
         except Exception as e:
             logger.warning(f"ADO data refresh failed (proceeding with DB data): {e}")
-    else:
-        logger.info(f"Skipping ADO fetch for {source_tool} project {project_id} — using synced DB data")
-
-    # Step 2: Generate plan via AI (falls back to deterministic if no API key)
     from ..services.ai_sprint_generator import generate_sprint_plan_ai
-
     try:
         result = await generate_sprint_plan_ai(
             db=db,
@@ -531,6 +894,7 @@ async def refresh_sprint_forecast(
     db: AsyncSession = Depends(get_db),
 ):
     """Force refresh forecast calculations."""
+    require_po(current_user)  # Hotfix 51 (CRIT-2)
     org_id = current_user.get("organization_id", "demo-org")
     body = body or {}
     project_id = body.get("projectId", "")
@@ -553,6 +917,7 @@ async def update_sprint_plan(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_po(current_user)  # Hotfix 51 (CRIT-2)
     plan_id = body.get("planId")
     org_id = current_user.get("organization_id", "demo-org")
     user_id = current_user.get("sub", current_user.get("id", "unknown"))
@@ -586,6 +951,33 @@ async def update_sprint_plan(
         plan.undo_available_until = datetime.now(timezone.utc) + timedelta(minutes=60)
 
     await db.commit()
+
+    # ── Timeline sync on plan approval ──────────────────────────────
+    # When a plan is APPROVED (first time OR after regeneration), the PO
+    # expects the PO dashboard's Target Launch + phase timeline to reflect
+    # the new plan's estimated end date. This is the "approve = timeline
+    # updates" contract. Overrides any prior MANUAL target edit — the PO's
+    # act of approving a new plan is a stronger signal than an older manual
+    # override.
+    if new_status == "APPROVED" and plan.project_id and plan.estimated_end_date:
+        try:
+            from ..models.imported_project import ImportedProject
+            from ..routers.projects import _rescale_future_phases
+            proj_r = await db.execute(
+                select(ImportedProject).where(ImportedProject.id == plan.project_id)
+            )
+            proj = proj_r.scalar_one_or_none()
+            if proj is not None:
+                proj.target_launch_date = plan.estimated_end_date
+                proj.target_launch_source = "AUTO"
+                await db.commit()
+                await _rescale_future_phases(db, proj, plan.estimated_end_date)
+                logger.info(
+                    f"Plan {plan_id} approval: target_launch_date set to "
+                    f"{plan.estimated_end_date.isoformat()} and timeline rescaled"
+                )
+        except Exception as e:  # noqa: BLE001 — never fail the approval on a timeline hiccup
+            logger.warning(f"Timeline sync on approval failed for plan {plan_id}: {e}")
 
     # ── Trigger batch write-back on approval ──
     # Detects tool type (from plan or connection) and calls the right service.
@@ -702,6 +1094,7 @@ async def complete_sprint(
     Used for testing and demo purposes — in production, sprints are
     auto-completed when the end date passes (date-based detection).
     """
+    require_po(current_user)  # Hotfix 51 (CRIT-2)
     org_id = current_user.get("organization_id", "demo-org")
     project_id = body.get("projectId")
     iteration_id = body.get("iterationId")
@@ -743,40 +1136,217 @@ async def update_team_member_role(
     Body:
     {
         "memberId": "cuid",
+        "projectId": "cuid",   # Hotfix 33c — required for "include" of an
+                                # org user who isn't yet a project member.
+                                # Optional for plain exclude/include of an
+                                # existing TeamMember (back-compat).
         "action": "exclude" | "include"
     }
+
+    Hotfix 33c — root cause fix for "added developers don't appear in
+    plan". The PO clicks "+ Include" in the Team Capacity card to bring
+    an org user into the current project's plan. Previously this endpoint
+    only knew how to TOGGLE existing TeamMember rows — if the candidate
+    came from the org-members list (i.e. they had no TeamMember row for
+    THIS project yet), the PATCH either 404'd silently or accidentally
+    toggled a TeamMember bound to a *different* project. The user then
+    saw the AI generate a plan that ignored them.
+
+    Now the flow is:
+      1. Try to find a TeamMember row matching ``memberId``. If found,
+         toggle its role (back-compat with the previous contract).
+      2. Otherwise, if ``action='include'`` AND ``projectId`` is given,
+         look the id up as a User and CREATE a new TeamMember bound to
+         that project with role='developer'. This is the only path that
+         actually grows the project team.
+      3. Otherwise return 404 like before.
     """
+    # Hotfix 51 (CRIT-5) — only PO/admin/owner can toggle team-member roles.
+    require_po(current_user)
+
     org_id = current_user.get("organization_id", "demo-org")
     member_id = body.get("memberId")
     action = body.get("action", "exclude")
+    project_id = body.get("projectId")
 
     if not member_id:
         raise HTTPException(status_code=400, detail="memberId is required")
 
-    result = await db.execute(
+    if action not in ("exclude", "include"):
+        raise HTTPException(status_code=400, detail="action must be 'exclude' or 'include'")
+
+    # Hotfix 33c (revised). The frontend sends ``memberId`` which can be
+    # one of three things, depending on the kind of candidate:
+    #   (a) A TeamMember.id for the CURRENT project       → toggle role
+    #   (b) A TeamMember.id for a DIFFERENT project       → use its
+    #       display_name/email to create a NEW TeamMember bound to the
+    #       current project (don't disturb the original row)
+    #   (c) A User.id (no TeamMember row anywhere)        → look up the
+    #       User and create a new TeamMember bound to the current project
+    # We resolve the source first, then take the right action.
+
+    from ..models.user import User
+    from ..models.base import generate_cuid as _gen
+    from ..models.imported_project import ImportedProject as _IP
+
+    # Try TeamMember lookup first
+    tm_q = await db.execute(
         select(TeamMember).where(
             TeamMember.id == member_id,
             TeamMember.organization_id == org_id,
         )
     )
-    member = result.scalar_one_or_none()
-    if not member:
-        raise HTTPException(status_code=404, detail="Team member not found")
+    source_tm = tm_q.scalar_one_or_none()
 
-    if action == "exclude":
-        member.role = "excluded"
-    elif action == "include":
-        member.role = "developer"
+    # Try User lookup as alternative
+    user_q = await db.execute(
+        select(User).where(
+            User.id == member_id,
+            User.organization_id == org_id,
+        )
+    )
+    source_user = user_q.scalar_one_or_none()
+
+    if not source_tm and not source_user:
+        raise HTTPException(status_code=404, detail="Team member or user not found")
+
+    # Case (a) — TeamMember already on THIS project: simple toggle.
+    if source_tm and source_tm.imported_project_id == project_id:
+        if action == "exclude":
+            source_tm.role = "excluded"
+        else:
+            source_tm.role = "developer"
+        await db.commit()
+        return {
+            "ok": True,
+            "memberId": source_tm.id,
+            "displayName": source_tm.display_name,
+            "role": source_tm.role,
+            "createdNew": False,
+        }
+
+    # Case (a') — TeamMember exists with no project binding (org-wide).
+    # Same as (a): just toggle role.
+    if source_tm and not source_tm.imported_project_id and not project_id:
+        if action == "exclude":
+            source_tm.role = "excluded"
+        else:
+            source_tm.role = "developer"
+        await db.commit()
+        return {
+            "ok": True,
+            "memberId": source_tm.id,
+            "displayName": source_tm.display_name,
+            "role": source_tm.role,
+            "createdNew": False,
+        }
+
+    # Hotfix 33g — lenient exclude. If we found a TeamMember and the
+    # user is asking to exclude it, just flip the role regardless of
+    # project_id match. The frontend's exclude flow doesn't pass
+    # projectId today (it's removing a row that's already visible in
+    # the team capacity card, so the project context is implicit). The
+    # earlier 400 broke deletion entirely.
+    if source_tm and action == "exclude":
+        source_tm.role = "excluded"
+        await db.commit()
+        return {
+            "ok": True,
+            "memberId": source_tm.id,
+            "displayName": source_tm.display_name,
+            "role": source_tm.role,
+            "createdNew": False,
+        }
+
+    # Cases (b) and (c) — need a projectId to create a new project-bound
+    # TeamMember. Without it we can't act.
+    if action != "include" or not project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="projectId is required to add this member to the current project",
+        )
+
+    # Verify the project belongs to this org.
+    proj_chk = await db.execute(
+        select(_IP).where(
+            _IP.id == project_id,
+            _IP.organization_id == org_id,
+        )
+    )
+    if not proj_chk.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Pick display_name + email + avatar from whichever source we have.
+    if source_tm:
+        display_name = source_tm.display_name
+        email = source_tm.email
+        avatar_url = source_tm.avatar_url
+        skill_tags = source_tm.skill_tags or []
+        capacity = source_tm.default_capacity or 40.0
     else:
-        raise HTTPException(status_code=400, detail="action must be 'exclude' or 'include'")
+        # source_user
+        display_name = source_user.full_name or (source_user.email.split("@")[0] if source_user.email else "Member")
+        email = source_user.email
+        avatar_url = getattr(source_user, "avatar_url", None)
+        skill_tags = []
+        capacity = 40.0
 
+    # Don't double-add — if a row already exists for this email + project,
+    # just (re-)include it.
+    if email:
+        existing = await db.execute(
+            select(TeamMember).where(
+                TeamMember.organization_id == org_id,
+                TeamMember.imported_project_id == project_id,
+                TeamMember.email.ilike(email),
+            )
+        )
+        existing_member = existing.scalar_one_or_none()
+        if existing_member:
+            existing_member.role = "developer"
+            await db.commit()
+            return {
+                "ok": True,
+                "memberId": existing_member.id,
+                "displayName": existing_member.display_name,
+                "role": existing_member.role,
+                "createdNew": False,
+            }
+
+    # Hotfix 33d — ``external_id`` is NOT NULL on team_members and has
+    # a unique constraint on (organization_id, external_id). For
+    # manually-added members (no upstream tool sync) we synthesise a
+    # stable id prefixed with ``manual:`` and qualified by project_id +
+    # email so it never collides with ADO/Jira-synced rows or with the
+    # same user added to a different project.
+    new_member_id = _gen()
+    synthetic_ext_id = f"manual:{project_id}:{email or new_member_id}"
+    new_member = TeamMember(
+        id=new_member_id,
+        organization_id=org_id,
+        imported_project_id=project_id,
+        external_id=synthetic_ext_id,
+        display_name=display_name,
+        email=email,
+        role="developer",
+        default_capacity=capacity,
+        skill_tags=skill_tags,
+        avatar_url=avatar_url,
+    )
+    db.add(new_member)
     await db.commit()
-
+    await db.refresh(new_member)
+    logger.info(
+        f"[team-member] created project-bound member {new_member.id} "
+        f"({display_name} <{email}>) on project {project_id} "
+        f"(source: {'team_member' if source_tm else 'user'})"
+    )
     return {
         "ok": True,
-        "memberId": member_id,
-        "displayName": member.display_name,
-        "role": member.role,
+        "memberId": new_member.id,
+        "displayName": new_member.display_name,
+        "role": new_member.role,
+        "createdNew": True,
     }
 
 
@@ -827,6 +1397,7 @@ async def generate_rebalance(
     db: AsyncSession = Depends(get_db),
 ):
     """Generate an AI-powered rebalancing proposal for an at-risk sprint plan."""
+    require_po(current_user)  # Hotfix 51 (CRIT-2)
     import sys, traceback as tb
     print(f"[REBALANCE] Received request: {body}", file=sys.stderr, flush=True)
 
@@ -873,6 +1444,7 @@ async def approve_rebalance_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     """Approve a rebalance proposal — creates new plan, supersedes old one."""
+    require_po(current_user)  # Hotfix 51 (CRIT-2)
     from ..services.sprint_rebalancer import approve_rebalance
 
     proposal_id = body.get("proposalId")
@@ -885,6 +1457,41 @@ async def approve_rebalance_endpoint(
         result = await approve_rebalance(db, proposal_id, user_id)
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", "Approval failed"))
+
+        # ── Timeline sync on rebalance acceptance ──────────────────────
+        # A rebalance acceptance creates a new active plan (result.newPlanId)
+        # with a possibly-changed estimated_end_date (e.g. Protect Scope
+        # extends the deadline). Push that new end date onto the project's
+        # target_launch_date + rescale the future phase window the same way
+        # a fresh plan approval does.
+        try:
+            new_plan_id = result.get("newPlanId")
+            if new_plan_id:
+                from ..models.imported_project import ImportedProject
+                from ..routers.projects import _rescale_future_phases
+                plan_r = await db.execute(
+                    select(SprintPlan).where(SprintPlan.id == new_plan_id)
+                )
+                new_plan = plan_r.scalar_one_or_none()
+                if (
+                    new_plan is not None
+                    and new_plan.project_id
+                    and new_plan.estimated_end_date is not None
+                ):
+                    proj_r = await db.execute(
+                        select(ImportedProject).where(ImportedProject.id == new_plan.project_id)
+                    )
+                    proj = proj_r.scalar_one_or_none()
+                    if proj is not None:
+                        proj.target_launch_date = new_plan.estimated_end_date
+                        proj.target_launch_source = "AUTO"
+                        await db.commit()
+                        await _rescale_future_phases(db, proj, new_plan.estimated_end_date)
+                        logger.info(
+                            f"Rebalance accepted (plan {new_plan_id}): target + timeline rescaled"
+                        )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Timeline sync on rebalance approval failed: {e}")
 
         # Broadcast rebalance event
         org_id = current_user.get("organization_id", "demo-org")

@@ -13,6 +13,15 @@ const SprintHistoryTimeline = dynamic(
   { ssr: false }
 );
 
+// Hotfix 83 — Project Cycle Concluded card. Renders only when the
+// selected project has passed its target launch date; renders nothing
+// for healthy projects so it has no visual effect on the regular
+// retrospective flow.
+const ProjectCycleConcludedCard = dynamic(
+  () => import("@/components/po/project-cycle-concluded-card").then((m) => ({ default: m.ProjectCycleConcludedCard })),
+  { ssr: false }
+);
+
 function PageLoader() {
   return (
     <div className="flex items-center justify-center py-16">
@@ -24,6 +33,7 @@ function PageLoader() {
 export default function RetroPage() {
   return (
     <div className="space-y-6">
+      <ProjectCycleConcludedCard />
       <RetrospectiveHubPanel />
       <SprintHistoryTimeline />
     </div>

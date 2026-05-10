@@ -42,6 +42,31 @@ class User(Base):
     onboarding_completed: Mapped[bool] = mapped_column(
         Boolean, name="onboarding_completed", nullable=False, default=False
     )
+    # Hotfix 73 — per-user Slack identity link (after the dev/
+    # stakeholder OAuths their personal Slack account from the
+    # Channels page).
+    slack_user_id: Mapped[Optional[str]] = mapped_column(
+        String, name="slack_user_id", nullable=True
+    )
+    slack_team_id: Mapped[Optional[str]] = mapped_column(
+        String, name="slack_team_id", nullable=True
+    )
+    slack_team_name: Mapped[Optional[str]] = mapped_column(
+        String, name="slack_team_name", nullable=True
+    )
+    slack_handle: Mapped[Optional[str]] = mapped_column(
+        String, name="slack_handle", nullable=True
+    )
+    # Hotfix 74 — per-user Teams identity link.
+    teams_user_id: Mapped[Optional[str]] = mapped_column(
+        String, name="teams_user_id", nullable=True
+    )
+    teams_user_principal_name: Mapped[Optional[str]] = mapped_column(
+        String, name="teams_user_principal_name", nullable=True
+    )
+    teams_display_name: Mapped[Optional[str]] = mapped_column(
+        String, name="teams_display_name", nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), name="created_at", server_default=func.now()
     )

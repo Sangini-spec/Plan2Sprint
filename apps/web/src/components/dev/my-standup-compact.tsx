@@ -12,13 +12,17 @@ import {
   Loader2,
   ArrowRight,
   RefreshCw,
+  GitCommit,
+  GitPullRequest,
+  GitMerge,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge } from "@/components/ui";
 import { useSelectedProject } from "@/lib/project/context";
 import { useAutoRefresh } from "@/lib/ws/context";
-import { cachedFetch } from "@/lib/fetch-cache";
+import { useAuth } from "@/lib/auth/context";
+import { cachedFetch, invalidateCache } from "@/lib/fetch-cache";
 import Link from "next/link";
 
 // ---------------------------------------------------------------------------
@@ -32,12 +36,36 @@ interface StandupItem {
   prStatus?: string;
 }
 
+interface RecentActivityItem {
+  type: "commits" | "pr";
+  title: string;
+  repo?: string;
+  count?: number;
+  prNumber?: number;
+  prStatus?: string;
+  url?: string;
+  occurredAt?: string;
+}
+
+interface InFlightItem {
+  id: string;
+  title: string;
+  ticketId?: string | null;
+  status: string;
+  type?: string;
+  updatedAt?: string | null;
+}
+
 interface IndividualReport {
+  id?: string;
   teamMemberId: string;
+  email?: string;
   displayName: string;
   completed: StandupItem[];
   inProgress: StandupItem[];
   blockers: { description: string; status: string }[];
+  recentActivity?: RecentActivityItem[];
+  inFlight?: InFlightItem[];
   narrativeText: string;
   isInactive: boolean;
 }
@@ -61,6 +89,7 @@ function formatTime(iso: string): string {
 
 export function MyStandupCompact() {
   const { selectedProject } = useSelectedProject();
+  const { appUser } = useAuth();
   const [noteText, setNoteText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -72,27 +101,60 @@ export function MyStandupCompact() {
   const refreshKey = useAutoRefresh(["standup_generated", "sync_complete"]);
 
   const projectId = selectedProject?.internalId;
+  const userEmail = (appUser?.email ?? "").toLowerCase();
+  const userName = appUser?.full_name ?? "";
 
   const today = new Date();
   const isWeekend = today.getDay() === 0 || today.getDay() === 6;
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
   // ---------- Fetch standup data ----------
-  const fetchStandup = useCallback(async () => {
+  // `force=true` is used by the Refresh button to (a) drop any cached
+  // response so we hit the API again instead of returning the in-memory
+  // 30-second snapshot, and (b) ask the backend to regenerate the
+  // StandupReport rows even when ones already exist for today. Without
+  // (a) the button was a no-op within the 30s TTL window. Without (b)
+  // tickets the dev closed after the morning's auto-gen never showed
+  // up here.
+  const fetchStandup = useCallback(async (force = false) => {
     setLoading(true);
     try {
       const pidParam = projectId ? `&projectId=${projectId}` : "";
-      const res = await cachedFetch(`/api/standups?date=${todayKey}${pidParam}`);
+      const forceParam = force ? "&forceRefresh=true" : "";
+      const url = `/api/standups?date=${todayKey}${pidParam}${forceParam}`;
+      if (force) {
+        // Drop the cached response so we actually hit the API again.
+        invalidateCache(url);
+        invalidateCache(`/api/standups?date=${todayKey}${pidParam}`);
+      }
+      const res = await cachedFetch(url);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = res.data as any;
 
-      // Use first individual report (the current user's)
+      // Hotfix 42: pick the LOGGED-IN USER's report — not just reports[0],
+      // which used to surface whichever developer's report_date was latest.
+      // Hotfix 43: removed the displayName fallback; matching by name was
+      // surfacing the wrong "Sangini Tripathi" (PO's row) when the dev row
+      // didn't exist for the selected project. Strict email match only.
+      // Hotfix (today): backend now resolves `mine` server-side using
+      // email + displayName fallback, and bypasses drop_empty for the
+      // requesting user's own row. Trust that field first; fall back to
+      // the legacy email scan only when the backend didn't supply it
+      // (older API revision still warming).
       const reports: IndividualReport[] = data.individualReports ?? [];
-      if (reports.length > 0) {
-        setReport(reports[0]);
-        setNarrative(reports[0].narrativeText || data.summaryText || "");
+      let mine: IndividualReport | undefined =
+        (data.mine as IndividualReport | undefined) ?? undefined;
+      if (!mine && userEmail) {
+        mine = reports.find((r) => (r.email ?? "").toLowerCase() === userEmail);
+      }
+      if (mine) {
+        setReport(mine);
+        setNarrative(mine.narrativeText || "");
       } else {
-        setNarrative(data.summaryText || "No standup data yet. Sync your project data to get started.");
+        setReport(null);
+        setNarrative(
+          "No standup generated for you yet on this project. Pick a different project or sync your data."
+        );
       }
       setNotes(data.submittedNotes ?? []);
     } catch {
@@ -100,7 +162,7 @@ export function MyStandupCompact() {
       setNotes([]);
     }
     setLoading(false);
-  }, [todayKey, projectId]);
+  }, [todayKey, projectId, userEmail]);
 
   useEffect(() => { fetchStandup(); }, [fetchStandup, refreshKey]);
 
@@ -130,6 +192,8 @@ export function MyStandupCompact() {
   const completedItems = report?.completed ?? [];
   const inProgressItems = report?.inProgress ?? [];
   const blockerItems = report?.blockers ?? [];
+  const recentActivity = report?.recentActivity ?? [];
+  const inFlight = report?.inFlight ?? [];
 
   return (
     <DashboardPanel
@@ -138,7 +202,7 @@ export function MyStandupCompact() {
       actions={
         !isWeekend ? (
           <button
-            onClick={fetchStandup}
+            onClick={() => fetchStandup(true)}
             className="flex items-center gap-1 text-[10px] text-[var(--text-tertiary)] hover:text-[var(--color-brand-secondary)] transition-colors cursor-pointer"
           >
             <RefreshCw size={10} /> Refresh
@@ -164,6 +228,61 @@ export function MyStandupCompact() {
 
             {/* Compact section rows */}
             <div className="space-y-3">
+              {/* Recent Activity (last 48-72h GitHub) — Hotfix 42 */}
+              {recentActivity.length > 0 && (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <GitCommit className="h-3.5 w-3.5 text-[var(--color-rag-green)]" />
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-rag-green)]">
+                      Recent Activity
+                    </span>
+                  </div>
+                  {recentActivity.slice(0, 5).map((item, i) => {
+                    const isPR = item.type === "pr";
+                    const isMerged = item.prStatus === "MERGED";
+                    const Icon = isPR ? (isMerged ? GitMerge : GitPullRequest) : GitCommit;
+                    const iconColor = isMerged
+                      ? "text-[var(--color-rag-green)]"
+                      : isPR
+                        ? "text-[var(--color-brand-secondary)]"
+                        : "text-[var(--text-secondary)]";
+                    return (
+                      <div key={`ra-${i}`} className="flex items-center gap-2 pl-5 text-sm text-[var(--text-primary)]">
+                        <Icon className={cn("h-3 w-3 shrink-0", iconColor)} />
+                        {item.url ? (
+                          <a href={item.url} target="_blank" rel="noreferrer" className="truncate hover:text-[var(--color-brand-secondary)]">
+                            {item.title}
+                          </a>
+                        ) : (
+                          <span className="truncate">{item.title}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {recentActivity.length > 5 && (
+                    <p className="pl-5 text-[10px] text-[var(--text-tertiary)]">+{recentActivity.length - 5} more</p>
+                  )}
+                </div>
+              )}
+
+              {/* In Flight (work items) — Hotfix 42 */}
+              {inFlight.length > 0 && (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Circle className="h-3.5 w-3.5 text-[var(--color-brand-secondary)]" />
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-brand-secondary)]">
+                      In Flight ({inFlight.length})
+                    </span>
+                  </div>
+                  {inFlight.slice(0, 5).map((item) => (
+                    <div key={item.id} className="flex items-center gap-2 pl-5 text-sm text-[var(--text-primary)]">
+                      <span className="truncate">{item.title}</span>
+                      {item.ticketId && <Badge variant="brand" className="text-[9px] px-1.5 py-0">{item.ticketId}</Badge>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Completed */}
               {completedItems.length > 0 && (
                 <div className="space-y-1">
@@ -235,14 +354,18 @@ export function MyStandupCompact() {
                 </div>
               ) : null}
 
-              {/* Empty state */}
-              {completedItems.length === 0 && inProgressItems.length === 0 && blockerItems.length === 0 && (
-                <div className="flex flex-col items-center py-4 text-center">
-                  <p className="text-xs text-[var(--text-tertiary)]">
-                    No activity data yet. Sync a project to auto-generate your standup.
-                  </p>
-                </div>
-              )}
+              {/* Empty state — Hotfix 42 also checks recentActivity / inFlight */}
+              {completedItems.length === 0 &&
+                inProgressItems.length === 0 &&
+                blockerItems.length === 0 &&
+                recentActivity.length === 0 &&
+                inFlight.length === 0 && (
+                  <div className="flex flex-col items-center py-4 text-center">
+                    <p className="text-xs text-[var(--text-tertiary)]">
+                      No activity data yet. Sync a project to auto-generate your standup.
+                    </p>
+                  </div>
+                )}
             </div>
 
             {/* Submitted Notes */}

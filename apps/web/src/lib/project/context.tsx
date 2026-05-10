@@ -189,14 +189,52 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
 
   // ── STEP 1: Initial load from DB ──
   // Runs once on mount. Loads DB projects + saved preference.
+  //
+  // Hotfix 31 — cold-start retry. The API runs on Azure Container Apps
+  // with minReplicas=0 (cost-saving), so when a user opens the app after
+  // ~5 min of idle the container has scaled to zero and the first
+  // request hits a cold start (10-30s before a replica is ready). The
+  // previous one-shot ``fetch`` would time out at the browser level and
+  // render "No Projects" with the user's data fully intact in the DB.
+  // ``fetchProjectsWithRetry`` retries on network errors, 5xx, and
+  // 408/504 with exponential backoff (1s, 2s, 4s, 8s, 16s, 30s — total
+  // ~60s max wait), giving the cold start time to complete. A 200 with
+  // an empty projects array is NOT retried (that's a legitimate "no
+  // projects yet" state for a new org).
   useEffect(() => {
     let cancelled = false;
+
+    const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+    const COLD_START_RETRYABLE_STATUS = new Set([408, 502, 503, 504]);
+
+    async function fetchWithRetry<T>(url: string): Promise<T | null> {
+      let lastErr: unknown = null;
+      for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+        if (cancelled) return null;
+        try {
+          const r = await fetch(url);
+          if (r.ok) return (await r.json()) as T;
+          // 4xx (except retryable 408) — don't retry, no amount of waiting fixes a 401/403/404
+          if (!COLD_START_RETRYABLE_STATUS.has(r.status)) return null;
+          lastErr = new Error(`HTTP ${r.status}`);
+        } catch (e) {
+          // Network error / timeout / DNS — exactly the cold-start case
+          lastErr = e;
+        }
+        if (attempt < RETRY_DELAYS_MS.length) {
+          await new Promise((res) => setTimeout(res, RETRY_DELAYS_MS[attempt]));
+        }
+      }
+      // All retries exhausted
+      if (lastErr) console.warn("[project context] fetchWithRetry exhausted for", url, lastErr);
+      return null;
+    }
 
     async function init() {
       try {
         const [projectsRes, prefRes] = await Promise.allSettled([
-          fetch("/api/projects").then((r) => (r.ok ? r.json() : null)),
-          fetch("/api/projects/preferences/selected").then((r) => (r.ok ? r.json() : null)),
+          fetchWithRetry<{ projects?: Array<Record<string, unknown>> }>("/api/projects").then((d) => d ?? null),
+          fetchWithRetry<{ selectedProject?: { internalId?: string } }>("/api/projects/preferences/selected").then((d) => d ?? null),
         ]);
 
         if (cancelled) return;

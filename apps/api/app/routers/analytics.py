@@ -32,7 +32,9 @@ async def get_analytics(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    org_id = current_user.get("organization_id", "demo-org")
+    # Hotfix 36 — cross-org stakeholder access
+    from .dashboard import _resolve_org_for_project
+    org_id = await _resolve_org_for_project(db, current_user, projectId)
 
     # -- Velocity trend: aggregate by iteration
     # If projectId is given, only include iterations that belong to that project
@@ -240,6 +242,57 @@ async def get_analytics(
     carry_forward = max(0, 100 - estimate_accuracy)
     overall_predictability = min(int((estimate_accuracy + goal_attainment) / 2), 100)
 
+    # ── New composite predictability (v2) ────────────────────────────────
+    # ``predictability_v2`` is the authoritative value — symmetric penalty
+    # (over-delivery penalised equally), recency-weighted, variance-aware.
+    # It includes the per-sprint audit so the Stakeholder Delivery page can
+    # justify the score sprint-by-sprint. The old v1 block above is kept
+    # only so legacy consumers don't break during the transition.
+    from ..services.predictability_engine import compute_predictability
+    pred_v2 = await compute_predictability(db, org_id, projectId)
+    predictability_v2_block = {
+        "score": pred_v2.score,
+        "breakdown": {
+            "commitmentAccuracy": pred_v2.breakdown.commitment_accuracy,
+            "sprintGoalHitRate": pred_v2.breakdown.sprint_goal_hit_rate,
+            "stability": pred_v2.breakdown.stability,
+        },
+        "sprints": [
+            {
+                "sprintId": s.sprint_id,
+                "sprintName": s.sprint_name,
+                "endDate": s.end_date,
+                "plannedSp": s.planned_sp,
+                "completedSp": s.completed_sp,
+                "ratio": s.ratio,
+                "accuracy": s.accuracy,
+                "hitGoal": s.hit_goal,
+                "weight": round(s.weight, 3),
+            }
+            for s in pred_v2.sprints
+        ],
+        "reasonHidden": pred_v2.reason_hidden,
+        "narrative": pred_v2.narrative,
+        # Hotfix 13 additions — explain the cap, surface trend + throughput.
+        "cap": {
+            "applied": pred_v2.cap.applied,
+            "raw": pred_v2.cap.raw,
+            "cappedAt": pred_v2.cap.capped_at,
+            "reason": pred_v2.cap.reason,
+        },
+        "velocityTrend": {
+            "direction": pred_v2.velocity_trend.direction,
+            "deltaPct": pred_v2.velocity_trend.delta_pct,
+            "currentAvgSp": pred_v2.velocity_trend.current_avg_sp,
+            "priorAvgSp": pred_v2.velocity_trend.prior_avg_sp,
+        },
+        "throughput": {
+            "avgCompletedSp": pred_v2.throughput.avg_completed_sp,
+            "totalCompletedSp": pred_v2.throughput.total_completed_sp,
+            "sprintCount": pred_v2.throughput.sprint_count,
+        },
+    }
+
     return {
         "velocity": {
             "current": current_completed,
@@ -247,10 +300,13 @@ async def get_analytics(
             "trend": trend[-5:] if len(trend) > 5 else trend,
         },
         "predictability": {
+            # Legacy v1 fields — kept for anything not yet migrated.
             "overall": overall_predictability,
             "sprintGoalAttainment": goal_attainment,
             "estimateAccuracy": estimate_accuracy,
             "carryForwardRate": carry_forward,
+            # v2 composite — the real number. See services.predictability_engine.
+            "v2": predictability_v2_block,
         },
         "backlogHealth": {
             "overall": int((pct_estimated + pct_with_ac) / 2),

@@ -17,7 +17,11 @@ export type SprintPlanStatus =
   | "SYNCED"
   | "SYNCED_PARTIAL"
   | "UNDONE"
-  | "EXPIRED";
+  | "EXPIRED"
+  // Hotfix 24 — async generation. ``FAILED`` is set by the
+  // background task when generation crashes or times out, so the
+  // frontend polling can stop and surface a clear error message.
+  | "FAILED";
 
 export type WorkItemStatus =
   | "BACKLOG"
@@ -411,6 +415,26 @@ export interface FeatureProgressData {
   overallCompletePct: number;
   readyForTestCount: number;
   features: FeatureProgressCard[];
+  /** Composite confidence score (0-100) — replaces SprintPlan.confidence_score
+   * for the PO hero banner KPI. ``null`` when no approved plan exists yet. */
+  confidence?: ConfidenceBlock | null;
+}
+
+export interface ConfidenceBlock {
+  score: number | null;
+  breakdown: {
+    velocity: number | null;
+    cicd: number | null;
+    aiPlan: number | null;
+    targetFeasibility: number | null;
+    sprintReliability: number | null;
+  };
+  /** Rescaled weights the breakdown values were combined with. Keys
+   * correspond to the breakdown field names in snake_case (e.g. "velocity",
+   * "cicd", "ai_plan", "target_feasibility", "sprint_reliability"). */
+  weights: Record<string, number>;
+  factorsUsed: string[];
+  reasonHidden: string | null;
 }
 
 export type GanttStatus = "not_started" | "in_progress" | "blocked" | "complete";
@@ -430,11 +454,30 @@ export interface ProjectPlanRow {
   actualStart?: string;
   actualEnd?: string;
   assignees: string[];
+  /* Sprint E — true when the PO has marked this feature as hidden from
+   * the Gantt. The row is only included in the payload when the request
+   * was made with ``includeHidden=1``. */
+  hidden?: boolean;
+  /* Diagnostic — raw external status string from ADO/Jira (e.g. "Resolved",
+   * "In Review", "Deployed"). Surfaced on hover so the PO can see what
+   * string the upstream tool actually returned, useful for diagnosing
+   * features that the terminal-status alias list missed. */
+  sourceStatus?: string | null;
 }
 
 export interface ProjectPlanData {
   features: ProjectPlanRow[];
+  /** Hotfix 34 — split former ``unassigned`` into two semantic buckets.
+   *  ``completed``: features with terminal status (delivered already).
+   *  ``outOfPlan``: features with open stories not in current sprint plan.
+   *  ``unassigned`` is kept for back-compat = completed + outOfPlan. */
   unassigned: ProjectPlanRow[];
+  completed?: ProjectPlanRow[];
+  outOfPlan?: ProjectPlanRow[];
+  /** Optimized view: features added since the latest plan was created.
+   *  Drives the "Regenerate to include them" banner above the
+   *  Out of Plan section. */
+  newSincePlan?: { count: number; titles: string[] };
   phases: ProjectPhase[];
   totalPhases: number;
   complete: number;
@@ -444,7 +487,64 @@ export interface ProjectPlanData {
   hasPlan?: boolean;
   planId?: string;
   planStatus?: SprintPlanStatus;
+  planCreatedAt?: string;
   isRebalanced?: boolean;
+  /* Timeline revamp (Sprint 6+): authoritative source of truth for the PO
+   * hero banner. When present, the hero banner ignores its local date math
+   * and renders directly from this block. */
+  timeline?: TimelineBlock | null;
+  /* Sprint E — visibility toggle. ``hiddenCount`` is the number of features
+   * the PO has hidden from the Gantt; ``includeHidden`` mirrors the request
+   * parameter so the UI knows whether the current payload includes the
+   * hidden rows or not. Both are optional because legacy/cached payloads
+   * may predate the flag. */
+  hiddenCount?: number;
+  includeHidden?: boolean;
+}
+
+export type TimelineMode = "RAW" | "AI_OPTIMIZED" | "REBALANCED";
+export type TargetLaunchSource = "AUTO" | "MANUAL" | null;
+export type CurrentPhaseSource = "ADO" | "GITHUB" | "BOTH" | null;
+
+export interface TimelinePhaseRow {
+  id: string;
+  slug: string;
+  name: string;
+  sortOrder: number;
+  color: string;
+  /* ISO 8601 datetime or null when dates aren't known yet (TBD in UI). */
+  plannedStart: string | null;
+  plannedEnd: string | null;
+}
+
+export interface TimelineBlock {
+  mode: TimelineMode;
+  phases: TimelinePhaseRow[];
+  targetLaunchDate: string | null;
+  targetLaunchSource: TargetLaunchSource;
+  targetViolated: boolean;
+  targetViolatedDays: number;
+  currentPhaseSlug: string | null;
+  currentPhaseSource: CurrentPhaseSource;
+  /* Hotfix 16 — phases the project's frontier has passed but which
+   * still have in-flight items. Hero-banner timeline renders these in
+   * a cyan glow so stakeholders see "Deployment is current, Testing
+   * still has loose ends" without conflating the two states. Empty /
+   * undefined when nothing is straggling. */
+  alsoActivePhaseSlugs?: string[];
+  /* Hotfix 83 — project lifecycle status relative to its target launch:
+   *   "on_track"       — target unset, project archived, or still
+   *                      within grace
+   *   "overdue"        — past target_launch_date + 24h grace AND
+   *                      completion < 100%. Triggers red Target Launch
+   *                      tile, "PLAN OVERDUE" badge, and the cron-fired
+   *                      one-shot email to the PO.
+   *   "delivered_late" — past target but completion = 100%. Amber
+   *                      "DELIVERED LATE" badge, no email.
+   * ``daysPastTarget`` is the integer day count past the target;
+   * always 0 when status === "on_track". */
+  lifecycleStatus?: "on_track" | "overdue" | "delivered_late";
+  daysPastTarget?: number;
 }
 
 export interface PlanSummaryData {

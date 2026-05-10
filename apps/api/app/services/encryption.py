@@ -51,3 +51,67 @@ def decrypt_token(encrypted_token: str) -> str:
     plaintext = aesgcm.decrypt(iv, ciphertext + tag, None)
 
     return plaintext.decode()
+
+
+# Hotfix 57 — token-format detection helpers
+#
+# Plan2Sprint accumulated three storage shapes for OAuth/PAT tokens
+# over time:
+#   1. Modern AES-GCM ciphertext: ``iv_b64:ciphertext_b64:tag_b64`` —
+#      written by the current encrypt_token().
+#   2. Demo-mode base64: a single base64 blob (no colons).
+#   3. Plaintext: the raw provider value (``gho_...``, ``ghp_...``,
+#      ``github_pat_...``, raw access tokens from before encryption was
+#      added). Found in production for several connections during the
+#      schema-drift audit.
+#
+# All read paths must tolerate (3) so existing data isn't broken.
+# These helpers centralise that.
+
+_RAW_TOKEN_PREFIXES = ("gho_", "ghp_", "ghu_", "ghs_", "github_pat_")
+
+
+def _looks_plaintext(token: str) -> bool:
+    """Heuristic: does this string look like an unencrypted provider token?"""
+    if not token:
+        return True
+    if token.startswith(_RAW_TOKEN_PREFIXES):
+        return True
+    # AES-GCM ciphertext always has exactly two colons (iv:ct:tag).
+    # Anything else is definitely not our ciphertext.
+    if token.count(":") != 2:
+        return True
+    return False
+
+
+def decrypt_token_safe(token: str) -> str:
+    """Read-side wrapper: decrypt ciphertext, return plaintext as-is.
+
+    Use this everywhere a stored token is read. Never raises on legacy
+    plaintext rows. If decryption fails on a value that LOOKS like
+    ciphertext, we still return the raw value rather than crashing —
+    the upstream HTTP call will then fail with a clear 401 from the
+    provider, which is more debuggable than a Python KeyError.
+    """
+    if not token:
+        return ""
+    if _looks_plaintext(token):
+        return token
+    try:
+        return decrypt_token(token)
+    except Exception:
+        return token
+
+
+def ensure_encrypted(token: str) -> str:
+    """Write-side wrapper: idempotently return the AES-GCM ciphertext.
+
+    If ``token`` looks plaintext, encrypt and return ciphertext. If it
+    already looks like ciphertext (iv:ct:tag) we return it unchanged so
+    re-saving an already-encrypted row doesn't double-encrypt.
+    """
+    if not token:
+        return ""
+    if _looks_plaintext(token):
+        return encrypt_token(token)
+    return token

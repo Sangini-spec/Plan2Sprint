@@ -29,7 +29,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...auth.supabase import get_current_user
+from ...auth.supabase import get_current_user, require_po
 from ...config import settings
 from ...database import get_db
 from ...models.tool_connection import ToolConnection
@@ -307,6 +307,9 @@ async def initiate_jira_oauth(
     GET /connect
     Redirect user to Atlassian OAuth consent screen.
     """
+    # Hotfix 79 — reverted the require_po gate added in Hotfix 69B.
+    # See ado.py /connect for the full note. Devs and POs both can
+    # initiate Jira OAuth.
     if settings.is_demo_mode:
         return RedirectResponse(url=f"{settings.frontend_url}/po/notifications?jira=demo")
 
@@ -333,7 +336,15 @@ async def initiate_jira_oauth(
         "redirect_uri": redirect_uri,
         "state": state,
         "response_type": "code",
-        "prompt": "consent",
+        # Hotfix 53 — was ``prompt=consent``. That re-shows the scopes
+        # screen but does NOT force the account picker, so users with an
+        # existing Atlassian session in the browser silently get
+        # connected as whichever email they happened to be logged in as.
+        # ``prompt=login`` forces re-authentication so the user explicitly
+        # chooses which Atlassian account to authorise — matches the
+        # "I have multiple Atlassian accounts and need to pick the right
+        # one" UX every PO has run into.
+        "prompt": "login",
     }
 
     authorize_url = f"{ATLASSIAN_AUTH_URL}?{urlencode(params)}"
@@ -478,6 +489,7 @@ async def connect_with_api_token(
 
     Body: { "site_url": "https://company.atlassian.net", "email": "user@example.com", "api_token": "..." }
     """
+    # Hotfix 79 — reverted the require_po gate (see /connect note).
     site_url = (body.get("site_url") or "").rstrip("/")
     email = body.get("email", "")
     api_token = body.get("api_token", "")
@@ -590,6 +602,13 @@ async def jira_status(
     org_id = current_user.get("organization_id", "demo-org")
     conn = await _get_jira_connection(db, org_id)
 
+    # Hotfix 80 — see ado.py for the full note. Non-PO get the
+    # connected boolean (so the Connect Tools modal updates after
+    # they complete OAuth) but no management metadata.
+    is_po = (current_user.get("role") or "").lower() in {"product_owner", "admin", "owner"}
+    if not is_po:
+        return {"connected": conn is not None}
+
     if not conn:
         return {"connected": False}
 
@@ -612,6 +631,7 @@ async def save_selected_projects_jira(
     db: AsyncSession = Depends(get_db),
 ):
     """POST /selected-projects — Persist user's selected Jira projects in connection config."""
+    require_po(current_user)  # Hotfix 68B — write to org connection state
     org_id = current_user.get("organization_id", "demo-org")
     conn = await _get_jira_connection(db, org_id)
     if not conn:
@@ -630,6 +650,7 @@ async def disconnect_jira(
     db: AsyncSession = Depends(get_db),
 ):
     """POST /disconnect — Remove Jira connection."""
+    require_po(current_user)  # Hotfix 68B — destructive on org connection
     org_id = current_user.get("organization_id", "demo-org")
     conn = await _get_jira_connection(db, org_id)
 
@@ -652,6 +673,10 @@ async def list_projects(
     db: AsyncSession = Depends(get_db),
 ):
     """GET /projects — Fetch Jira projects using stored credentials (OAuth or API token)."""
+    # Hotfix 81 — reverted the require_po gate. See ado.py for the
+    # full note. Devs OAuth their own Atlassian accounts now, so the
+    # stored tokens identify the caller and the project list is
+    # appropriately scoped without role-gating.
     if settings.is_demo_mode:
         return {"projects": MOCK_JIRA_PROJECTS}
 
@@ -1118,25 +1143,51 @@ async def fetch_board_columns(
 async def receive_webhook(request: Request):
     """
     POST /webhooks
-    Receive Jira webhook events. Validates webhook signature if configured.
+    Receive Jira webhook events.
+
+    Hotfix 80 — webhook security hardening:
+      - HMAC-SHA256 verification via the X-Atlassian-Webhook-Signature header.
+      - Constant-time compare via ``services.webhook_security``.
+      - When ``strict_webhook_verification`` is on, requests without a
+        configured secret are rejected (parallels GitHub's strict mode).
+      - The signature check runs OUTSIDE the broad try/except so the 401
+        propagates back to the sender instead of being swallowed as a 500.
     """
+    import logging as _logging
+    from ...services.webhook_security import (
+        verify_hmac_sha256,
+        is_strict_mode_enabled,
+    )
+    _log = _logging.getLogger(__name__)
+
+    body_bytes = await request.body()
+
+    # ---- Signature verification (must NOT be inside the broad try/except) ----
+    webhook_secret = getattr(settings, "jira_webhook_secret", "") or ""
+    signature = request.headers.get("X-Atlassian-Webhook-Signature", "")
+    strict_mode = is_strict_mode_enabled() or settings.strict_webhook_verification
+
+    if webhook_secret:
+        if not verify_hmac_sha256(body_bytes, signature, webhook_secret):
+            _log.warning("[SECURITY] Jira webhook signature MISMATCH — rejecting")
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    elif strict_mode:
+        _log.warning(
+            "[SECURITY] Jira webhook REJECTED (strict mode) — JIRA_WEBHOOK_SECRET "
+            "is not configured."
+        )
+        raise HTTPException(
+            status_code=401, detail="Webhook signing secret not configured"
+        )
+    else:
+        _log.warning(
+            "[SECURITY] Jira webhook accepted UNVERIFIED — JIRA_WEBHOOK_SECRET "
+            "is not configured. Set it and STRICT_WEBHOOK_VERIFICATION=true to lock down."
+        )
+
+    # ---- Payload processing (broader catch for parse / handler errors) ----
     try:
-        body_bytes = await request.body()
-
-        # Verify webhook signature if a secret is configured
-        webhook_secret = getattr(settings, "jira_webhook_secret", "") or ""
-        if webhook_secret:
-            import hmac
-            import hashlib
-            signature = request.headers.get("X-Atlassian-Webhook-Signature", "")
-            expected = hmac.new(
-                webhook_secret.encode(), body_bytes, hashlib.sha256
-            ).hexdigest()
-            if not hmac.compare_digest(signature, expected):
-                raise HTTPException(status_code=403, detail="Invalid webhook signature")
-
         body_text = body_bytes.decode("utf-8")
-
         import json
         payload = json.loads(body_text)
         event_type = payload.get("webhookEvent") or payload.get("event_type") or "unknown"
@@ -1151,5 +1202,8 @@ async def receive_webhook(request: Request):
             "event": event_type,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+    except HTTPException:
+        raise
     except Exception:
+        _log.exception("Jira webhook processing failed")
         raise HTTPException(status_code=500, detail="Webhook processing failed")

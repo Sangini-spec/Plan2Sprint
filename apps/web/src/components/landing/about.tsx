@@ -151,29 +151,17 @@ export default function AboutSection() {
             className="space-y-6"
           >
             <p className="text-base leading-relaxed text-[var(--text-secondary)]">
-              Plan2Sprint was born from a shared frustration. As engineering
-              leaders and product owners, we spent years watching teams drown in
-              ceremony&nbsp;&mdash; endless standup meetings, sprint planning
-              marathons that consumed entire afternoons, and retrospectives that
-              felt more like therapy sessions than improvement loops. We knew
-              there had to be a better way.
+              Plan2Sprint was born from a shared frustration: teams drowning in
+              ceremony. Endless standups, planning marathons, retros built on
+              memory.
             </p>
 
             <p className="text-base leading-relaxed text-[var(--text-secondary)]">
-              We believed AI could help&nbsp;&mdash; but not in the way most
-              tools were approaching it. We didn&rsquo;t want another dashboard
-              that surveilled developers or an AI that made decisions behind
-              closed doors. We wanted a tool that was transparent, minimal in its
-              footprint, and deeply respectful of the people writing the code.
-            </p>
-
-            <p className="text-base leading-relaxed text-[var(--text-secondary)]">
-              So we built Plan2Sprint: an AI-powered overlay that reads your
-              existing tools, generates intelligent sprint plans with full
-              rationale, delivers async standups that respect your
-              team&rsquo;s time, and writes back only what&rsquo;s absolutely
-              necessary. Every decision is explainable. Every action is
-              reversible. And weekends are sacred.
+              We didn&rsquo;t want another surveillance dashboard or a black-box
+              AI. We built an overlay that reads your existing tools, surfaces
+              the signal, and writes back only what&rsquo;s necessary. Every
+              decision is explainable. Every action is reversible. Weekends are
+              sacred.
             </p>
           </motion.div>
 

@@ -29,10 +29,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...auth.supabase import get_current_user
+from ...auth.supabase import get_current_user, require_po
 from ...config import settings
 from ...database import get_db
 from ...models.tool_connection import ToolConnection
+from ...models.user import User
 from ...services.encryption import encrypt_token, decrypt_token
 import httpx
 
@@ -177,6 +178,7 @@ async def initiate_teams_oauth(
     Initiates Microsoft OAuth 2.0 flow by redirecting the browser to
     Microsoft's authorization endpoint.
     """
+    require_po(current_user)  # Hotfix 69B — connecting Teams is a PO-only org action
     if settings.is_demo_mode:
         return RedirectResponse(
             url=f"{settings.frontend_url}/po/notifications?teams=demo_connected",
@@ -219,6 +221,249 @@ async def initiate_teams_oauth(
 
     authorize_url = f"{MS_AUTHORITY}/{tenant_id}/oauth2/v2.0/authorize?{urlencode(params)}"
     return RedirectResponse(url=authorize_url, status_code=302)
+
+
+# ===================================================================
+# Hotfix 74 — PER-USER TEAMS IDENTITY LINK
+#
+# Mirror of slack.py's /me/* endpoints. Each developer / stakeholder
+# OAuths their personal Microsoft account (User.Read scope only),
+# we pull /me from Graph API to get their teams_user_id, and store
+# it on their User row. Re-uses the existing ``/callback`` URL —
+# distinguished from the org-install flow by the ``me:`` state
+# prefix.
+# ===================================================================
+
+# Just the minimal scope to identify the calling user. No org-wide
+# scopes — those belong to the PO install.
+TEAMS_ME_SCOPES = "https://graph.microsoft.com/User.Read offline_access openid profile email"
+
+_me_oauth_states: dict[str, dict] = {}
+
+
+@router.get("/me/connect")
+async def teams_me_connect(
+    current_user: dict = Depends(get_current_user),
+):
+    """Initiate per-user Microsoft OAuth so the caller can link their
+    personal Teams identity. Used by developers and stakeholders from
+    the Channels page."""
+    if settings.is_demo_mode:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/dev/notifications?teams=demo_linked",
+            status_code=302,
+        )
+
+    client_id = settings.teams_client_id
+    redirect_uri = settings.teams_redirect_uri
+    # NOTE: use ``common`` (or ``organizations``) tenant rather than
+    # the org's hard-coded tenant_id — the dev's personal Microsoft
+    # account might live in a different tenant. ``common`` lets them
+    # sign in with any work/school/personal account.
+    tenant_id = "organizations"
+
+    if not client_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Teams OAuth not configured — TEAMS_CLIENT_ID is missing",
+        )
+
+    state = "me:" + str(uuid.uuid4())
+    _me_oauth_states[state] = {
+        "user_id": current_user.get("sub", "unknown"),
+        "user_email": (current_user.get("email") or "").lower(),
+        "org_id": current_user.get("organization_id", "demo-org"),
+        "created_at": time.time(),
+    }
+    cutoff = time.time() - 600
+    for k in [k for k, v in _me_oauth_states.items() if v["created_at"] < cutoff]:
+        del _me_oauth_states[k]
+
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "scope": TEAMS_ME_SCOPES,
+        "state": state,
+        "response_mode": "query",
+        # ``select_account`` so the user is forced to pick which of
+        # their multiple Microsoft accounts to link. This is exactly
+        # the multi-account UX that's missing without per-user OAuth.
+        "prompt": "select_account",
+    }
+
+    authorize_url = f"{MS_AUTHORITY}/{tenant_id}/oauth2/v2.0/authorize?{urlencode(params)}"
+    return RedirectResponse(url=authorize_url, status_code=302)
+
+
+async def _teams_me_callback_inner(
+    code: str,
+    state: str,
+    db: AsyncSession,
+):
+    """Per-user Teams OAuth callback. Called from the unified
+    ``/callback`` when ``state`` is prefixed with ``me:``."""
+    redirect_base = f"{settings.frontend_url}/dev/notifications"
+
+    state_data = _me_oauth_states.pop(state, None)
+    if not state_data:
+        return RedirectResponse(
+            url=f"{redirect_base}?teams_me=error&detail=invalid_state",
+            status_code=302,
+        )
+
+    # Use the same ``organizations`` tenant alias for token exchange
+    # as we used for /authorize.
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                f"{MS_AUTHORITY}/organizations/oauth2/v2.0/token",
+                data={
+                    "client_id": settings.teams_client_id,
+                    "client_secret": settings.teams_client_secret,
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": settings.teams_redirect_uri,
+                    "scope": TEAMS_ME_SCOPES,
+                },
+            )
+            token_data = res.json()
+            if "access_token" not in token_data:
+                err = token_data.get("error_description", token_data.get("error", "token_exchange_failed"))
+                return RedirectResponse(
+                    url=f"{redirect_base}?teams_me=error&detail={err[:80]}",
+                    status_code=302,
+                )
+    except httpx.RequestError:
+        return RedirectResponse(
+            url=f"{redirect_base}?teams_me=error&detail=network_error",
+            status_code=302,
+        )
+
+    user_token = token_data.get("access_token", "")
+
+    # Fetch /me from Graph to extract the user's identity
+    teams_user_id: str = ""
+    teams_upn: Optional[str] = None
+    teams_display_name: Optional[str] = None
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            me_res = await client.get(
+                f"{MS_GRAPH_API}/me",
+                headers={"Authorization": f"Bearer {user_token}"},
+            )
+            if me_res.status_code == 200:
+                me = me_res.json()
+                teams_user_id = me.get("id", "") or ""
+                teams_upn = me.get("userPrincipalName") or me.get("mail") or None
+                teams_display_name = me.get("displayName") or None
+    except Exception:
+        pass
+
+    if not teams_user_id:
+        return RedirectResponse(
+            url=f"{redirect_base}?teams_me=error&detail=no_graph_id",
+            status_code=302,
+        )
+
+    # Persist on the Plan2Sprint User row
+    sup_uid = state_data.get("user_id", "")
+    user_email = state_data.get("user_email", "")
+
+    user_row: Optional[User] = None
+    if sup_uid and sup_uid != "unknown":
+        result = await db.execute(
+            select(User).where(User.supabase_user_id == sup_uid)
+        )
+        user_row = result.scalar_one_or_none()
+    if not user_row and user_email:
+        result = await db.execute(
+            select(User).where(User.email == user_email)
+        )
+        user_row = result.scalar_one_or_none()
+
+    if not user_row:
+        return RedirectResponse(
+            url=f"{redirect_base}?teams_me=error&detail=user_not_found",
+            status_code=302,
+        )
+
+    user_row.teams_user_id = teams_user_id
+    user_row.teams_user_principal_name = teams_upn
+    user_row.teams_display_name = teams_display_name
+    await db.commit()
+
+    return RedirectResponse(
+        url=f"{redirect_base}?teams_me=linked",
+        status_code=302,
+    )
+
+
+@router.get("/me/status")
+async def teams_me_status(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return per-user Teams link state for the current caller."""
+    if settings.is_demo_mode:
+        return {"linked": False, "demo": True}
+
+    sup_uid = current_user.get("sub", "")
+    user_email = (current_user.get("email") or "").lower()
+    user_row: Optional[User] = None
+    if sup_uid:
+        result = await db.execute(
+            select(User).where(User.supabase_user_id == sup_uid)
+        )
+        user_row = result.scalar_one_or_none()
+    if not user_row and user_email:
+        result = await db.execute(
+            select(User).where(User.email == user_email)
+        )
+        user_row = result.scalar_one_or_none()
+
+    if not user_row or not user_row.teams_user_id:
+        return {"linked": False}
+
+    return {
+        "linked": True,
+        "teams_user_id": user_row.teams_user_id,
+        "teams_user_principal_name": user_row.teams_user_principal_name,
+        "teams_display_name": user_row.teams_display_name,
+    }
+
+
+@router.post("/me/disconnect")
+async def teams_me_disconnect(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear the caller's per-user Teams link."""
+    if settings.is_demo_mode:
+        return {"ok": True, "demo": True}
+
+    sup_uid = current_user.get("sub", "")
+    user_email = (current_user.get("email") or "").lower()
+    user_row: Optional[User] = None
+    if sup_uid:
+        result = await db.execute(
+            select(User).where(User.supabase_user_id == sup_uid)
+        )
+        user_row = result.scalar_one_or_none()
+    if not user_row and user_email:
+        result = await db.execute(
+            select(User).where(User.email == user_email)
+        )
+        user_row = result.scalar_one_or_none()
+
+    if not user_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user_row.teams_user_id = None
+    user_row.teams_user_principal_name = None
+    user_row.teams_display_name = None
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/blocker-action", response_class=HTMLResponse)
@@ -420,6 +665,12 @@ async def teams_oauth_callback(
             status_code=302,
         )
 
+    # Hotfix 74 — dispatch to per-user Teams identity flow if the
+    # state has the ``me:`` prefix. Both flows share this single
+    # registered redirect URI on the Microsoft app side.
+    if state.startswith("me:"):
+        return await _teams_me_callback_inner(code, state, db)
+
     # Verify CSRF state
     state_data = _oauth_states.pop(state, None)
     if not state_data:
@@ -529,6 +780,13 @@ async def teams_status(
     """GET /status — Check if Teams is connected for current org."""
     if settings.is_demo_mode:
         return {"connected": False, "demo": True}
+
+    # Hotfix 72 — revert of Hotfix 71. See slack.py for rationale.
+    # Per-user Teams OAuth is the correct path; flagging non-PO as
+    # "connected" without it just lies about delivery readiness.
+    is_po = (current_user.get("role") or "").lower() in {"product_owner", "admin", "owner"}
+    if not is_po:
+        return {"connected": False}
 
     org_id = current_user.get("organization_id", "demo-org")
     conn = await _get_teams_connection(db, org_id)
@@ -844,6 +1102,7 @@ async def disconnect_teams(
     db: AsyncSession = Depends(get_db),
 ):
     """DELETE /disconnect — Remove Teams connection."""
+    require_po(current_user)  # Hotfix 69B — destructive on org connection
     if settings.is_demo_mode:
         return {"success": True, "demo": True}
 
@@ -867,10 +1126,30 @@ async def disconnect_teams(
 async def teams_webhook(request: Request):
     """
     POST /webhook
-    Receive Teams webhook notifications.
-    Handles validation token for subscription setup.
+    Receive Microsoft Graph change notifications for Teams resources.
+
+    Hotfix 80 — webhook security hardening:
+      Microsoft Graph subscriptions deliver each notification with a
+      ``clientState`` field — a shared secret the subscriber set when
+      creating the subscription. The subscriber is REQUIRED by Microsoft
+      to verify clientState before processing
+      (https://learn.microsoft.com/graph/webhooks#processing-the-change-notification).
+
+      We compare ``clientState`` against ``settings.teams_webhook_client_state``
+      using constant-time compare. Notifications without a matching
+      clientState are rejected with 401.
+
+      Validation handshake (?validationToken=...) is pre-secret since
+      Microsoft uses it to verify the endpoint accepts notifications.
     """
-    # Handle validation for subscription creation
+    import logging as _logging
+    from ...services.webhook_security import (
+        verify_shared_secret,
+        is_strict_mode_enabled,
+    )
+    _log = _logging.getLogger(__name__)
+
+    # Subscription validation handshake (no clientState yet, pre-creation).
     validation_token = request.query_params.get("validationToken")
     if validation_token:
         from fastapi.responses import PlainTextResponse
@@ -881,11 +1160,44 @@ async def teams_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Process notifications
-    for notification in body.get("value", []):
+    # ---- clientState verification (outside broad try/except) ----
+    expected_state = getattr(settings, "teams_webhook_client_state", "") or ""
+    strict_mode = is_strict_mode_enabled() or settings.strict_webhook_verification
+
+    notifications = body.get("value", []) or []
+
+    if expected_state:
+        # Every notification must carry a matching clientState — even one
+        # mismatch fails the entire delivery.
+        for n in notifications:
+            provided = n.get("clientState", "") or ""
+            if not verify_shared_secret(provided, expected_state):
+                _log.warning(
+                    "[SECURITY] Teams webhook clientState MISMATCH — rejecting"
+                )
+                raise HTTPException(
+                    status_code=401, detail="Invalid clientState"
+                )
+    elif strict_mode:
+        _log.warning(
+            "[SECURITY] Teams webhook REJECTED (strict mode) — "
+            "TEAMS_WEBHOOK_CLIENT_STATE is not configured."
+        )
+        raise HTTPException(
+            status_code=401, detail="Webhook clientState not configured"
+        )
+    else:
+        _log.warning(
+            "[SECURITY] Teams webhook accepted UNVERIFIED — "
+            "TEAMS_WEBHOOK_CLIENT_STATE is not configured. "
+            "Set it and STRICT_WEBHOOK_VERIFICATION=true to lock down."
+        )
+
+    # ---- Payload processing ----
+    for notification in notifications:
         resource = notification.get("resource", "")
         change_type = notification.get("changeType", "")
-        print(f"[Teams Webhook] {change_type} on {resource}")
+        _log.info(f"[Teams Webhook] {change_type} on {resource}")
 
         # TODO: Process specific notifications:
         # - message replies to Plan2Sprint messages

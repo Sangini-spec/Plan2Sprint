@@ -126,9 +126,36 @@ interface FloatingFieldProps {
   label: string;
   error?: string;
   children: React.ReactNode;
+  /** When true, render the label as a non-form-bound caption (used for
+   * radio groups, where ``<label htmlFor>`` referencing a single id is
+   * incorrect — there is no single form control to point at). */
+  asGroup?: boolean;
 }
 
-function FieldWrapper({ id, label, error, children }: FloatingFieldProps) {
+function FieldWrapper({ id, label, error, children, asGroup }: FloatingFieldProps) {
+  // For radio / checkbox groups we use ``<fieldset>``/``<legend>`` so
+  // assistive tech announces the group name when any individual radio
+  // is focused, and ``<label for>`` doesn't dangle.
+  if (asGroup) {
+    return (
+      <fieldset className="relative border-0 p-0 m-0">
+        <legend className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+          {label}
+        </legend>
+        {children}
+        {error && (
+          <motion.p
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-1.5 text-xs font-medium text-red-500"
+          >
+            {error}
+          </motion.p>
+        )}
+      </fieldset>
+    );
+  }
+
   return (
     <div className="relative">
       <label
@@ -229,6 +256,7 @@ function ContactForm() {
           <input
             id="fullName"
             type="text"
+            autoComplete="name"
             placeholder="Your full name"
             className={cn(inputClasses, errors.fullName && errorInputClasses)}
             {...register("fullName")}
@@ -244,6 +272,7 @@ function ContactForm() {
           <input
             id="workEmail"
             type="email"
+            autoComplete="email"
             placeholder="you@company.com"
             className={cn(inputClasses, errors.workEmail && errorInputClasses)}
             {...register("workEmail")}
@@ -258,6 +287,7 @@ function ContactForm() {
         >
           <select
             id="teamSize"
+            autoComplete="organization"
             className={cn(
               inputClasses,
               "appearance-none pr-10 cursor-pointer",
@@ -280,11 +310,13 @@ function ContactForm() {
           </select>
         </FieldWrapper>
 
-        {/* Interest */}
+        {/* Interest — radio group, rendered as <fieldset><legend> so the
+            label isn't dangling on a non-existent ``id``. */}
         <FieldWrapper
           id="interest"
           label="I'm interested in... *"
           error={errors.interest?.message}
+          asGroup
         >
           <div className="flex flex-wrap gap-3 mt-1">
             {interestOptions.map((opt) => (
@@ -321,6 +353,7 @@ function ContactForm() {
           <textarea
             id="message"
             rows={4}
+            autoComplete="off"
             placeholder="Tell us about your team and what you're looking for..."
             className={cn(
               inputClasses,

@@ -37,6 +37,8 @@ from ..models.iteration import Iteration
 from ..models.work_item import WorkItem
 from ..models.team_member import TeamMember
 from ..models.in_app_notification import InAppNotification
+from ..models.sprint_plan import SprintPlan
+from ..models.retrospective import Retrospective
 
 logger = logging.getLogger(__name__)
 
@@ -47,96 +49,110 @@ async def check_and_complete_sprints(
     project_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Check active iterations for completion using TWO detection methods:
+    Hotfix 82 — retrospective trigger driven by AI Sprint Plan timeline.
 
-      1. STATUS-BASED: All work items in the sprint are Done → complete now.
-      2. DATE-BASED:   Sprint end date has passed → complete with spillover.
+    Old behaviour (Iteration.state == "active" + end_date or all-items-done)
+    was tied to ADO/Jira sprint state, which never flipped to "active" if
+    the team worked exclusively in Plan2Sprint. Result: AI plans came and
+    went without retros. Sangini's call: replace the trigger with the AI
+    plan's own ``estimated_end_date``.
 
-    Returns a list of completion summaries. Idempotent: already-completed
-    iterations are skipped.
+    New behaviour:
+      - Find SprintPlans in APPROVED or SYNCED status for this org.
+      - Whose ``estimated_end_date`` is in the past.
+      - With no Retrospective yet for the same ``iteration_id``.
+      - For each: run the full completion pipeline on the linked
+        Iteration. The pipeline already handles failure-vs-success retro,
+        spillover, velocity, notifications, etc. — we just changed who
+        decides "this sprint is done".
+
+    Returns a list of completion summaries. Idempotent: deduplicated by
+    iteration_id (one retro per iteration even if multiple superseding
+    plans exist for it).
     """
     now = datetime.now(timezone.utc)
-    done_statuses = ["DONE", "Closed", "CLOSED", "Done", "Resolved"]
 
-    # ── Fetch all active iterations ──
-    query = (
-        select(Iteration)
+    # ── Fetch APPROVED/SYNCED sprint plans whose estimated end is past ──
+    plan_query = (
+        select(SprintPlan)
         .where(
-            Iteration.organization_id == org_id,
-            Iteration.state == "active",
+            SprintPlan.organization_id == org_id,
+            SprintPlan.status.in_(["APPROVED", "SYNCED"]),
+            SprintPlan.estimated_end_date.isnot(None),
+            SprintPlan.estimated_end_date < now,
         )
+        .order_by(SprintPlan.estimated_end_date.asc())
     )
     if project_id:
-        query = query.where(Iteration.imported_project_id == project_id)
+        plan_query = plan_query.where(SprintPlan.project_id == project_id)
 
-    result = await db.execute(query)
-    active_iterations = list(result.scalars().all())
+    plans_result = await db.execute(plan_query)
+    candidate_plans = list(plans_result.scalars().all())
 
-    if not active_iterations:
+    if not candidate_plans:
         return []
 
+    # ── Drop plans whose iteration already has a retro (dedup) ──
+    iteration_ids = {p.iteration_id for p in candidate_plans if p.iteration_id}
+    if not iteration_ids:
+        return []
+    existing_retro_q = await db.execute(
+        select(Retrospective.iteration_id).where(
+            Retrospective.organization_id == org_id,
+            Retrospective.iteration_id.in_(iteration_ids),
+        )
+    )
+    iterations_with_retros = {row[0] for row in existing_retro_q.all() if row[0]}
+
+    seen_iterations: set[str] = set()
     completed_summaries: list[dict[str, Any]] = []
 
-    for iteration in active_iterations:
-        should_complete = False
-        trigger = "unknown"
-
-        # ── Trigger 1: Status-based (all items Done) ──
-        # Count total and done items assigned to this iteration
-        iter_project = iteration.imported_project_id or project_id
-        wi_filters = [
-            WorkItem.organization_id == org_id,
-            WorkItem.iteration_id == iteration.id,
-        ]
-        if iter_project:
-            wi_filters.append(WorkItem.imported_project_id == iter_project)
-
-        count_result = await db.execute(
-            select(
-                func.count().label("total"),
-                func.count().filter(
-                    WorkItem.status.in_(done_statuses)
-                ).label("done"),
-            ).where(*wi_filters)
-        )
-        counts = count_result.one()
-        total_in_sprint = counts[0]
-        done_in_sprint = counts[1]
-
-        if total_in_sprint > 0 and done_in_sprint == total_in_sprint:
-            # Every single item is Done — sprint completed by real-time status
-            should_complete = True
-            trigger = "all_items_done"
-            logger.info(
-                f"Sprint '{iteration.name}': all {total_in_sprint} items done — "
-                f"status-based completion triggered"
-            )
-
-        # ── Trigger 2: Date-based (end date passed) ──
-        if not should_complete and iteration.end_date and iteration.end_date < now:
-            should_complete = True
-            trigger = "end_date_passed"
-            logger.info(
-                f"Sprint '{iteration.name}': end date {iteration.end_date} passed — "
-                f"date-based completion triggered "
-                f"({done_in_sprint}/{total_in_sprint} items done)"
-            )
-
-        if not should_complete:
+    for plan in candidate_plans:
+        if not plan.iteration_id or plan.iteration_id in iterations_with_retros:
             continue
+        if plan.iteration_id in seen_iterations:
+            continue  # multiple plans for same iteration — only fire once
+        seen_iterations.add(plan.iteration_id)
+
+        # Fetch the linked Iteration row (we still want to mark it
+        # ``state = completed`` and the existing pipeline expects the
+        # Iteration object).
+        iter_q = await db.execute(
+            select(Iteration).where(Iteration.id == plan.iteration_id)
+        )
+        iteration = iter_q.scalar_one_or_none()
+        if not iteration:
+            logger.warning(
+                f"SprintPlan {plan.id} references missing iteration {plan.iteration_id}; skipping"
+            )
+            continue
+        if iteration.state == "completed":
+            # Iteration was already completed by a prior pass (or via the
+            # old iteration-state path) but no retro exists yet — let the
+            # pipeline run anyway so the retro lands. ``_complete_single_sprint``
+            # handles re-completion idempotently.
+            pass
+
+        logger.info(
+            f"AI plan timeline trigger: SprintPlan {plan.id} "
+            f"(end={plan.estimated_end_date}, status={plan.status}) "
+            f"→ generating retro for iteration '{iteration.name}'"
+        )
 
         try:
             summary = await _complete_single_sprint(
                 db=db,
                 org_id=org_id,
-                project_id=iter_project,
+                project_id=plan.project_id or iteration.imported_project_id or project_id,
                 iteration=iteration,
-                trigger=trigger,
+                trigger="ai_plan_end_date_passed",
             )
+            summary["sprintPlanId"] = plan.id
             completed_summaries.append(summary)
         except Exception as e:
             logger.exception(
-                f"Failed to auto-complete sprint {iteration.name} ({iteration.id}): {e}"
+                f"Failed to generate AI-plan-driven retro for plan {plan.id} "
+                f"(iteration {plan.iteration_id}): {e}"
             )
 
     return completed_summaries
@@ -194,6 +210,7 @@ async def _complete_single_sprint(
     trigger_label = {
         "all_items_done": "all items completed",
         "end_date_passed": f"end date passed ({iteration.end_date})",
+        "ai_plan_end_date_passed": "AI sprint plan reached its estimated end date",
         "manual": "manually triggered",
     }.get(trigger, trigger)
 
@@ -344,6 +361,8 @@ async def _complete_single_sprint(
             title = f"Sprint '{iteration_name}' completed — all items done!"
         elif trigger == "end_date_passed":
             title = f"Sprint '{iteration_name}' ended — deadline reached"
+        elif trigger == "ai_plan_end_date_passed":
+            title = f"Sprint '{iteration_name}' wrapped — AI plan timeline ended"
         else:
             title = f"Sprint '{iteration_name}' completed"
 

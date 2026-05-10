@@ -46,7 +46,7 @@ async def _reset_daily_tracker():
     global _sent_today, _last_reset_date
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if today != _last_reset_date:
-        _sent_today = {"morning": set(), "evening": set(), "nudge": set(), "weekly_report": set()}
+        _sent_today = {"morning": set(), "evening": set(), "nudge": set(), "weekly_report": set(), "overdue_alerts": set()}
         _last_reset_date = today
 
 
@@ -199,6 +199,19 @@ async def _notification_tick():
     if h == MORNING_HOUR_UTC and MORNING_MINUTE <= m < MORNING_MINUTE + 2:
         logger.info("Notification scheduler: morning digest window")
         await _send_morning_digests()
+        # Hotfix 83 — once per morning, look for projects that have just
+        # passed their target launch and email the PO. Idempotent: each
+        # (project, target_date) combination is emailed at most once
+        # (enforced via ImportedProject.last_overdue_alert_target_date).
+        if "overdue_alerts" not in _sent_today.get("overdue_alerts", set()):
+            try:
+                from .overdue_alert import check_and_send_overdue_alerts
+                async with AsyncSessionLocal() as _db:
+                    report = await check_and_send_overdue_alerts(_db)
+                logger.info(f"Overdue alerts: {report}")
+                _sent_today.setdefault("overdue_alerts", set()).add("overdue_alerts")
+            except Exception as e:
+                logger.warning(f"Overdue alert check failed: {e}", exc_info=True)
 
     # Evening summary window
     if h == EVENING_HOUR_UTC and EVENING_MINUTE <= m < EVENING_MINUTE + 2:

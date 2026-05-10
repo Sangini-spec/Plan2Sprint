@@ -14,9 +14,9 @@ import {
   RefreshCw,
   MessageSquare,
   BarChart3,
-  Brain,
-  Pencil,
-  Search,
+  Scale,
+  TrendingUp,
+  MessageCircle,
   Calendar,
   CheckCircle2,
   ArrowRight,
@@ -294,11 +294,11 @@ function SlackStandupMock() {
             <div className="space-y-1.5 pl-6">
               <p className="text-xs text-[var(--text-secondary)]">
                 <span className="font-medium text-[var(--text-primary)]">P2S-142</span>{" "}
-                Auth token refresh flow &mdash; merged to main
+                Auth token refresh flow, merged to main
               </p>
               <p className="text-xs text-[var(--text-secondary)]">
                 <span className="font-medium text-[var(--text-primary)]">P2S-138</span>{" "}
-                Dashboard chart filters &mdash; PR approved
+                Dashboard chart filters, PR approved
               </p>
             </div>
           </div>
@@ -314,7 +314,7 @@ function SlackStandupMock() {
             <div className="space-y-1.5 pl-6">
               <p className="text-xs text-[var(--text-secondary)]">
                 <span className="font-medium text-[var(--text-primary)]">P2S-151</span>{" "}
-                API rate limiter &mdash; 3 commits, 2 files changed
+                API rate limiter, 3 commits, 2 files changed
               </p>
             </div>
           </div>
@@ -330,7 +330,7 @@ function SlackStandupMock() {
             <div className="pl-6">
               <p className="text-xs text-[var(--text-secondary)]">
                 <span className="font-medium text-[var(--text-primary)]">P2S-147</span>{" "}
-                Waiting on design review &mdash;{" "}
+                Waiting on design review,{" "}
                 <span className="text-[var(--color-rag-amber)]">2 days</span>
               </p>
             </div>
@@ -593,57 +593,57 @@ function SpotlightRow({
 const featureCards = [
   {
     icon: Shield,
-    title: "Human-in-the-Loop Always",
+    title: "Human-in-the-Loop",
     description:
-      "Every AI plan requires explicit approval. Edit assignments, adjust story points, or override rationale before a single ticket moves.",
+      "Every AI plan requires explicit approval. Edit before a ticket moves.",
+  },
+  {
+    icon: TrendingUp,
+    title: "Sprint Forecast",
+    description:
+      "Predicts sprint success probability, flags spillover risk, and recommends action while the sprint is still recoverable.",
+  },
+  {
+    icon: Scale,
+    title: "Sprint Rebalance",
+    description:
+      "When a sprint is at risk, Plan2Sprint suggests which stories to defer, swap, or reassign so the goal still ships.",
   },
   {
     icon: Flame,
     title: "Burnout Detection",
     description:
-      "Track overtime patterns, consecutive high-load sprints, and weekend commits. Get early warnings before burnout hits your team.",
+      "Catches overtime patterns and weekend commits before they cost you a teammate.",
   },
   {
     icon: RefreshCw,
     title: "AI Retrospectives",
     description:
-      "Auto-generated sprint retrospectives powered by real delivery data. See what actually happened, not what people remember.",
+      "Sprint retros built from real delivery data, not fading memory.",
   },
   {
     icon: MessageSquare,
     title: "Slack & Teams Native",
     description:
-      "Standups, blockers, and sprint digests delivered where your team already works. No new app to install or check.",
+      "Standups, blockers, and digests delivered where your team already lives.",
   },
   {
     icon: BarChart3,
     title: "Role-Based Dashboards",
     description:
-      "Product owners see sprint health. Developers see their assignments. Managers see team load. Everyone gets the right view.",
+      "POs see sprint health, devs see assignments, stakeholders see delivery health.",
   },
   {
-    icon: Brain,
-    title: "Learns Every Sprint",
+    icon: MessageCircle,
+    title: "Comment-Only Write-Back",
     description:
-      "Plan2Sprint refines its model each sprint based on actuals vs. estimates, improving accuracy with every iteration.",
-  },
-  {
-    icon: Pencil,
-    title: "Scoped Write-Back",
-    description:
-      "Write-back is limited to ticket status and sprint assignment. No repo access, no code changes, no destructive operations.",
-  },
-  {
-    icon: Search,
-    title: "Backlog Health Scoring",
-    description:
-      "AI scores your backlog on completeness, priority clarity, and estimation quality. Surface grooming debt before it stalls planning.",
+      "Plans and recommendations land as comments on your tickets. Your structured fields stay untouched.",
   },
   {
     icon: Calendar,
     title: "Capacity-Aware Planning",
     description:
-      "Factor in PTO, holidays, part-time allocations, and focus-time blocks. Plans that reflect reality, not just velocity averages.",
+      "Factors in PTO, holidays, and focus blocks, not just velocity averages.",
   },
 ];
 
@@ -716,13 +716,11 @@ export default function Features() {
         <SpotlightRow
           eyebrow="AI Sprint Planning"
           headline="A complete sprint plan in under 90 seconds."
-          body="Plan2Sprint reads your entire backlog, analyzes team velocity and individual skill profiles, then generates a capacity-aware sprint plan complete with assignments and rationale. No spreadsheets. No guesswork. Just a plan your team can review, edit, and approve."
+          body="Reads your backlog, factors in capacity and skills, generates a plan you can review, edit, and approve."
           bullets={[
-            "Velocity-based assignment",
-            "Skill-affinity matching",
-            "Dependency ordering",
-            "Sprint goal alignment",
+            "Velocity + skill-aware assignment",
             "Per-assignment AI rationale",
+            "Inline edits before approval",
           ]}
           ctaText="See it in action"
           ctaHref="#demo"
@@ -737,13 +735,11 @@ export default function Features() {
           reversed
           eyebrow="Async Standup Engine"
           headline="No more daily standup meetings. Ever."
-          body="The Activity Engine monitors GitHub commits, PR activity, and Jira ticket transitions 24/7. Every weekday morning, it compiles a per-developer standup report generated entirely from real work data and delivers it straight to Slack or Teams."
+          body="Standups compiled from real GitHub + Jira activity, delivered to Slack or Teams every morning."
           bullets={[
-            "Generated from real data",
-            "Delivered in Slack/Teams",
-            "Flag blockers with one tap",
-            "Zero weekend reports",
-            "Team digest for PO",
+            "Auto-generated from live data",
+            "One-tap blocker flagging",
+            "Daily team digest for the PO",
           ]}
           ctaText="See it in action"
           ctaHref="#demo"
@@ -755,15 +751,13 @@ export default function Features() {
 
         {/* Spotlight Row 3: GitHub Monitoring */}
         <SpotlightRow
-          eyebrow="GitHub Development Monitoring"
-          headline="See actual progress — not just ticket status."
-          body="Pull request status, CI/CD results, commit velocity, and review lag are surfaced inline on the PO Dashboard. Know exactly where development stands without asking a single developer or opening GitHub."
+          eyebrow="GitHub Monitoring"
+          headline="See actual progress, not just ticket status."
+          body="PR status, CI results, and review lag surface inline on the PO dashboard. Read-only."
           bullets={[
             "Auto-link PRs to tickets",
-            "Review lag detection",
+            "Review-lag + stalled-ticket alerts",
             "CI/CD status per PR",
-            "Stalled ticket detection",
-            "Read-only — zero write access",
           ]}
           ctaText="See it in action"
           ctaHref="#demo"
@@ -778,9 +772,8 @@ export default function Features() {
           <SectionHeading as="h3" className="text-2xl sm:text-3xl">
             And so much more built in.
           </SectionHeading>
-          <p className="text-[var(--text-secondary)] mt-4 max-w-2xl mx-auto">
-            Every feature is designed to reduce ceremony and surface the signal
-            your team needs to ship confidently.
+          <p className="text-[var(--text-secondary)] mt-4 max-w-xl mx-auto">
+            Less ceremony. More signal.
           </p>
         </AnimatedSection>
 

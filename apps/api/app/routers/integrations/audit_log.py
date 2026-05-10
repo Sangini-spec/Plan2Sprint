@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from ...auth.supabase import get_current_user
+from ...auth.supabase import get_current_user, require_po
 from ...database import get_db
 from ...models import AuditLogEntry
 
@@ -23,6 +23,7 @@ async def get_audit_log(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    require_po(current_user)  # Hotfix 56 (MED-2) — PO/admin only
     org_id = current_user.get("organization_id", "demo-org")
 
     query = (
