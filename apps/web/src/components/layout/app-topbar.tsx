@@ -195,6 +195,7 @@ interface AppTopbarProps {
 
 export function AppTopbar({ onMenuClick }: AppTopbarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const pageTitle = getPageTitle(pathname);
   const { role } = useAuth();
   const { hasAnyConnection, openModal } = useIntegrations();
@@ -266,10 +267,11 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
         )}
 
         {/* Help / Onboarding — opens Settings → Help where the user can
-            replay the tour or reset page hints. */}
+            replay the tour or reset page hints. Soft nav (router.push)
+            so we don't re-download the entire app on click. */}
         {isAppRoute && (
           <button
-            onClick={() => (window.location.href = "/settings/help")}
+            onClick={() => router.push("/settings/help")}
             className={cn(
               "flex h-9 w-9 items-center justify-center rounded-xl",
               "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
