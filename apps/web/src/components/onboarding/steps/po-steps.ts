@@ -81,16 +81,9 @@ export const PO_STEPS: OnboardingStep[] = [
     title: "Sprint Planning",
     body:
       "Generate a sprint plan in one click. The AI assigns work items to team members based on skills + capacity, with a confidence score for the whole plan.",
-    route: "/po/planning",
+    route: "/po/planning?tab=planning",
     anchor: "[data-onboarding=planning-generate]",
     anchorPosition: "auto",
-    onEnter: () => {
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("onboarding:set-planning-tab", { detail: "plan" }),
-        );
-      }
-    },
   },
   {
     id: "sprint-forecast",
@@ -99,16 +92,9 @@ export const PO_STEPS: OnboardingStep[] = [
     title: "Forecast",
     body:
       "See success probability, spillover risk, and the predictability score for the proposed plan before approving. Use this to validate plans before they reach the team.",
-    route: "/po/planning",
+    route: "/po/planning?tab=forecast",
     anchor: "[data-onboarding=planning-forecast]",
     anchorPosition: "auto",
-    onEnter: () => {
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("onboarding:set-planning-tab", { detail: "forecast" }),
-        );
-      }
-    },
   },
   {
     id: "sprint-rebalance",
@@ -117,16 +103,9 @@ export const PO_STEPS: OnboardingStep[] = [
     title: "Rebalance",
     body:
       "When the plan ends past your target launch, Plan2Sprint suggests realistic shifts — move scope, extend the sprint, or both. Review and approve the rebalanced plan here.",
-    route: "/po/planning",
+    route: "/po/planning?tab=rebalance",
     anchor: "[data-onboarding=planning-rebalance]",
     anchorPosition: "auto",
-    onEnter: () => {
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("onboarding:set-planning-tab", { detail: "rebalance" }),
-        );
-      }
-    },
   },
   {
     id: "github-monitoring",

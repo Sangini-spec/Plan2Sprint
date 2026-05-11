@@ -4,10 +4,11 @@
  * OnboardingTour — root renderer for the product tour.
  *
  * Decides which primitive to mount based on the current OnboardingProgress:
- *   not_started + !banner_dismissed → WelcomeModal
+ *   shouldShowWelcome (not_started OR current_step="welcome" post-replay)
+ *     → WelcomeModal
  *   in_progress + step.variant=spotlight → SpotlightCard + ChecklistWidget
  *   in_progress + step.variant=completion → CompletionModal
- *   (always when active) → PageHintCard (it self-gates on activePageHint)
+ *   (always)                              → PageHintCard (gated internally)
  *
  * Mounted in (app)/layout once via OnboardingProvider. Sits at z-index
  * 90+ so it always wins over normal page content.

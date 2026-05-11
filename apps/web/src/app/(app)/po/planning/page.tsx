@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Zap, Loader2, Scale } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-fetch";
@@ -103,22 +104,27 @@ export default function PlanningPage() {
     "sync_complete",
   ]);
 
-  // Tab state
-  const [activeTab, setActiveTab] = useState("planning");
+  // Tab state — initialised from the ``?tab=`` query param so the
+  // onboarding tour can navigate to a specific tab via URL. Custom
+  // DOM events would race the page mount (router.push is async — by
+  // the time the page registers a listener, the event has fired into
+  // the void). URL params survive the mount.
+  const searchParams = useSearchParams();
+  const initialTab = (() => {
+    const t = searchParams?.get("tab");
+    return t === "forecast" || t === "rebalance" ? t : "planning";
+  })();
+  const [activeTab, setActiveTab] = useState<string>(initialTab);
 
-  // Onboarding integration — let the product tour drive which tab is
-  // visible so the three sprint-planning steps (planning / forecast /
-  // rebalance) each highlight the right tab content.
+  // When the query param changes (e.g. tour navigates between
+  // planning/forecast/rebalance steps on the same route), sync the
+  // active tab. Without this, only the first ?tab=… is honoured.
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail === "planning" || detail === "forecast" || detail === "rebalance") {
-        setActiveTab(detail);
-      }
-    };
-    window.addEventListener("onboarding:set-planning-tab", handler);
-    return () => window.removeEventListener("onboarding:set-planning-tab", handler);
-  }, []);
+    const t = searchParams?.get("tab");
+    if (t === "planning" || t === "forecast" || t === "rebalance") {
+      setActiveTab(t);
+    }
+  }, [searchParams]);
 
   // State
   const [loading, setLoading] = useState(true);
