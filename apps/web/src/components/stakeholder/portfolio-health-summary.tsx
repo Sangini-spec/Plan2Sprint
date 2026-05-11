@@ -1115,7 +1115,7 @@ function DeliveryCard({
         </p>
       )}
 
-      <div className="mt-4 grid grid-cols-3 gap-3">
+      <div className="mt-4 grid grid-cols-3 gap-3" data-onboarding="predictability-row">
         <MiniStat label="Portfolio" value={`${overallPct}%`} />
         <MiniStat
           label="Velocity Δ"

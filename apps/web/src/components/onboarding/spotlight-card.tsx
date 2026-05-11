@@ -16,8 +16,8 @@ import { motion } from "framer-motion";
 import { ArrowRight, X } from "lucide-react";
 import { useOnboarding } from "@/lib/onboarding/context";
 
-const CARD_WIDTH = 360;
-const CARD_GAP = 16; // gap between anchor and card
+const CARD_WIDTH = 340;
+const CARD_GAP = 14; // gap between anchor and card
 const VIEWPORT_PADDING = 16;
 
 interface Rect {
@@ -80,11 +80,38 @@ function pickPosition(
   switch (placement) {
     case "bottom":
       top = anchorRect.bottom + CARD_GAP;
-      left = anchorRect.left + anchorRect.width / 2 - CARD_WIDTH / 2;
+      // Prefer aligning the card's centre with the anchor's centre,
+      // but if that pushes the card past the viewport edge, snap to
+      // the nearer side of the anchor instead. This stops cards
+      // anchored to topbar items (right side) from being centred under
+      // them and overflowing the viewport.
+      {
+        const centered = anchorRect.left + anchorRect.width / 2 - CARD_WIDTH / 2;
+        const maxLeft = vw - CARD_WIDTH - VIEWPORT_PADDING;
+        if (centered > maxLeft) {
+          // Snap card's RIGHT edge to anchor's RIGHT edge.
+          left = anchorRect.right - CARD_WIDTH;
+        } else if (centered < VIEWPORT_PADDING) {
+          // Snap card's LEFT edge to anchor's LEFT edge.
+          left = anchorRect.left;
+        } else {
+          left = centered;
+        }
+      }
       break;
     case "top":
       top = anchorRect.top - cardHeight - CARD_GAP;
-      left = anchorRect.left + anchorRect.width / 2 - CARD_WIDTH / 2;
+      {
+        const centered = anchorRect.left + anchorRect.width / 2 - CARD_WIDTH / 2;
+        const maxLeft = vw - CARD_WIDTH - VIEWPORT_PADDING;
+        if (centered > maxLeft) {
+          left = anchorRect.right - CARD_WIDTH;
+        } else if (centered < VIEWPORT_PADDING) {
+          left = anchorRect.left;
+        } else {
+          left = centered;
+        }
+      }
       break;
     case "right":
       top = anchorRect.top + anchorRect.height / 2 - cardHeight / 2;
@@ -96,7 +123,7 @@ function pickPosition(
       break;
   }
 
-  // Clamp to viewport
+  // Final clamp to viewport — never let a card end up off-screen.
   top = Math.max(VIEWPORT_PADDING, Math.min(vh - cardHeight - VIEWPORT_PADDING, top));
   left = Math.max(VIEWPORT_PADDING, Math.min(vw - CARD_WIDTH - VIEWPORT_PADDING, left));
 
@@ -158,9 +185,23 @@ export function SpotlightCard() {
         width: r.width,
         height: r.height,
       });
-      // Smoothly scroll into view if necessary.
+      // Bring the anchor into view if it's off-screen. Use instant
+      // scroll (not smooth) so the captured anchorRect immediately
+      // matches the rendered position — smooth scroll causes a flash
+      // where the card sits at the pre-scroll coordinates.
       if (r.top < 0 || r.bottom > window.innerHeight) {
-        el.scrollIntoView({ block: "center", behavior: "smooth" });
+        el.scrollIntoView({ block: "center", behavior: "auto" });
+        // Re-measure after the scroll so the card positions against
+        // the new viewport-relative rect.
+        const r2 = el.getBoundingClientRect();
+        setAnchorRect({
+          top: r2.top,
+          left: r2.left,
+          right: r2.right,
+          bottom: r2.bottom,
+          width: r2.width,
+          height: r2.height,
+        });
       }
     }
     raf = requestAnimationFrame(measure);
@@ -201,21 +242,75 @@ export function SpotlightCard() {
 
   return (
     <>
-      {/* Backdrop with cutout over the anchor */}
-      <div className="fixed inset-0 z-[95] pointer-events-none onb-backdrop" />
-
-      {/* Spotlight ring around the anchor */}
-      {anchorRect && (
+      {/* Backdrop with a real cutout over the anchor.
+          The trick: a transparent box at the anchor's position with a
+          MASSIVE box-shadow (9999px spread) acts as both the dim
+          backdrop AND the cutout — the shadow extends outward to
+          cover the whole viewport, but the box itself stays clear so
+          the anchored element shines through at its natural colour.
+          A full-screen dim div with a "ring on top" can't do this —
+          the underlying element is always dimmed by the backdrop. */}
+      {anchorRect ? (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.2 }}
-          className="fixed onb-spotlight-ring pointer-events-none z-[96]"
+          transition={{ duration: 0.25 }}
+          className="fixed pointer-events-none z-[95]"
           style={{
-            top: anchorRect.top - 6,
-            left: anchorRect.left - 6,
-            width: anchorRect.width + 12,
-            height: anchorRect.height + 12,
+            top: anchorRect.top - 8,
+            left: anchorRect.left - 8,
+            width: anchorRect.width + 16,
+            height: anchorRect.height + 16,
+            borderRadius: 12,
+            boxShadow: "0 0 0 9999px var(--onboarding-backdrop)",
+          }}
+        />
+      ) : (
+        /* Fallback path — no anchor found, dim the whole viewport */
+        <div className="fixed inset-0 z-[95] pointer-events-none onb-backdrop" />
+      )}
+
+      {/* Spotlight ring with pulse — pulls the eye to the anchor. */}
+      {anchorRect && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{
+            opacity: 1,
+            scale: 1,
+          }}
+          transition={{ duration: 0.25 }}
+          className="fixed onb-spotlight-ring onb-spotlight-pulse pointer-events-none z-[96]"
+          style={{
+            top: anchorRect.top - 8,
+            left: anchorRect.left - 8,
+            width: anchorRect.width + 16,
+            height: anchorRect.height + 16,
+          }}
+        />
+      )}
+
+      {/* Tiny arrow pointing from the card to the anchor. */}
+      {anchorRect && position && (
+        <div
+          className="fixed pointer-events-none z-[97]"
+          style={{
+            top:
+              position.arrow === "top"
+                ? position.top - 8
+                : position.arrow === "bottom"
+                ? position.top + cardHeight
+                : position.top + cardHeight / 2 - 6,
+            left:
+              position.arrow === "left"
+                ? position.left - 8
+                : position.arrow === "right"
+                ? position.left + CARD_WIDTH
+                : position.left + CARD_WIDTH / 2 - 6,
+            width: position.arrow === "left" || position.arrow === "right" ? 8 : 12,
+            height: position.arrow === "top" || position.arrow === "bottom" ? 8 : 12,
+            background: "var(--onboarding-primary)",
+            transform: "rotate(45deg)",
+            borderRadius: 2,
           }}
         />
       )}

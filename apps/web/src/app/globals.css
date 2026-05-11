@@ -166,10 +166,35 @@
   -webkit-backdrop-filter: blur(2px);
 }
 .onb-spotlight-ring {
-  box-shadow: var(--onboarding-spotlight-shadow);
   border-radius: 12px;
   border: 2px solid var(--onboarding-spotlight-ring);
   transition: all 0.25s ease;
+}
+@keyframes onb-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 4px rgba(168, 85, 247, 0.30),
+                0 0 24px 4px rgba(168, 85, 247, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(168, 85, 247, 0.45),
+                0 0 40px 8px rgba(168, 85, 247, 0.40);
+  }
+}
+@keyframes onb-pulse-dark {
+  0%, 100% {
+    box-shadow: 0 0 0 4px rgba(94, 234, 212, 0.30),
+                0 0 24px 4px rgba(94, 234, 212, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(94, 234, 212, 0.50),
+                0 0 40px 8px rgba(94, 234, 212, 0.45);
+  }
+}
+.onb-spotlight-pulse {
+  animation: onb-pulse 1.8s ease-in-out infinite;
+}
+.dark .onb-spotlight-pulse {
+  animation: onb-pulse-dark 1.8s ease-in-out infinite;
 }
 .onb-progress-dot {
   width: 8px;

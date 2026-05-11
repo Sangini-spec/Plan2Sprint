@@ -48,8 +48,18 @@ export function ChecklistWidget() {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2 }}
-      className="fixed bottom-5 right-5 z-[94] onb-card"
-      style={{ width: open ? 280 : 180 }}
+      className="onb-card"
+      style={{
+        // Use explicit inline styles instead of Tailwind classes so
+        // the widget pins to bottom-right even if a parent context
+        // shifts its position. ``z-[98]`` keeps it above the spotlight
+        // backdrop so it's always reachable.
+        position: "fixed",
+        bottom: 20,
+        right: 20,
+        zIndex: 98,
+        width: open ? 300 : 200,
+      }}
     >
       <div className="onb-card-header-stripe" />
       <button
