@@ -79,7 +79,20 @@ async def _resolve_org_for_project(
         return user_org
 
     if project.organization_id == user_org:
-        return user_org  # Normal same-org access
+        # Hotfix 90 — same-org access still has to check that the caller
+        # is actually allowed to see THIS project. The historical
+        # behaviour was "in-org = allowed" which let any developer or
+        # stakeholder fetch the data of any project they could guess
+        # the internalId for, even if /api/projects would have hidden
+        # it from their list. POs / admins / owners get all-project
+        # access in-org as before.
+        role = (current_user.get("role") or "").lower()
+        if role in ("product_owner", "admin", "owner"):
+            return user_org
+
+        from ..services.project_access import assert_project_access
+        await assert_project_access(db, project_id, current_user)
+        return user_org
 
     # Cross-org access — only allow if there's an explicit grant.
     user_email = (current_user.get("email") or "").lower()

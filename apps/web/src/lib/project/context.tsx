@@ -26,6 +26,7 @@ import {
   type ReactNode,
 } from "react";
 import { useIntegrations } from "@/lib/integrations/context";
+import { useAuth } from "@/lib/auth/context";
 import type { SelectedProject } from "@/lib/integrations/types";
 import { invalidateCache } from "@/lib/fetch-cache";
 
@@ -86,6 +87,16 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   const [initialized, setInitialized] = useState(false);
   const switchingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { connections } = useIntegrations();
+  // Hotfix 90b — only privileged roles (PO/admin/owner) are allowed to
+  // fall back to the connection's selectedProjects list when their
+  // ``/api/projects`` came back empty. For devs / stakeholders an empty
+  // server response is the truth — they have no project access — and
+  // the liveProjects fallback would leak the org's project picker into
+  // a "Plan2Sprint shown to a developer who isn't on its team" UX bug.
+  const { role } = useAuth();
+  const isPrivileged = ["product_owner", "admin", "owner"].includes(
+    (role || "").toLowerCase(),
+  );
 
   // Track auto-import to prevent duplicate calls
   const autoImportDone = useRef(false);
@@ -297,6 +308,17 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     if (selectedProject?.internalId) return;
     // If auto-import already done, skip
     if (autoImportDone.current) return;
+    // Hotfix 90b — only POs / admins / owners get the liveProjects
+    // fallback. For dev / stakeholder accounts an empty dbProjects
+    // is the correct answer: they have no project memberships, show
+    // the empty welcome state instead of leaking the org's full
+    // connection picker.
+    if (!isPrivileged) {
+      setProjects([]);
+      setSelectedProject(null);
+      setLoading(false);
+      return;
+    }
 
     let cancelled = false;
 
@@ -341,7 +363,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     handleLiveProjects();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialized, liveProjectsKey]);
+  }, [initialized, liveProjectsKey, isPrivileged]);
 
   // Save preference to DB whenever selectedProject changes (after init)
   const savePrefTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

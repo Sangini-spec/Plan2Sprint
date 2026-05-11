@@ -38,6 +38,13 @@ async def get_sprint_overview(
 ):
     org_id = current_user.get("organization_id", "demo-org")
 
+    # Hotfix 90 — project-access guard. Non-PO callers must actually be
+    # on the project's team (or have an explicit assignment) before
+    # we'll return its sprint data, even if they're in the same org.
+    if projectId:
+        from ..services.project_access import assert_project_access
+        await assert_project_access(db, projectId, current_user)
+
     # ── Auto-complete expired sprints (date-based detection) ──
     try:
         from ..services.sprint_completion import check_and_complete_sprints

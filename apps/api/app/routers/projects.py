@@ -89,6 +89,25 @@ async def list_imported_projects(
                 if row[0] and row[0] not in project_ids:
                     project_ids.append(row[0])
 
+        # Hotfix 90c — work-item-assignee path. Projects where any
+        # work item is assigned to a TM whose email matches the
+        # caller. Mirrors what the Team Management projects-badge
+        # uses, so a dev with ADO-imported work shows up consistently
+        # in both surfaces. This is the common case where the TM row
+        # was synced from ADO with imported_project_id=NULL but
+        # WorkItem.assignee_id carries the link.
+        if tm_rows:
+            from ..models.work_item import WorkItem as _WI
+            wi_q = await db.execute(
+                select(_WI.imported_project_id).where(
+                    _WI.organization_id == org_id,
+                    _WI.assignee_id.in_(tm_rows),
+                ).distinct()
+            )
+            for row in wi_q.all():
+                if row[0] and row[0] not in project_ids:
+                    project_ids.append(row[0])
+
         if project_ids:
             result = await db.execute(
                 select(ImportedProject).where(
@@ -239,6 +258,66 @@ async def save_imported_project(
     db.add(project)
     await db.commit()
     return {"ok": True, "action": "created", "internalId": project.id}
+
+
+# ---------------------------------------------------------------------------
+# Project access probe (Hotfix 91)
+# ---------------------------------------------------------------------------
+#
+# Frontend hits this to determine whether the *current* caller has access to
+# a given project, so the dashboard can render an "ask the PO to assign you"
+# banner instead of empty 0s when the answer is no. Returns 200/{hasAccess}
+# when allowed; 403/{hasAccess: false, reason} when denied; 404 when the
+# project doesn't exist in the caller's org (don't leak cross-org).
+#
+# Lightweight wrapper around ``services.project_access.assert_project_access``
+# so the matrix here can never drift from the matrix that enforces data
+# access on every dashboard endpoint.
+
+@router.get("/{project_id}/access")
+async def check_project_access(
+    project_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from ..services.project_access import assert_project_access
+    try:
+        proj = await assert_project_access(db, project_id, current_user)
+        return {
+            "hasAccess": True,
+            "projectId": proj.id,
+            "projectName": proj.name,
+        }
+    except HTTPException as e:
+        # Re-raise 404 (not found / cross-org) as-is so the frontend
+        # can tell "project doesn't exist" from "you can't access it".
+        if e.status_code == 404:
+            raise
+        # 403 → return JSON 200 with hasAccess=false so the banner
+        # component doesn't have to special-case error paths. Status
+        # code stays 200 only because the access check itself
+        # succeeded — it's the *answer* that's no.
+        #
+        # Hotfix 91 — also return ``projectName`` on the denial path so
+        # the banner can always identify the project by name, even if
+        # the frontend's selected-project context is stale or the user
+        # navigated via URL to a project they don't have in localStorage.
+        org_id = current_user.get("organization_id", "demo-org")
+        proj_name = None
+        proj_row = (await db.execute(
+            select(ImportedProject.name).where(
+                ImportedProject.id == project_id,
+                ImportedProject.organization_id == org_id,
+            )
+        )).scalar_one_or_none()
+        if proj_row:
+            proj_name = proj_row
+        return {
+            "hasAccess": False,
+            "projectId": project_id,
+            "projectName": proj_name,
+            "reason": e.detail if isinstance(e.detail, str) else "denied",
+        }
 
 
 @router.post("/{project_id}/cache")

@@ -32,6 +32,11 @@ async def get_latest_retrospective(
     """Return the latest retrospective with failure analysis data, optionally scoped to project."""
     org_id = current_user.get("organization_id", "demo-org")
 
+    # Hotfix 90 — project-access guard.
+    if projectId:
+        from ..services.project_access import assert_project_access
+        await assert_project_access(db, projectId, current_user)
+
     query = (
         select(Retrospective)
         .options(selectinload(Retrospective.action_items))

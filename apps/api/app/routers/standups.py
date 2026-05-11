@@ -687,6 +687,10 @@ async def get_standup_digest(
     db: AsyncSession = Depends(get_db),
 ):
     org_id = current_user.get("organization_id", "demo-org")
+    # Hotfix 90 — project-access guard.
+    if project_id:
+        from ..services.project_access import assert_project_access
+        await assert_project_access(db, project_id, current_user)
     today = date.today()
     query_date = date_param or today.isoformat()
 
