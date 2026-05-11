@@ -226,12 +226,28 @@ async def upsert_work_items(
                     iteration_id = int_id
                     break
             if not iteration_id:
-                # Try looking up by iteration path in DB
+                # Try looking up by iteration path in DB.
+                #
+                # Hotfix 92 — MUST scope by ``imported_project_id``.
+                # Without this filter the fallback grabs the FIRST
+                # iteration in the whole org with a matching name —
+                # so syncing "Plan2Sprint\Iteration 3" picked up
+                # Breakrails's "Iteration 3" and silently linked
+                # 56 Plan2Sprint work items into Breakrails's
+                # iteration row. The stakeholder dashboard then
+                # showed "Iteration 1" as current (the only one
+                # state=active locally) with 0 progress, because
+                # the real work was glued to a sibling project's
+                # iteration. Add the project_id filter so the
+                # fallback can never cross project boundaries.
+                _wh = [
+                    Iteration.organization_id == org_id,
+                    Iteration.source_tool == source_tool,
+                ]
+                if project_id:
+                    _wh.append(Iteration.imported_project_id == project_id)
                 result = await db.execute(
-                    select(Iteration).where(
-                        Iteration.organization_id == org_id,
-                        Iteration.source_tool == source_tool,
-                    )
+                    select(Iteration).where(*_wh)
                 )
                 for it in result.scalars().all():
                     if it.name and iter_path.endswith(it.name):

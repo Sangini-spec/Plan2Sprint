@@ -87,6 +87,13 @@ interface VelocitySprint {
   name: string;
   planned: number;
   completed: number;
+  // Hotfix 93 — track which unit this entry's numbers are in.
+  // Velocity Δ only makes sense when comparing two sprints in the
+  // SAME unit. Without this flag, a sprint reporting in "items"
+  // could get compared against one in "SP" and produce nonsense
+  // like "+33200%" growth (the Plan2Sprint Iter-1 vs Iter-3 case).
+  // Optional so existing callers that don't set it still type-check.
+  unit?: "SP" | "items";
 }
 
 interface TeamHealthData {
@@ -442,12 +449,14 @@ export function PortfolioHealthSummary() {
           name: s.name,
           planned: s.totalStoryPoints,
           completed: s.completedStoryPoints,
+          unit: "SP" as const,
         };
       }
       return {
         name: s.name,
         planned: s.totalItems || 0,
         completed: s.completedItems || 0,
+        unit: "items" as const,
       };
     })
     .filter((t) => t.planned > 0 || t.completed > 0);
@@ -1018,12 +1027,64 @@ function DeliveryCard({
   const predColor = severityColor(predSeverity);
   const overallPct = totalSP > 0 ? Math.round((completedSP / totalSP) * 100) : 0;
 
-  // Last sprint delta vs previous
+  // Hotfix 93 — Velocity Δ guards.
+  //
+  // The original ((last - prev) / prev) × 100 produced absurd
+  // numbers ("+33,200%") in two failure modes:
+  //
+  //   1) Unit mismatch — the velocityTrend builder picks SP per
+  //      sprint when SP > 0, else items. So a "stub" sprint with
+  //      1 item completed could sit next to a real sprint with
+  //      333 SP completed, and the formula treated 1 and 333 as
+  //      the same unit. Now we require last.unit === prev.unit
+  //      before computing anything.
+  //
+  //   2) Tiny baseline — even with matching units, dividing 333
+  //      by 1 produces 33,200%. We require prev.completed to
+  //      meet a minimum (5 SP or 3 items) before reporting a
+  //      meaningful percentage.
+  //
+  //   3) Plus a defensive ±200% display cap so future edge cases
+  //      we haven't anticipated never render four-digit deltas.
   const last = velocityTrend[velocityTrend.length - 1];
   const prev = velocityTrend[velocityTrend.length - 2];
-  const velDelta = prev && prev.completed > 0
-    ? Math.round(((last.completed - prev.completed) / prev.completed) * 100)
-    : 0;
+  const MIN_BASELINE_SP = 5;
+  const MIN_BASELINE_ITEMS = 3;
+  const DISPLAY_CAP_PCT = 200;
+
+  let velDelta: number | null = null;
+  let velDeltaTooltip: string | undefined;
+
+  if (last && prev && last.unit === prev.unit) {
+    const minBaseline = last.unit === "SP" ? MIN_BASELINE_SP : MIN_BASELINE_ITEMS;
+    if (prev.completed >= minBaseline) {
+      velDelta = Math.round(((last.completed - prev.completed) / prev.completed) * 100);
+    } else {
+      velDeltaTooltip = `Previous sprint completed only ${prev.completed} ${prev.unit ?? ""} — too small a baseline to compute a meaningful velocity change.`;
+    }
+  } else if (last && prev && last.unit !== prev.unit) {
+    velDeltaTooltip = `The previous sprint was measured in ${prev.unit}, this one in ${last.unit}. Need two sprints in the same unit to compute Δ.`;
+  } else if (!prev) {
+    velDeltaTooltip = "Need at least two completed sprints to compute velocity change.";
+  }
+
+  // Apply ±200% display cap with overflow indicator.
+  let velDeltaLabel: string;
+  let velDeltaIsCapped = false;
+  if (velDelta === null) {
+    velDeltaLabel = "N/A";
+  } else if (velDelta > DISPLAY_CAP_PCT) {
+    velDeltaLabel = `>+${DISPLAY_CAP_PCT}%`;
+    velDeltaIsCapped = true;
+  } else if (velDelta < -DISPLAY_CAP_PCT) {
+    velDeltaLabel = `<−${DISPLAY_CAP_PCT}%`;
+    velDeltaIsCapped = true;
+  } else {
+    velDeltaLabel = `${velDelta >= 0 ? "+" : ""}${velDelta}%`;
+  }
+  if (velDeltaIsCapped) {
+    velDeltaTooltip = `Raw value is ${velDelta}% — capped at ±${DISPLAY_CAP_PCT}% for readability.`;
+  }
 
   return (
     <SectionCard
@@ -1056,7 +1117,20 @@ function DeliveryCard({
 
       <div className="mt-4 grid grid-cols-3 gap-3">
         <MiniStat label="Portfolio" value={`${overallPct}%`} />
-        <MiniStat label="Velocity Δ" value={`${velDelta >= 0 ? "+" : ""}${velDelta}%`} emphasis={velDelta < -5 ? "var(--color-rag-red)" : velDelta > 5 ? "var(--color-rag-green)" : undefined} />
+        <MiniStat
+          label="Velocity Δ"
+          value={velDeltaLabel}
+          emphasis={
+            velDelta === null
+              ? "var(--text-tertiary)"
+              : velDelta < -5
+                ? "var(--color-rag-red)"
+                : velDelta > 5
+                  ? "var(--color-rag-green)"
+                  : undefined
+          }
+          title={velDeltaTooltip}
+        />
         <MiniStat label="Team" value={`${teamSize}`} />
       </div>
     </SectionCard>
@@ -1175,13 +1249,19 @@ function MiniStat({
   label,
   value,
   emphasis,
+  title,
 }: {
   label: string;
   value: string;
   emphasis?: string;
+  /** Hover tooltip — used by Velocity Δ to explain "N/A" / capped values. */
+  title?: string;
 }) {
   return (
-    <div className="rounded-lg bg-[var(--bg-surface-raised)]/50 border border-[var(--border-subtle)] p-2.5">
+    <div
+      className="rounded-lg bg-[var(--bg-surface-raised)]/50 border border-[var(--border-subtle)] p-2.5"
+      title={title}
+    >
       <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
         {label}
       </p>
