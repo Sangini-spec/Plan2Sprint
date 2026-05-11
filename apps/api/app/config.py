@@ -84,8 +84,23 @@ class Settings(BaseSettings):
     # Encryption
     integration_encryption_key: str = ""
 
-    # Redis — event bus & distributed locks (empty = disabled, in-memory fallback)
+    # Redis — event bus & distributed locks. Empty = disabled,
+    # in-memory fallback.
+    #
+    # Hotfix 94 — accept two env shapes:
+    #   REDIS_URL                     — explicit ``rediss://:<key>@host:port``
+    #                                   connection string (preferred when set)
+    #   REDIS_ENDPOINT + REDIS_KEY    — Azure Cache for Redis split form
+    #                                   (what the Container App env actually
+    #                                   plumbs in by default). The validator
+    #                                   below composes a ``rediss://:<key>@<endpoint>``
+    #                                   URL from these and writes it back to
+    #                                   ``redis_url`` so every call site that
+    #                                   already reads ``settings.redis_url``
+    #                                   keeps working.
     redis_url: str = ""
+    redis_endpoint: str = ""
+    redis_key: str = ""
 
     # Sync scheduler — automatic periodic sync for connected tools
     sync_scheduler_enabled: bool = False
@@ -110,6 +125,32 @@ class Settings(BaseSettings):
     @property
     def redis_enabled(self) -> bool:
         return bool(self.redis_url)
+
+    def model_post_init(self, __context) -> None:  # noqa: D401
+        """Build ``redis_url`` from ``REDIS_ENDPOINT`` + ``REDIS_KEY`` when
+        the explicit URL isn't provided.
+
+        Azure Cache for Redis Enterprise (which our Container App points
+        at) plumbs in those two env vars but no full URL. Without this
+        step ``settings.redis_url`` stays empty, ``redis_enabled`` flips
+        to False, and the app silently runs on the in-memory fallback —
+        no events propagate across replicas, distributed locks degrade
+        to per-process locks.
+
+        TLS (``rediss://``) is required by Azure Cache for Redis on the
+        Enterprise / Premium / Standard tiers. Port 10000 is the
+        Enterprise default; Basic/Standard use 6380. The endpoint env
+        var already includes the port, so we just URL-encode the key
+        and slot it in.
+        """
+        from urllib.parse import quote
+        if not self.redis_url and self.redis_endpoint and self.redis_key:
+            host_port = self.redis_endpoint.strip()
+            if ":" not in host_port:
+                host_port = f"{host_port}:10000"  # default Enterprise port
+            # URL-encode the key — Azure keys can contain ``=`` and ``/``.
+            encoded_key = quote(self.redis_key, safe="")
+            self.redis_url = f"rediss://:{encoded_key}@{host_port}"
 
     @property
     def is_demo_mode(self) -> bool:
