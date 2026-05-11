@@ -151,8 +151,19 @@ interface AppSidebarProps {
 
 export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarProps) {
   const pathname = usePathname();
-  const { appUser, role } = useAuth();
-  const navItems = getNavForRole(role);
+  const { appUser, role, loading } = useAuth();
+  // Hotfix 89 — don't render role-specific nav until auth has actually
+  // resolved a user. Was previously computing ``navItems`` from the
+  // ``role`` fallback ("product_owner"), which on a hard refresh gave
+  // every user a brief flash of the PO menu before the Supabase
+  // metadata read populated ``appUser`` and the sidebar re-rendered
+  // with the correct role's items. That flash is both a UX bug and a
+  // role-leak (devs / stakeholders briefly see PO-only links like
+  // ``/po/planning``). The fallback role is kept for routing safety
+  // (see auth/context.tsx line ~236) — we just refuse to render
+  // nav based on it.
+  const authReady = !loading && !!appUser;
+  const navItems = authReady ? getNavForRole(role) : [];
 
   // Check if any delivery channel is connected (Slack or Teams)
   const [hasChannelConnected, setHasChannelConnected] = useState(false);
@@ -201,7 +212,7 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
             <Logo size="sidebar" />
           )}
         </Link>
-        {!collapsed && role && (
+        {!collapsed && authReady && (
           <div className="flex items-center gap-1.5 px-1 pb-1.5 mt-6">
             {role === "product_owner" && <Crown size={13} className="text-amber-400" />}
             {role === "developer" && <Code2 size={13} className="text-cyan-400" />}

@@ -71,7 +71,13 @@ function UserDropdown() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
-  const { appUser, role, signOut } = useAuth();
+  const { appUser, role, loading, signOut } = useAuth();
+  // Hotfix 89 — same auth-flash fix as sidebar. ``role`` falls back to
+  // "product_owner" while ``appUser`` is still loading, so on hard
+  // refresh the topbar badge would show "Product Owner" briefly for
+  // every user. Gate role-dependent text on ``authReady`` so devs /
+  // stakeholders never glimpse the wrong label.
+  const authReady = !loading && !!appUser;
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -106,7 +112,7 @@ function UserDropdown() {
             {appUser?.full_name ?? "User"}
           </p>
           <p className="text-xs text-[var(--text-secondary)] leading-tight">
-            {ROLE_LABELS[role]}
+            {authReady ? ROLE_LABELS[role] : ""}
           </p>
         </div>
         <ChevronDown
