@@ -13,7 +13,7 @@ export default function StakeholderDashboardPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-onboarding="portfolio-health">
       <PortfolioHealthSummary />
     </div>
   );

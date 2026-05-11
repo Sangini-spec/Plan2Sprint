@@ -573,6 +573,7 @@ export function MyStandupReport() {
                                 onSend={(p) => handleSubmitAndChannel(p)}
                               />
                               <button onClick={handleSubmit} disabled={submitting || sendingTo !== null || !noteText.trim()}
+                                data-onboarding="submit-standup-btn"
                                 className={cn(
                                   "flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-all cursor-pointer",
                                   "bg-[var(--color-brand-secondary)] hover:bg-[var(--color-brand-secondary)]/90",
@@ -600,7 +601,7 @@ export function MyStandupReport() {
                   {selectedIsToday && (
                     <div className="flex flex-wrap gap-2 pt-2 border-t border-[var(--border-subtle)]">
                       <Button variant="secondary" size="sm" className="border-[var(--color-rag-green)]/40 text-[var(--color-rag-green)] hover:bg-[var(--color-rag-green)]/10">All Good</Button>
-                      <Button variant="secondary" size="sm" onClick={handleFlagBlocker} className="border-[var(--color-rag-red)]/40 text-[var(--color-rag-red)] hover:bg-[var(--color-rag-red)]/10">Flag Blocker</Button>
+                      <Button variant="secondary" size="sm" onClick={handleFlagBlocker} data-onboarding="blocker-flag-btn" className="border-[var(--color-rag-red)]/40 text-[var(--color-rag-red)] hover:bg-[var(--color-rag-red)]/10">Flag Blocker</Button>
                     </div>
                   )}
                 </>

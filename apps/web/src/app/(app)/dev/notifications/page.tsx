@@ -60,7 +60,7 @@ export default function NotificationsPage() {
   }, []);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" data-onboarding="link-personal-account">
       <MyNotificationInbox />
       <DeliveryChannelsSection />
 

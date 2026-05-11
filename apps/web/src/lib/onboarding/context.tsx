@@ -20,6 +20,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -118,6 +119,13 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [activePageHint, setActivePageHint] = useState<PageHint | null>(null);
 
+  /** Tracks whether we've done the one-shot "resume the tour on the
+   *  right page" navigation. Without this guard the effect below would
+   *  loop forever — pathname changes after we navigate, the effect
+   *  re-fires, sees a mismatch again (since the step state is
+   *  cached), and pushes again. */
+  const resumedNavRef = useRef(false);
+
   /** Load initial progress when the user is ready. */
   useEffect(() => {
     if (authLoading || !appUser) return;
@@ -136,6 +144,37 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [authLoading, appUser?.id]);
 
+  /** One-shot resume nav — if the user closed the browser mid-tour and
+   *  comes back to their dashboard home, send them to the page their
+   *  current step points at. Only fires once per provider mount; if the
+   *  user manually navigates away mid-tour, we don't yank them back. */
+  useEffect(() => {
+    if (loading || resumedNavRef.current) return;
+    if (!progress || progress.status !== "in_progress") return;
+    // Only resume from the role's home — if they're already deep in
+    // the app on a non-home page, treat that as intentional navigation
+    // and respect it.
+    const home =
+      progress.role === "product_owner"
+        ? "/po"
+        : progress.role === "stakeholder"
+        ? "/stakeholder"
+        : "/dev";
+    if (pathname !== home) {
+      resumedNavRef.current = true;
+      return;
+    }
+    const step = stepsFor(progress.role).find(
+      (s) => s.id === progress.current_step,
+    );
+    if (step?.route && step.route !== pathname && step.variant === "spotlight") {
+      resumedNavRef.current = true;
+      router.push(step.route);
+    } else {
+      resumedNavRef.current = true;
+    }
+  }, [loading, progress, pathname, router]);
+
   const allSteps = useMemo(() => {
     if (!progress) return [];
     return stepsFor(progress.role);
@@ -153,18 +192,26 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   const isActive = progress?.status === "in_progress";
 
-  const shouldShowWelcome =
-    progress?.status === "not_started" &&
-    !progress?.banner_dismissed &&
-    // Fresh signups land directly on the welcome modal; existing users
-    // (banner_dismissed=false but ever-seen) also get it on next login
-    // until they either start or dismiss.
-    true;
+  // The welcome modal fires in two cases:
+  //   1. Brand-new user — status=not_started + !banner_dismissed
+  //   2. Replay — backend's ``/replay`` endpoint sets
+  //      status=in_progress + current_step="welcome". Without this
+  //      branch the modal would never re-fire on replay and the user
+  //      would land on a blank dashboard (the spotlight variant check
+  //      doesn't match the welcome step, so nothing renders).
+  const shouldShowWelcome: boolean =
+    !!progress &&
+    progress.status !== "dismissed" &&
+    !progress.banner_dismissed &&
+    (progress.status === "not_started" || progress.current_step === "welcome");
 
-  const shouldShowBanner =
-    (progress?.status === "not_started" || progress?.status === "dismissed") &&
-    !progress?.banner_dismissed &&
-    progress?.status !== "not_started"; // Hide banner when welcome modal will fire
+  // Re-engagement banner fires when the user dismissed the tour but
+  // hasn't dismissed the banner yet. Brand-new users see the welcome
+  // modal instead; in-progress users see the spotlight tour.
+  const shouldShowBanner: boolean =
+    !!progress &&
+    progress.status === "dismissed" &&
+    !progress.banner_dismissed;
 
   // ---------------- Transition helpers ----------------
 
@@ -333,11 +380,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     allSteps,
     currentStepIndex,
     isActive: !!isActive,
-    shouldShowWelcome:
-      !!progress &&
-      progress.status === "not_started" &&
-      !progress.banner_dismissed,
-    shouldShowBanner: !!progress && !!shouldShowBanner,
+    shouldShowWelcome,
+    shouldShowBanner,
     next,
     back,
     skipCurrent,

@@ -133,7 +133,7 @@ export function ExportPanel() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-onboarding="export-button">
       {/* Overview Preview */}
       <DashboardPanel title="Project Overview" icon={FileDown}>
         {loadingOverview ? (

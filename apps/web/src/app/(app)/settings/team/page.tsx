@@ -280,6 +280,7 @@ export default function TeamSettingsPage() {
             variant="primary"
             size="sm"
             onClick={() => setInviteOpen(true)}
+            data-onboarding="invite-button"
           >
             <UserPlus className="h-3.5 w-3.5" />
             Invite Member
@@ -289,7 +290,7 @@ export default function TeamSettingsPage() {
 
       {/* Members Table */}
       <DashboardPanel title="Members" icon={Users}>
-        <div className="space-y-0.5">
+        <div className="space-y-0.5" data-onboarding="assign-projects-section">
           {/* Header */}
           <div className="hidden sm:grid grid-cols-[1fr_1.2fr_120px_1fr_80px_80px] gap-2 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
             <span>Member</span>

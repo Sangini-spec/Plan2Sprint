@@ -23,7 +23,7 @@ export default function DevDashboardPage() {
     // got removed from. Renders children unchanged when access is
     // granted.
     <ProjectAccessDeniedBanner>
-      <div className="space-y-4">
+      <div className="space-y-4" data-onboarding="dev-sprint-board">
         {/* Project Hero Banner — dark banner with KPIs + timeline */}
         <ProjectHeroBanner />
 
