@@ -107,6 +107,14 @@ Plan2Sprint integrates with Jira, Azure DevOps, GitHub, Slack, and Microsoft Tea
 - Per-project notes editor with rich formatting
 - Tied to the selected project, accessible from every dashboard via the Notes button
 
+### First-Run Product Tour
+- Role-aware step-by-step guide that fires on first login. PO sees 11 spotlight steps (Connect Tools → Pick Project → Add Projects → Invite Team → Assign Projects → Sprint Planning → Forecast → Rebalance → GitHub → Standups → Channels), Dev sees 4, Stakeholder sees 3.
+- Welcome modal → spotlight tour anchored to real UI elements (`data-onboarding="…"` attributes) → confetti completion modal. Cards have purple→teal gradient borders, WCAG AA contrast verified in both light and dark modes.
+- Floating checklist widget bottom-right tracks progress and lets the user jump to any step.
+- First-visit page hints — one-shot orientation cards that fire 600ms after landing on pages not covered by the main tour (Retro, Team Health, Channels, Velocity, Delivery Predictability, Epics, etc.).
+- Settings → Help → **Replay the full tour** + **Jump to a specific step** + **Reset all page hints**. Lets the same account replay without logout, ideal for demos + multi-account testing.
+- `?` icon in topbar → Settings → Help. Re-engagement banner for users who dismissed the tour. Sprint-planning tab switching via URL query (`?tab=forecast`) instead of race-prone DOM events.
+
 ---
 
 ## Tech Stack
@@ -560,6 +568,16 @@ The application will be available at `http://localhost:3000`.
 | PATCH | `/api/notifications/{id}/read` | Mark as read |
 | DELETE | `/api/notifications/clear` | Clear all |
 
+### Onboarding (Product Tour)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/onboarding/progress` | Read caller's tour state (NULL DB → normalised `not_started` shape) |
+| PATCH | `/api/onboarding/progress` | Advance step / mark completed / mark skipped / dismiss banner |
+| POST | `/api/onboarding/replay` | Wipe progress, set step=welcome + status=in_progress, increment replay_count |
+| POST | `/api/onboarding/page-hints/seen` | Mark a single pathname's first-visit hint dismissed |
+| POST | `/api/onboarding/page-hints/reset` | Clear all page-hint dismissals so they re-fire |
+| POST | `/api/onboarding/dismiss` | Permanently dismiss the tour (status=dismissed, banner_dismissed=true) |
+
 ### Integration OAuth, Channels, Webhooks
 | Tool | OAuth | Channels / Quick Actions | Webhook |
 |------|-------|--------------------------|---------|
@@ -584,7 +602,7 @@ Common event types broadcast on the WS channel: `notification`, `standup_generat
 
 **Organization & Auth**
 - `Organization` — Workspace with timezone, working hours, standup schedule. `name_canonical` column (lower(trim(name)), unique) used for canonical match on signup/rename.
-- `User` — Plan2Sprint account linked to Supabase Auth (`supabase_user_id`)
+- `User` — Plan2Sprint account linked to Supabase Auth (`supabase_user_id`). `onboarding_progress` JSONB column stores the product-tour state (current_step, completed_steps, skipped_steps, page_hints_seen, status, replay_count) — NULL = pristine.
 - `TeamMember` — Profile with skills, capacity, Slack/Teams IDs
 - `OrgJoinRequest` — Owner-approval queue for canonical-match org joins (pending / approved / rejected / cancelled)
 - `Invitation` — Email-token invitations (PO → developer/stakeholder)
@@ -958,9 +976,10 @@ npm run docker:restart   # Restart containers
 | `/stakeholder/export` | Export & reporting |
 | `/settings` | Organization general settings (pending-join-request banner here too) |
 | `/settings/profile` | User profile |
-| `/settings/team` | Team management (Join Requests + Pending Invitations) |
-| `/settings/connections` | Integration management |
+| `/settings/team` | Team management (Join Requests + Pending Invitations). Hidden for stakeholders + developers. |
+| `/settings/connections` | Integration management. Hidden for stakeholders. |
 | `/settings/notifications` | Notification preferences |
+| `/settings/help` | Replay product tour + Jump to specific step + Reset all page hints |
 
 ---
 
