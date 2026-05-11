@@ -183,8 +183,15 @@ export function SpotlightCard() {
   if (!progress || !currentStep) return null;
   if (currentStep.variant !== "spotlight") return null;
 
-  const totalSteps = allSteps.length;
-  const stepNumber = currentStepIndex + 1;
+  // Count only spotlight steps for the user-facing "Step X of Y"
+  // display. The welcome modal and completion modal are bookends —
+  // showing them in the count would mean "Step 2 of 13" on the first
+  // real step, which is confusing. With this filter, the first real
+  // step becomes "Step 1 of 11".
+  const spotlightSteps = allSteps.filter((s) => s.variant === "spotlight");
+  const totalSteps = spotlightSteps.length;
+  const stepNumber =
+    spotlightSteps.findIndex((s) => s.id === currentStep.id) + 1;
 
   // Fallback to centered modal if anchor not found.
   const useFallback = !anchorRect;
@@ -256,16 +263,18 @@ export function SpotlightCard() {
             </button>
           </div>
 
-          {/* Progress dots */}
+          {/* Progress dots — one per spotlight step. Skip the welcome
+              and completion bookends so the dot count matches the
+              "Step X of Y" header. */}
           <div className="flex items-center gap-1.5 mb-4 flex-wrap">
-            {allSteps.map((s, i) => (
+            {spotlightSteps.map((s, i) => (
               <span
                 key={s.id}
                 className="onb-progress-dot"
                 data-state={
-                  i < currentStepIndex
+                  i < stepNumber - 1
                     ? "completed"
-                    : i === currentStepIndex
+                    : i === stepNumber - 1
                     ? "current"
                     : "pending"
                 }

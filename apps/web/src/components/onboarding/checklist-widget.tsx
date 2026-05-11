@@ -28,9 +28,19 @@ export function ChecklistWidget() {
   // Hide on the welcome step (the welcome modal is the focus instead).
   if (currentStepIndex === 0) return null;
 
-  const completed = progress.completed_steps.length;
-  const skipped = progress.skipped_steps.length;
-  const total = allSteps.length;
+  // Only count user-visible spotlight steps. The welcome row is
+  // already auto-marked-completed when the user clicks "Take the
+  // tour", which would otherwise inflate the progress count.
+  const spotlightStepIds = new Set(
+    allSteps.filter((s) => s.variant === "spotlight").map((s) => s.id),
+  );
+  const completed = progress.completed_steps.filter((id) =>
+    spotlightStepIds.has(id),
+  ).length;
+  const skipped = progress.skipped_steps.filter((id) =>
+    spotlightStepIds.has(id),
+  ).length;
+  const total = spotlightStepIds.size;
   const pct = Math.min(100, Math.round(((completed + skipped) / total) * 100));
 
   return (
@@ -100,7 +110,9 @@ export function ChecklistWidget() {
           >
             <ul className="max-h-72 overflow-y-auto py-1">
               {allSteps.map((step, idx) => {
-                if (idx === 0) return null; // Skip welcome row
+                // Skip the welcome and completion bookends — they're
+                // not actionable rows the user can navigate to.
+                if (step.variant !== "spotlight") return null;
                 const isCompleted = progress.completed_steps.includes(step.id);
                 const isSkipped = progress.skipped_steps.includes(step.id);
                 const isCurrent = idx === currentStepIndex;
