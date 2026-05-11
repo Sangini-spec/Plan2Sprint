@@ -192,6 +192,22 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   const isActive = progress?.status === "in_progress";
 
+  // The product tour welcome modal should only fire on dashboard
+  // routes — never on /onboarding (the org-setup wizard, a totally
+  // separate onboarding concept that pre-dates the product tour),
+  // /settings/*, /login, /signup, /auth/*, etc. Stacking two
+  // onboardings on top of each other would confuse new users.
+  //
+  // The set covers the role-home routes the welcome modal makes
+  // sense on; everywhere else the spotlight tour can still run if
+  // the user is actively touring, but the cold-start modal stays
+  // suppressed.
+  const isDashboardRoute =
+    pathname === "/po" ||
+    pathname === "/dev" ||
+    pathname === "/stakeholder" ||
+    pathname === "/dashboard";
+
   // The welcome modal fires in two cases:
   //   1. Brand-new user — status=not_started + !banner_dismissed
   //   2. Replay — backend's ``/replay`` endpoint sets
@@ -201,6 +217,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   //      doesn't match the welcome step, so nothing renders).
   const shouldShowWelcome: boolean =
     !!progress &&
+    isDashboardRoute &&
     progress.status !== "dismissed" &&
     !progress.banner_dismissed &&
     (progress.status === "not_started" || progress.current_step === "welcome");
