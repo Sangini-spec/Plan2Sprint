@@ -106,6 +106,20 @@ export default function PlanningPage() {
   // Tab state
   const [activeTab, setActiveTab] = useState("planning");
 
+  // Onboarding integration — let the product tour drive which tab is
+  // visible so the three sprint-planning steps (planning / forecast /
+  // rebalance) each highlight the right tab content.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail === "planning" || detail === "forecast" || detail === "rebalance") {
+        setActiveTab(detail);
+      }
+    };
+    window.addEventListener("onboarding:set-planning-tab", handler);
+    return () => window.removeEventListener("onboarding:set-planning-tab", handler);
+  }, []);
+
   // State
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -634,7 +648,7 @@ export default function PlanningPage() {
 
       {/* ── Sprint Planning Tab ── */}
       {activeTab === "planning" && (
-        <div className="flex flex-col h-[calc(100vh-180px)]">
+        <div className="flex flex-col h-[calc(100vh-180px)]" data-onboarding="planning-generate">
           {/* Rebalance shift banner */}
           {plan.isRebalanced && (
             <div className="mb-3 flex items-center gap-3 p-3 rounded-lg bg-orange-500/5 border border-orange-500/20">
@@ -726,14 +740,14 @@ export default function PlanningPage() {
 
       {/* ── Sprint Forecast Tab ── */}
       {activeTab === "forecast" && (
-        <div className="space-y-4">
+        <div className="space-y-4" data-onboarding="planning-forecast">
           <SprintForecastPanel onRebalance={() => setActiveTab("rebalance")} />
         </div>
       )}
 
       {/* ── Sprint Rebalance Tab ── */}
       {activeTab === "rebalance" && (
-        <div className="space-y-4">
+        <div className="space-y-4" data-onboarding="planning-rebalance">
           <SprintRebalanceTab
             planId={plan?.id || null}
             rebalancingRecommended={(plan?.successProbability ?? 100) < 65}

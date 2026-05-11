@@ -10,6 +10,7 @@ import {
   Settings,
   ChevronDown,
   Plug,
+  HelpCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth/context";
@@ -246,6 +247,7 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
         {showConnectTools && (
           <button
             onClick={openModal}
+            data-onboarding="connect-tools-btn"
             className={cn(
               "relative flex items-center gap-1.5 rounded-lg px-3.5 py-1.5",
               "border border-[var(--color-brand-secondary)]/40",
@@ -260,6 +262,25 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
             {hasConnections && (
               <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-[var(--color-rag-green)] border-2 border-[var(--bg-surface)]" />
             )}
+          </button>
+        )}
+
+        {/* Help / Onboarding — opens Settings → Help where the user can
+            replay the tour or reset page hints. */}
+        {isAppRoute && (
+          <button
+            onClick={() => (window.location.href = "/settings/help")}
+            className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-xl",
+              "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+              "hover:bg-[var(--bg-surface-raised)]",
+              "transition-colors duration-200 cursor-pointer"
+            )}
+            aria-label="Help and onboarding"
+            title="Help & Onboarding"
+            data-onboarding="help-button"
+          >
+            <HelpCircle size={18} />
           </button>
         )}
 

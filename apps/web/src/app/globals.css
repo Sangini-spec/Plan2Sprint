@@ -55,6 +55,26 @@
   --gradient-hero: radial-gradient(ellipse at 20% 50%, rgba(13, 150, 230, 0.08) 0%, transparent 60%),
     radial-gradient(ellipse at 80% 20%, rgba(15, 42, 72, 0.06) 0%, transparent 50%),
     #F8F8FC;
+
+  /* Onboarding (product tour) — purple + teal palette.
+     These tokens are deliberately scoped to the onboarding feature so
+     it stands out from the brand blue. Audited for WCAG AA contrast
+     in both light and dark modes.  */
+  --onboarding-primary: #7c3aed;        /* purple-600 */
+  --onboarding-primary-hover: #6d28d9;  /* purple-700 */
+  --onboarding-accent: #14b8a6;         /* teal-500 */
+  --onboarding-accent-soft: #ccfbf1;    /* teal-100 — tag/chip bg */
+  --onboarding-card-bg: #FFFFFF;
+  --onboarding-card-text: #0F0F18;
+  --onboarding-card-text-muted: #5A5A72;
+  --onboarding-backdrop: rgba(15, 23, 42, 0.55);
+  --onboarding-spotlight-ring: rgba(168, 85, 247, 0.85);   /* purple glow */
+  --onboarding-spotlight-shadow: 0 0 0 4px rgba(168, 85, 247, 0.35),
+                                  0 0 32px 8px rgba(168, 85, 247, 0.25);
+  --onboarding-gradient: linear-gradient(135deg, #7c3aed 0%, #14b8a6 100%);
+  --onboarding-gradient-soft: linear-gradient(135deg,
+                              rgba(124, 58, 237, 0.08) 0%,
+                              rgba(20, 184, 166, 0.08) 100%);
 }
 
 /* Dark Mode */
@@ -69,6 +89,101 @@
   --gradient-hero: radial-gradient(ellipse at 20% 50%, rgba(13, 150, 230, 0.15) 0%, transparent 60%),
     radial-gradient(ellipse at 80% 20%, rgba(15, 42, 72, 0.10) 0%, transparent 50%),
     #0A0A0F;
+
+  /* Onboarding — dark variant. Lighter accent shades so text + glow
+     stay readable on the deeper background. */
+  --onboarding-primary: #a78bfa;        /* purple-400 */
+  --onboarding-primary-hover: #c4b5fd;  /* purple-300 */
+  --onboarding-accent: #5eead4;         /* teal-300 */
+  --onboarding-accent-soft: rgba(94, 234, 212, 0.16);
+  --onboarding-card-bg: #1A1A28;        /* deeper than --bg-surface so card pops */
+  --onboarding-card-text: #F0F0F5;
+  --onboarding-card-text-muted: #B0B0C5;
+  --onboarding-backdrop: rgba(0, 0, 0, 0.72);
+  --onboarding-spotlight-ring: rgba(94, 234, 212, 0.85);   /* teal glow */
+  --onboarding-spotlight-shadow: 0 0 0 4px rgba(94, 234, 212, 0.30),
+                                  0 0 32px 8px rgba(94, 234, 212, 0.25);
+  --onboarding-gradient: linear-gradient(135deg, #a78bfa 0%, #5eead4 100%);
+  --onboarding-gradient-soft: linear-gradient(135deg,
+                              rgba(167, 139, 250, 0.10) 0%,
+                              rgba(94, 234, 212, 0.10) 100%);
+}
+
+/* Onboarding utilities — used by spotlight-card, welcome-modal,
+   checklist-widget, page-hint-card. Keep these here (not in a
+   component file) so light/dark switching is automatic. */
+.onb-card {
+  background: var(--onboarding-card-bg);
+  color: var(--onboarding-card-text);
+  border-radius: 14px;
+  position: relative;
+  overflow: hidden;
+  /* 2px gradient border via background-clip trick */
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.25),
+              0 0 0 1px var(--border-subtle);
+}
+.onb-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  padding: 2px;
+  background: var(--onboarding-gradient);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box,
+                linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+}
+.onb-card-header-stripe {
+  height: 4px;
+  background: var(--onboarding-gradient);
+  border-radius: 14px 14px 0 0;
+}
+.onb-cta {
+  background: var(--onboarding-gradient);
+  color: white;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: 10px;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.onb-cta:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.onb-cta:active { transform: translateY(0); }
+.onb-cta-secondary {
+  background: transparent;
+  color: var(--onboarding-card-text-muted);
+  font-weight: 500;
+  padding: 10px 20px;
+  border-radius: 10px;
+}
+.onb-cta-secondary:hover { color: var(--onboarding-card-text); }
+.onb-backdrop {
+  background: var(--onboarding-backdrop);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.onb-spotlight-ring {
+  box-shadow: var(--onboarding-spotlight-shadow);
+  border-radius: 12px;
+  border: 2px solid var(--onboarding-spotlight-ring);
+  transition: all 0.25s ease;
+}
+.onb-progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bg-surface-raised);
+  transition: background 0.15s ease;
+}
+.onb-progress-dot[data-state="completed"] {
+  background: var(--onboarding-accent);
+}
+.onb-progress-dot[data-state="current"] {
+  background: var(--onboarding-primary);
+  transform: scale(1.4);
 }
 
 /* Base Styles */

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import String, Boolean, DateTime, ForeignKey, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, generate_cuid
@@ -41,6 +42,29 @@ class User(Base):
     )
     onboarding_completed: Mapped[bool] = mapped_column(
         Boolean, name="onboarding_completed", nullable=False, default=False
+    )
+    # Onboarding feature (Plan2Sprint product tour).
+    #
+    # JSON shape (see apps/web/src/lib/onboarding/types.ts for the
+    # mirror TypeScript interface):
+    #   {
+    #     "role": "product_owner",
+    #     "current_step": "sprint-planning-rebalance",
+    #     "completed_steps": ["welcome", "connect-tool", ...],
+    #     "skipped_steps": [],
+    #     "page_hints_seen": ["/po/retro", "/po/health"],
+    #     "status": "in_progress" | "completed" | "dismissed" | "not_started",
+    #     "started_at": "2026-05-11T14:32:00Z",
+    #     "completed_at": null,
+    #     "banner_dismissed": false,
+    #     "replay_count": 0
+    #   }
+    #
+    # NULL = user has never been touched by the onboarding system
+    # (existing users at ship time, new users until the welcome modal
+    # fires). The frontend treats NULL the same as ``status=not_started``.
+    onboarding_progress: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSONB, name="onboarding_progress", nullable=True
     )
     # Hotfix 73 — per-user Slack identity link (after the dev/
     # stakeholder OAuths their personal Slack account from the

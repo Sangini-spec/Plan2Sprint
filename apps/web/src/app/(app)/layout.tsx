@@ -11,6 +11,9 @@ import { AppSidebar } from "@/components/layout/app-sidebar";
 import { AppTopbar } from "@/components/layout/app-topbar";
 import { ConnectToolsModal } from "@/components/integrations/connect-tools-modal";
 import { RouteWarmer } from "@/components/dev/route-warmer";
+import { OnboardingProvider } from "@/lib/onboarding/context";
+import { OnboardingTour } from "@/components/onboarding/onboarding-tour";
+import { ReplayBanner } from "@/components/onboarding/replay-banner";
 // Real-time events are processed silently in the backend — no UI toasts needed
 
 const SIDEBAR_WIDTH = 256;
@@ -48,6 +51,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <WebSocketProvider>
       <IntegrationProvider>
       <SelectedProjectProvider>
+      <OnboardingProvider>
       <div className="flex h-screen overflow-hidden bg-[var(--bg-base)]">
         {/* Desktop sidebar */}
         <div
@@ -95,6 +99,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         {/* Main content area */}
         <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
           <AppTopbar onMenuClick={() => setMobileOpen(!mobileOpen)} />
+          <ReplayBanner />
           <main className="flex-1 overflow-y-auto">
             {/* Hotfix 8 — cap content width for laptop consistency.
                 Without this, a 13" / 15" / 17" laptop each stretches
@@ -113,6 +118,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </div>
       <ConnectToolsModal />
       <RouteWarmer />
+      <OnboardingTour />
+      </OnboardingProvider>
       </SelectedProjectProvider>
       </IntegrationProvider>
       </WebSocketProvider>

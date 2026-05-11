@@ -1171,7 +1171,7 @@ export default function GithubPage() {
   const githubConnected = isConnected("github");
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-onboarding="github-panel">
       {githubConnected ? (
         <GitHubConnectedView />
       ) : (

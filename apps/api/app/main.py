@@ -22,7 +22,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 # Import routers
-from .routers import analytics, dashboard, github, sprints, standups, team_health, notifications, projects, writeback, ws, retrospectives, phases, organizations, profile, agents, export, notes, reports
+from .routers import analytics, dashboard, github, sprints, standups, team_health, notifications, projects, writeback, ws, retrospectives, phases, organizations, profile, agents, export, notes, reports, onboarding
 from .routers.integrations import connections, sync, audit_log
 from .routers.integrations import jira as jira_router
 from .routers.integrations import ado as ado_router
@@ -144,6 +144,14 @@ async def lifespan(app: FastAPI):
             ))
             await conn.execute(text(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS teams_display_name VARCHAR"
+            ))
+            # Onboarding feature — per-user product-tour state.
+            # NULL = pristine (existing users + brand-new users until
+            # the welcome modal first fires). Frontend treats NULL as
+            # ``status=not_started`` and shows the re-engagement banner
+            # to existing users.
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_progress JSONB"
             ))
             # Timeline revamp (Sprint 1) — target launch date + persisted phase
             # dates + Ready phase backfill. Idempotent: ALTER IF NOT EXISTS, and
@@ -362,3 +370,4 @@ app.include_router(notes.router, prefix="/api", tags=["notes"])
 app.include_router(reports.router, prefix="/api", tags=["reports"])
 app.include_router(agents.router, prefix="/api", tags=["agents"])
 app.include_router(export.router, prefix="/api", tags=["export"])
+app.include_router(onboarding.router, prefix="/api", tags=["onboarding"])

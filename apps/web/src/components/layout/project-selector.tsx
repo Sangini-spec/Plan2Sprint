@@ -56,7 +56,7 @@ export function ProjectSelector() {
           : "No Projects";
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative" data-onboarding="project-picker">
       {/* Trigger button */}
       <button
         onClick={() => setOpen(!open)}

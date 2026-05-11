@@ -448,7 +448,7 @@ export default function ProjectsPage() {
   ];
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+    <div className="flex h-[calc(100vh-4rem)] overflow-hidden" data-onboarding="projects-page">
       {/* Left sidebar — collapsible */}
       <div className={cn(
         "shrink-0 border-r border-[var(--border-subtle)] bg-[var(--bg-surface)]/50 overflow-y-auto transition-all duration-300 ease-in-out",

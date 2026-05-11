@@ -255,7 +255,7 @@ export default function PONotificationsPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" data-onboarding="channels-tabs">
       {/* Notification Inbox */}
       <DashboardPanel
         title="Notification Inbox"
