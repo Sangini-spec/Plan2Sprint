@@ -103,16 +103,39 @@ async def find_team_member_by_github(
     github_username: str | None = None,
     github_email: str | None = None,
 ) -> TeamMember | None:
-    """Find a TeamMember by their GitHub username or email."""
+    """Find a TeamMember by their GitHub username or email.
+
+    Lookup order (each falls through to the next on miss):
+      1. ``team_members.github_username`` — the dedicated GitHub-handle
+         column populated when a developer links their personal GitHub.
+      2. ``team_members.external_id`` — the ADO/Jira id, which on some
+         orgs coincidentally equals the GitHub handle.
+      3. ``team_members.email`` LIKE ``%{github_username}%``.
+      4. ``team_members.email`` case-insensitive match against the
+         commit author email.
+      5. **User-link fallback** — find a ``users`` row whose email
+         matches the commit author email, then look up any TM in this
+         org with the same email. Covers the case where the developer
+         signed up with ``personal@gmail.com``, but their TM row in
+         the PO's ADO-synced org has a different email entirely —
+         the User row is the only bridge between the two identities.
+
+    Without these fallbacks the matcher returned ``None`` for almost
+    every developer whose ADO id ≠ GitHub handle (i.e. most devs).
+    Their commits got ingested with ``author_id = NULL`` and never
+    appeared in the standup digest, even after the push webhook
+    successfully stored them.
+    """
     if not github_username and not github_email:
         return None
 
     conditions = []
     if github_username:
+        conditions.append(TeamMember.github_username.ilike(github_username))
         conditions.append(TeamMember.external_id == github_username)
         conditions.append(TeamMember.email.ilike(f"%{github_username}%"))
     if github_email:
-        conditions.append(TeamMember.email == github_email)
+        conditions.append(TeamMember.email.ilike(github_email))
 
     result = await db.execute(
         select(TeamMember).where(
@@ -120,7 +143,64 @@ async def find_team_member_by_github(
             or_(*conditions),
         ).limit(1)
     )
-    return result.scalar_one_or_none()
+    tm = result.scalar_one_or_none()
+    if tm:
+        return tm
+
+    # Step 5 — User-link fallback. Bridge identities by email through
+    # the User table when the TM row's email isn't a direct match.
+    if github_email:
+        from ..models.user import User as _User
+        u_row = (await db.execute(
+            select(_User).where(_User.email.ilike(github_email))
+        )).scalar_one_or_none()
+        if u_row:
+            tm = (await db.execute(
+                select(TeamMember).where(
+                    TeamMember.organization_id == org_id,
+                    TeamMember.email.ilike(u_row.email),
+                ).limit(1)
+            )).scalar_one_or_none()
+            if tm:
+                return tm
+
+    return None
+
+
+async def backfill_orphan_commits(
+    db: AsyncSession,
+    org_id: str,
+    repository_id: str,
+    resolved_member: TeamMember,
+) -> int:
+    """Attribute past commits in this repo that have ``author_id=NULL``
+    to ``resolved_member``.
+
+    Triggered when a webhook successfully matches an author for a
+    newly-arrived commit. If a dev's first webhook arrival just
+    resolved their TM, every prior commit in the same repo with a
+    NULL author was almost certainly also theirs (small/single-dev
+    repos), so we backfill them now. This makes the standup digest
+    surface those earlier commits the moment the matcher catches up,
+    instead of leaving them orphaned forever.
+
+    For multi-dev repos this is best-effort and may misattribute,
+    but the standup generator already caps surfaced commits per
+    member at 10/day so the blast radius is limited. The alternative
+    (orphan commits never surface for anyone) is strictly worse.
+
+    Returns the number of rows updated.
+    """
+    from sqlalchemy import update as _update
+    res = await db.execute(
+        _update(Commit)
+        .where(
+            Commit.repository_id == repository_id,
+            Commit.author_id.is_(None),
+        )
+        .values(author_id=resolved_member.id)
+    )
+    return res.rowcount or 0
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +230,11 @@ async def process_push_event(
     items_updated = []
     commits_processed = 0
     activity_events_created = 0
+    # Track every TeamMember whose commits appear in this push, so the
+    # webhook caller can regen their standup live (the developer's
+    # "completed today" section should reflect their pushes the moment
+    # they land, not on next scheduled standup gen).
+    affected_member_ids: set[str] = set()
 
     # Find the repository in our DB
     repo = None
@@ -240,6 +325,22 @@ async def process_push_event(
                     )
                     db.add(new_commit)
                     commits_processed += 1
+                    if member and member.id:
+                        affected_member_ids.add(member.id)
+                        # Opportunistic backfill — if this is the first
+                        # successfully-attributed commit for the repo,
+                        # mop up the earlier orphans. Cheap to run once
+                        # per author resolution and dramatically
+                        # improves the dev's first standup view.
+                        try:
+                            await backfill_orphan_commits(
+                                db, org_id, repo.id, member
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Orphan commit backfill failed for "
+                                f"{repo.full_name} → {member.email}: {e}"
+                            )
             except Exception as e:
                 logger.warning(f"Failed to store commit {sha[:8]}: {e}")
 
@@ -286,6 +387,11 @@ async def process_push_event(
         "itemsUpdated": len(items_updated),
         "activityEvents": activity_events_created,
         "transitions": items_updated,
+        # IDs of TeamMembers whose commits landed in this push — the
+        # webhook handler uses these to trigger a live standup regen
+        # so the dev's dashboard reflects the new commits without a
+        # manual refresh.
+        "affectedMemberIds": sorted(affected_member_ids),
     }
 
     if items_updated:

@@ -1968,31 +1968,72 @@ async def receive_webhook(
                 _logger.warning(f"Sprint completion check after webhook failed: {e}")
 
         # ── Broadcast real-time update to connected dashboards ──
-        if items_changed:
-            try:
-                from ...services.ws_manager import ws_manager
+        # Always broadcast on push events (even when no work items
+        # changed status) so dashboards listening for GitHub signals
+        # — like the dev standup — can refresh and pick up the new
+        # commits as completed standup items.
+        try:
+            from ...services.ws_manager import ws_manager
+            if items_changed or (event == "push" and tracker_result.get("commitsProcessed", 0) > 0):
                 await ws_manager.broadcast(org_id, {
                     "type": "github_activity",
                     "data": {
                         "event": event,
                         "repo": repo_full_name,
                         "itemsUpdated": tracker_result.get("itemsUpdated", 0),
+                        "commitsProcessed": tracker_result.get("commitsProcessed", 0),
                         "transitions": tracker_result.get("transitions", []),
                     },
                 })
-                # Also broadcast work_item_updated for each status transition
-                # so hero banner and other panels refresh too
-                for transition in (tracker_result.get("transitions") or []):
-                    await ws_manager.broadcast(org_id, {
-                        "type": "work_item_updated",
-                        "data": {
-                            "workItemId": transition.get("work_item_id"),
-                            "oldStatus": transition.get("old_status"),
-                            "newStatus": transition.get("new_status"),
-                        },
-                    })
+            # Also broadcast work_item_updated for each status transition
+            # so hero banner and other panels refresh too
+            for transition in (tracker_result.get("transitions") or []):
+                await ws_manager.broadcast(org_id, {
+                    "type": "work_item_updated",
+                    "data": {
+                        "workItemId": transition.get("work_item_id"),
+                        "oldStatus": transition.get("old_status"),
+                        "newStatus": transition.get("new_status"),
+                    },
+                })
+        except Exception as e:
+            _logger.warning(f"WebSocket broadcast after webhook failed: {e}")
+
+        # ── Live standup regen — fold new commits into the dev's standup
+        #    so the "completed today" section reflects real-time GitHub
+        #    activity without manual refresh. Runs ONLY for push events
+        #    that landed at least one commit by a recognised team member.
+        affected_member_ids = tracker_result.get("affectedMemberIds") or []
+        if event == "push" and affected_member_ids:
+            try:
+                from ...services.standup_generator import generate_member_standup, _since_cutoff
+                from ...models.team_member import TeamMember as _TM
+                from ...services.ws_manager import ws_manager as _ws
+                since = _since_cutoff(None)
+                for mid in affected_member_ids:
+                    tm = (await db.execute(
+                        select(_TM).where(_TM.id == mid)
+                    )).scalar_one_or_none()
+                    if not tm:
+                        continue
+                    try:
+                        await generate_member_standup(db, tm, org_id, since)
+                    except Exception as e:
+                        _logger.warning(
+                            f"[GitHub Webhook] live standup regen for "
+                            f"{tm.email} failed: {e}"
+                        )
+                # One broadcast for the whole batch — every listener
+                # (PO digest + dev standup view) refreshes once.
+                await _ws.broadcast(org_id, {
+                    "type": "standup_generated",
+                    "data": {
+                        "trigger": "github_push",
+                        "memberIds": affected_member_ids,
+                    },
+                })
             except Exception as e:
-                _logger.warning(f"WebSocket broadcast after webhook failed: {e}")
+                _logger.warning(f"[GitHub Webhook] standup auto-regen pipeline failed: {e}")
 
         await db.commit()
 

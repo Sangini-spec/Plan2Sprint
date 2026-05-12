@@ -22,6 +22,7 @@ import { DashboardPanel } from "@/components/dashboard/dashboard-panel";
 import { Badge, Button } from "@/components/ui";
 import { useSelectedProject } from "@/lib/project/context";
 import { useAuth } from "@/lib/auth/context";
+import { useAutoRefresh } from "@/lib/ws/context";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,6 +33,14 @@ interface StandupItem {
   ticketId?: string;
   prId?: string;
   prStatus?: string;
+  /** Set to true when this row is an AI-generated multi-sentence
+   *  summary of the developer's recent commits, rendered as a
+   *  paragraph instead of a single-line title. Backend sets this
+   *  flag when there are 4+ surfaced commits to collapse them. */
+  isCommitSummary?: boolean;
+  /** Number of underlying commits represented by an
+   *  ``isCommitSummary`` row. Shown as a small badge. */
+  commitCount?: number;
 }
 
 interface IndividualReport {
@@ -216,6 +225,21 @@ export function MyStandupReport() {
   }, [projectId]);
 
   useEffect(() => { fetchStandup(selectedKey); }, [selectedKey, fetchStandup]);
+
+  // Live refresh — when GitHub commits land or the backend regens a
+  // standup, refetch this dev's report so the "completed" section
+  // reflects new commits without a manual refresh. The events are
+  // broadcast Redis-backed via ws_manager so they reach every
+  // replica + every connected client.
+  const refreshKey = useAutoRefresh([
+    "standup_generated",
+    "github_activity",
+    "work_item_updated",
+  ]);
+  useEffect(() => {
+    if (refreshKey > 0) fetchStandup(selectedKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   // Hotfix 42: refetch when the user identity becomes available — the very
   // first render runs with empty user, which previously cached a wrong-user
@@ -453,13 +477,45 @@ export function MyStandupReport() {
                     {completedItems.length === 0 ? (
                       <p className="text-sm text-[var(--text-tertiary)] italic">No completed items</p>
                     ) : (
-                      completedItems.map((item, i) => (
-                        <div key={item.ticketId || `completed-${i}`} className="flex flex-wrap items-center gap-2 py-1.5 text-sm text-[var(--text-primary)]">
-                          <span>{item.title}</span>
-                          {item.ticketId && <Badge variant="brand" className="text-[10px] px-2 py-0.5">{item.ticketId}</Badge>}
-                          {item.prId && <Badge variant="rag-green" className="text-[10px] px-2 py-0.5">PR #{item.prId}</Badge>}
-                        </div>
-                      ))
+                      completedItems.map((item, i) => {
+                        // AI-summarised batch of commits — render as a
+                        // paragraph block with a small "N commits"
+                        // badge, not as a single-line title row. The
+                        // backend collapses 4+ surfaced commits into
+                        // one of these so the list stays readable.
+                        if (item.isCommitSummary) {
+                          return (
+                            <div
+                              key={`commit-summary-${i}`}
+                              className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/40 px-3 py-2.5 my-1"
+                            >
+                              <div className="flex items-center gap-2 mb-1.5">
+                                <Badge variant="brand" className="text-[10px] px-2 py-0.5">
+                                  Recent code activity
+                                </Badge>
+                                {item.commitCount ? (
+                                  <span className="text-[10px] text-[var(--text-tertiary)]">
+                                    {item.commitCount} commit{item.commitCount === 1 ? "" : "s"}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <p className="text-sm leading-relaxed text-[var(--text-primary)]">
+                                {item.title}
+                              </p>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div
+                            key={item.ticketId || `completed-${i}`}
+                            className="flex flex-wrap items-center gap-2 py-1.5 text-sm text-[var(--text-primary)]"
+                          >
+                            <span>{item.title}</span>
+                            {item.ticketId && <Badge variant="brand" className="text-[10px] px-2 py-0.5">{item.ticketId}</Badge>}
+                            {item.prId && <Badge variant="rag-green" className="text-[10px] px-2 py-0.5">PR #{item.prId}</Badge>}
+                          </div>
+                        );
+                      })
                     )}
                   </div>
 

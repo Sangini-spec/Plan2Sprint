@@ -118,6 +118,7 @@ def _to_standup_item(
     ticket_id: str | None = None,
     pr_id: str | None = None,
     pr_status: str | None = None,
+    commit_sha: str | None = None,
 ) -> dict:
     """Build a StandupReportItem-shaped dict."""
     item: dict[str, Any] = {"title": title}
@@ -127,7 +128,140 @@ def _to_standup_item(
         item["prId"] = pr_id
     if pr_status:
         item["prStatus"] = pr_status
+    if commit_sha:
+        item["commitSha"] = commit_sha
     return item
+
+
+# Commit-message noise filter — skip these when promoting commits to
+# standup items. They don't carry meaningful work signal and would
+# clutter the dashboard if every "wip" / "fix typo" became a row.
+_NOISE_COMMIT_PATTERNS = (
+    "wip",
+    "fix typo",
+    "fix typos",
+    "typo",
+    "small fix",
+    "lint",
+    "format",
+    "prettier",
+    "ci:",
+    "chore:",
+    "merge branch",
+    "merge pull request",
+    "revert",
+)
+
+
+def _is_noise_commit(message: str) -> bool:
+    """Return True if the first line of the commit message looks like
+    pure noise that shouldn't surface as a completed standup item."""
+    first_line = (message or "").splitlines()[0].strip() if message else ""
+    lower = first_line.lower()
+    if len(first_line) < 6:
+        # Single-word or near-empty commits — "fix", "wip", ".", etc.
+        return True
+    return any(lower.startswith(p) or p in lower[:25] for p in _NOISE_COMMIT_PATTERNS)
+
+
+def _commit_title(message: str) -> str:
+    """Extract the first non-noise line of the commit message as a
+    standup title. Trims to ~80 chars so long messages don't blow out
+    the dashboard layout."""
+    first_line = (message or "").splitlines()[0].strip() if message else "Commit"
+    # Strip common prefixes that just label the commit type
+    for prefix in ("feat:", "feat(", "fix:", "fix(", "refactor:", "refactor(",
+                   "docs:", "docs(", "perf:", "perf(", "test:", "test("):
+        if first_line.lower().startswith(prefix):
+            # Keep the prefix but truncate the body — devs want to see
+            # "feat: payment retries" not just "payment retries" because
+            # the prefix carries useful intent.
+            break
+    if len(first_line) > 80:
+        first_line = first_line[:77].rstrip() + "…"
+    return first_line
+
+
+# ---------------------------------------------------------------------------
+# AI-driven commit summarisation
+# ---------------------------------------------------------------------------
+#
+# When a developer has many commits in the window (4+), listing each
+# one as its own row in the standup digest gets noisy and unreadable.
+# Instead, we run the commit messages through the AI caller and get
+# back a 3-4 sentence summary written in past tense from the dev's
+# perspective. That single summary becomes one "completed" item the
+# frontend renders as a multi-line block (no ticket badge, no SHA).
+#
+# Only the surfaced (un-ticketed) commits are summarised — commits
+# that are already represented by a closed ticket stay in the
+# completed list under that ticket.
+
+_COMMIT_SUMMARY_SYSTEM = (
+    "You are a concise engineering reporter. You summarise a "
+    "developer's recent commits into a short paragraph for their "
+    "daily standup digest. Write in PAST TENSE, third person, "
+    "natural English. Group related commits together — don't restate "
+    "every commit. Aim for 3 to 4 sentences total, ~50 to 80 words. "
+    "Do NOT use bullet points, headers, or markdown. Do NOT mention "
+    "commit SHAs or branch names. Do NOT add a prefix like 'Summary:'."
+)
+
+
+def _build_commit_summary_prompt(member_name: str, messages: list[str]) -> str:
+    bulleted = "\n".join(f"- {m}" for m in messages if m.strip())
+    return (
+        f"Developer: {member_name}\n\n"
+        f"Recent commits ({len(messages)} total):\n"
+        f"{bulleted}\n\n"
+        f"Write a 3-4 sentence past-tense summary of what {member_name} "
+        f"accomplished. Group related commits."
+    )
+
+
+async def _summarize_commits_with_ai(
+    commits: list[Any], member_name: str
+) -> str | None:
+    """Return a 3-4 sentence summary of the commits, or None if the
+    AI is unconfigured/errored. Falls through to caller's
+    list-individually path on None."""
+    if not commits:
+        return None
+    try:
+        from .ai_caller import call_ai
+        # Use the first line of each commit message — full bodies are
+        # too noisy for summarisation and waste tokens.
+        first_lines = [
+            (c.message or "").splitlines()[0].strip() for c in commits
+        ]
+        # Cap input length to keep token cost predictable.
+        first_lines = [m for m in first_lines if m][:30]
+        if not first_lines:
+            return None
+        result = await call_ai(
+            messages=[
+                {"role": "system", "content": _COMMIT_SUMMARY_SYSTEM},
+                {"role": "user", "content": _build_commit_summary_prompt(member_name, first_lines)},
+            ],
+            mode="primary",
+            max_tokens=220,
+            temperature=0.4,
+            timeout_s=20.0,
+        )
+        if not result:
+            return None
+        summary = result.strip()
+        # Defensive trim — AI sometimes prefixes despite instructions.
+        for prefix in ("Summary:", "summary:", "Here is", "Here's"):
+            if summary.startswith(prefix):
+                summary = summary[len(prefix):].lstrip(" :—-")
+        # Hard cap so a misbehaving model can't blow out the dashboard.
+        if len(summary) > 600:
+            summary = summary[:597].rstrip() + "…"
+        return summary or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Commit AI summary failed for {member_name}: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -226,15 +360,80 @@ async def generate_member_standup(
             ))
 
     # ── 4. Commits ──
-    commit_count_result = await db.execute(
-        select(func.count())
-        .select_from(Commit)
+    # Fetch commits the developer pushed in the window. Promote
+    # substantive commits (skip "wip"/"typo"/merge noise) to
+    # ``completed`` standup items when the work isn't already
+    # represented by a closed ticket or merged PR. This means devs
+    # who close GitHub work without a corresponding ADO/Jira ticket
+    # (very common during early iterations or for refactors) still
+    # see their progress in the standup digest, instead of a blank
+    # report that makes them look idle.
+    commits_query = (
+        select(Commit)
         .where(
             Commit.author_id == member.id,
             Commit.committed_at >= since,
         )
+        .order_by(Commit.committed_at.desc())
+        .limit(50)
     )
-    commit_count = commit_count_result.scalar() or 0
+    commits_result = await db.execute(commits_query)
+    commits = list(commits_result.scalars().all())
+    commit_count = len(commits)
+
+    # Build a set of external IDs already represented in ``completed``
+    # so we don't double-count "PR #42: Fix login" + "Fix login commit
+    # for JIRA-42".
+    completed_ticket_ids = {c.get("ticketId") for c in completed if c.get("ticketId")}
+
+    # First pass — collect surfaceable commits (skip noise + duplicates
+    # of already-in-completed tickets). We need the full list to decide
+    # whether to call AI for a summary; just collect into a temp list.
+    surfaced_commit_objs: list[Any] = []
+    for c in commits:
+        if _is_noise_commit(c.message):
+            continue
+        linked = list(c.linked_ticket_ids or [])
+        if linked and any(t in completed_ticket_ids for t in linked):
+            continue
+        surfaced_commit_objs.append(c)
+
+    # Decision: if the developer has 4+ surfaced commits, listing each
+    # one clutters the standup digest. Instead, run them through the AI
+    # caller and replace the list with a single 3-4 sentence summary
+    # item (marked ``isCommitSummary=true`` so the frontend can render
+    # it as a paragraph rather than a row of titles + SHA badges).
+    # Under 4 commits → fall through to the individual-item path
+    # because a 1-2 line list is more skimmable than a paragraph.
+    if len(surfaced_commit_objs) >= 4:
+        summary = await _summarize_commits_with_ai(
+            surfaced_commit_objs[:30], member.display_name
+        )
+        if summary:
+            completed.append({
+                "title": summary,
+                "isCommitSummary": True,
+                "commitCount": len(surfaced_commit_objs),
+            })
+        else:
+            # AI unavailable / failed — fall back to listing the top 10
+            # so the dev still sees their work.
+            for c in surfaced_commit_objs[:10]:
+                linked = list(c.linked_ticket_ids or [])
+                completed.append(_to_standup_item(
+                    title=_commit_title(c.message),
+                    ticket_id=linked[0] if linked else None,
+                    commit_sha=c.sha[:8] if c.sha else None,
+                ))
+    else:
+        # Few commits — list each individually for skimmability.
+        for c in surfaced_commit_objs:
+            linked = list(c.linked_ticket_ids or [])
+            completed.append(_to_standup_item(
+                title=_commit_title(c.message),
+                ticket_id=linked[0] if linked else None,
+                commit_sha=c.sha[:8] if c.sha else None,
+            ))
 
     # ── 5. Blockers ──
     # Check for any open blocker flags from recent standup reports.
@@ -521,6 +720,113 @@ async def generate_all_standups(
 
     if not members:
         return {"generated": 0, "skipped": "no_team_members"}
+
+    # ── Orphan-commit backfill (repo-owner matching) ──
+    # The GitHub push matcher historically only checked
+    # ``team_members.external_id``, so most past commits were stored
+    # with ``author_id = NULL``. The improved matcher in
+    # github_tracker.py fixes new commits going forward, but past
+    # orphans need a retroactive pass. We don't have the author email
+    # on the Commit row (never stored it), so we use the next-best
+    # signal: the repo's GitHub owner segment (``Sangini-spec`` from
+    # ``Sangini-spec/Plan2Sprint``).
+    #
+    # For each repo with at least one orphan commit:
+    #   1. Parse the owner segment from ``Repository.full_name``.
+    #   2. Try to find a TeamMember whose ``github_username``,
+    #      ``external_id``, ``email`` LIKE, or first-word-of-display-name
+    #      matches the owner.
+    #   3. If found, attribute every orphan in that repo to them.
+    #
+    # Falls back to single-dev-org attribution when matching fails
+    # but the org has exactly one developer TM.
+    try:
+        from sqlalchemy import update as _update
+        from ..models.repository import Repository as _Repo
+        from ..models.team_member import TeamMember as _TM
+
+        # Repos in this org with at least one NULL-author commit
+        repos_with_orphans_q = await db.execute(
+            select(_Repo)
+            .join(Commit, Commit.repository_id == _Repo.id)
+            .where(
+                _Repo.organization_id == org_id,
+                Commit.author_id.is_(None),
+            )
+            .distinct()
+        )
+        repos_with_orphans = list(repos_with_orphans_q.scalars().all())
+
+        if repos_with_orphans:
+            # Cache: TMs in this org keyed by lowercase match strings.
+            all_tms_q = await db.execute(
+                select(_TM).where(
+                    _TM.organization_id == org_id,
+                    _TM.role.in_(DEV_ROLES),
+                )
+            )
+            all_tms = list(all_tms_q.scalars().all())
+            lookup: dict[str, _TM] = {}
+            for tm in all_tms:
+                if tm.github_username:
+                    lookup[tm.github_username.lower()] = tm
+                if tm.external_id:
+                    lookup[tm.external_id.lower()] = tm
+                if tm.email:
+                    lookup[tm.email.lower()] = tm
+                    # local part of email — owners often use @user-handle
+                    local = tm.email.split("@", 1)[0].lower()
+                    lookup.setdefault(local, tm)
+                if tm.display_name:
+                    # first word of display name, lowercased (e.g.
+                    # "Sangini Tripathi" → "sangini") to catch the
+                    # common case of "First-spec" repo owners.
+                    first = tm.display_name.split()[0].lower()
+                    lookup.setdefault(first, tm)
+
+            total_attributed = 0
+            for repo in repos_with_orphans:
+                full = (repo.full_name or "")
+                owner = full.split("/", 1)[0].strip().lower() if "/" in full else ""
+                if not owner:
+                    continue
+                # Try exact owner match against any TM signal.
+                tm = lookup.get(owner)
+                if not tm:
+                    # Owner might be "Sangini-spec" but the TM key is
+                    # "sangini" — try the owner's first hyphen-separated
+                    # segment (e.g. "Sangini-spec" → "sangini").
+                    owner_prefix = owner.split("-", 1)[0]
+                    tm = lookup.get(owner_prefix)
+                if not tm and len(all_tms) == 1:
+                    # Single-dev-org fallback when owner-based match
+                    # fails. All orphan commits in this org's repos
+                    # must belong to the lone dev TM.
+                    tm = all_tms[0]
+                if not tm:
+                    continue
+
+                upd = await db.execute(
+                    _update(Commit)
+                    .where(
+                        Commit.repository_id == repo.id,
+                        Commit.author_id.is_(None),
+                    )
+                    .values(author_id=tm.id)
+                )
+                n = upd.rowcount or 0
+                if n:
+                    total_attributed += n
+                    logger.info(
+                        f"[Standup Gen] Orphan backfill: "
+                        f"attributed {n} commit(s) in repo "
+                        f"'{repo.full_name}' (owner='{owner}') → "
+                        f"{tm.email} (id={tm.id})"
+                    )
+            if total_attributed:
+                await db.flush()
+    except Exception as e:
+        logger.warning(f"Orphan commit backfill failed for {org_id}: {e}")
 
     # Find active iteration
     iter_result = await db.execute(
