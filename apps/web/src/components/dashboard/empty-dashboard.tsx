@@ -1,33 +1,71 @@
 "use client";
 
 /**
- * EmptyDashboard — shown on any role's dashboard when the user has no
- * projects available.
+ * EmptyDashboard — fallback shown on any role's dashboard when the
+ * user has no project selected.
  *
- * Two flavours, picked by role:
+ * Three states it can render based on the user + load state:
  *
- *   • Privileged (PO / admin / owner / engineering_manager)
- *     → "Welcome to Plan2Sprint" + Connect Tools CTA. They drive
- *       project import, so this is the right action for them.
+ *   1. LOADING — show "Your dashboard is loading…" while the project
+ *      list is still being fetched. Without this gate the empty
+ *      state flashes for ~300ms during every login before real data
+ *      arrives, which made the dashboard feel broken.
  *
- *   • Non-privileged (developer / stakeholder)
- *     → "Waiting on your Product Owner" + their own email so they
- *       can pass it to the PO for assignment. No Connect Tools button
- *       — stakeholders + devs don't connect tools, the PO does.
- *       They just need to be assigned to the projects that already
- *       exist in the org.
+ *   2. NEW USER — first-time visit, no projects ever connected to
+ *      this account / org. Show the "Welcome to Plan2Sprint" card
+ *      with role-appropriate CTA. Detected via
+ *      ``appUser.onboarding_completed=false``.
+ *
+ *   3. RETURNING USER, NO PROJECTS — they've been around (completed
+ *      or dismissed onboarding before) but currently have nothing.
+ *      Skip the Welcome framing — show a quieter "no projects" card
+ *      with role-appropriate guidance. Non-privileged users get
+ *      "ask your PO to add you"; privileged ones get a direct
+ *      Connect Tools CTA.
  */
 
-import { PlugZap, ArrowRight, Mail, Eye } from "lucide-react";
+import { PlugZap, ArrowRight, Mail, Eye, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui";
 import { useIntegrations } from "@/lib/integrations/context";
 import { useAuth } from "@/lib/auth/context";
+import { useSelectedProject } from "@/lib/project/context";
 import { PO_DASHBOARD_ROLES } from "@/lib/types/auth";
 
 export function EmptyDashboard() {
-  const { openModal } = useIntegrations();
+  const { openModal, hasAnyConnection } = useIntegrations();
   const { appUser, role } = useAuth();
+  const { loading } = useSelectedProject();
   const isPrivileged = PO_DASHBOARD_ROLES.includes(role);
+  // "Returning user" if any of:
+  //   - they've ever connected a project tool (hasAnyConnection) —
+  //     the primary signal: once you've connected Jira/ADO/GitHub
+  //     you're not "new to Plan2Sprint" anymore
+  //   - they've stamped onboarding_completed=true (took the tour
+  //     through to the confetti screen)
+  // Either is enough to skip the brand-new "Welcome to Plan2Sprint"
+  // framing on subsequent logins, even if they're currently between
+  // projects.
+  const isReturningUser =
+    !!appUser?.onboarding_completed || hasAnyConnection;
+
+  // -------------------- LOADING --------------------
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
+        <Loader2
+          size={32}
+          className="animate-spin mb-4"
+          style={{ color: "var(--color-brand-secondary)" }}
+        />
+        <p className="text-sm font-medium text-[var(--text-primary)]">
+          Your dashboard is loading…
+        </p>
+        <p className="text-xs text-[var(--text-secondary)] mt-1">
+          Fetching your projects and recent activity
+        </p>
+      </div>
+    );
+  }
 
   // -------------------- Non-privileged (dev / stakeholder) --------------------
   if (!isPrivileged) {
@@ -96,7 +134,38 @@ export function EmptyDashboard() {
     );
   }
 
-  // -------------------- Privileged (PO / admin / owner) --------------------
+  // -------------------- Privileged + RETURNING USER (no projects right now) --------------------
+  // Quieter card — they've been here before so no "Welcome to Plan2Sprint"
+  // framing. Just nudge them to reconnect tools.
+  if (isReturningUser) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
+        <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-[var(--bg-surface-raised)] mb-6">
+          <PlugZap size={36} className="text-[var(--color-brand-secondary)]" />
+        </div>
+
+        <h2 className="text-xl font-semibold text-[var(--text-primary)] mb-3">
+          No projects to show
+        </h2>
+        <p className="text-sm text-[var(--text-secondary)] max-w-md mb-8">
+          Reconnect a project tool to bring your sprints, work items, and
+          team back in.
+        </p>
+
+        <Button
+          variant="primary"
+          size="lg"
+          onClick={() => openModal?.()}
+          className="gap-2"
+        >
+          Connect Tools
+          <ArrowRight size={16} />
+        </Button>
+      </div>
+    );
+  }
+
+  // -------------------- Privileged + NEW USER (first time) --------------------
   return (
     <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
       <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-[var(--bg-surface-raised)] mb-6">

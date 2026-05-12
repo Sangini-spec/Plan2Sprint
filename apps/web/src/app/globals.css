@@ -67,7 +67,10 @@
   --onboarding-card-bg: #FFFFFF;
   --onboarding-card-text: #0F0F18;
   --onboarding-card-text-muted: #5A5A72;
-  --onboarding-backdrop: rgba(15, 23, 42, 0.55);
+  /* Backdrop dim — kept light so the rest of the dashboard is still
+     legible and the page doesn't feel "locked". The spotlight ring
+     + pulse handles the actual attention-grabbing. */
+  --onboarding-backdrop: rgba(15, 23, 42, 0.32);
   --onboarding-spotlight-ring: rgba(168, 85, 247, 0.85);   /* purple glow */
   --onboarding-spotlight-shadow: 0 0 0 4px rgba(168, 85, 247, 0.35),
                                   0 0 32px 8px rgba(168, 85, 247, 0.25);
@@ -99,7 +102,10 @@
   --onboarding-card-bg: #1A1A28;        /* deeper than --bg-surface so card pops */
   --onboarding-card-text: #F0F0F5;
   --onboarding-card-text-muted: #B0B0C5;
-  --onboarding-backdrop: rgba(0, 0, 0, 0.72);
+  /* Lighter backdrop than the initial 0.72 — dark mode page is
+     already dim, so 0.50 is enough to focus attention without
+     making everything outside the anchor look unusable. */
+  --onboarding-backdrop: rgba(0, 0, 0, 0.48);
   --onboarding-spotlight-ring: rgba(94, 234, 212, 0.85);   /* teal glow */
   --onboarding-spotlight-shadow: 0 0 0 4px rgba(94, 234, 212, 0.30),
                                   0 0 32px 8px rgba(94, 234, 212, 0.25);

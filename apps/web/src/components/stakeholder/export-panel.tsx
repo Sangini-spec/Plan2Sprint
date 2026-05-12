@@ -43,12 +43,18 @@ export function ExportPanel() {
   const [csvStatus, setCsvStatus] = useState<ExportStatus>("idle");
   const [lastExported, setLastExported] = useState<string | null>(null);
 
-  const projectParam = selectedProject?.internalId
-    ? `?projectId=${selectedProject.internalId}`
-    : "";
+  const projectId = selectedProject?.internalId;
+  const projectParam = projectId ? `?projectId=${projectId}` : "";
 
-  // Fetch overview data for preview
+  // Fetch overview data for preview. Gated on having an actual
+  // selected project — without this guard the panel fires a fetch
+  // with no projectId at first mount, the backend returns the
+  // org-wide aggregate (which is meaningless for a stakeholder
+  // viewing one project), and the values flash to 0 until the
+  // stakeholder picker auto-selects a project and re-triggers
+  // this effect with the right projectId.
   const fetchOverview = useCallback(async () => {
+    if (!projectId) return;
     setLoadingOverview(true);
     try {
       const res = await fetch(`/api/export/overview${projectParam}`);
@@ -61,7 +67,7 @@ export function ExportPanel() {
     } finally {
       setLoadingOverview(false);
     }
-  }, [projectParam]);
+  }, [projectParam, projectId]);
 
   useEffect(() => {
     fetchOverview();

@@ -63,16 +63,27 @@ export function StakeholderProjectSelector() {
     return { label: "Jira", color: "bg-[#0052CC]/10 text-[#0052CC]" };
   }
 
+  // Auto-select the first project on mount if nothing's selected and
+  // we have at least one. Stakeholders are scoped per-project (their
+  // dashboards have no "aggregate everything" mode that makes sense)
+  // so a null selectedProject just means broken dashboards.
+  useEffect(() => {
+    if (!loading && !selectedProject && projects.length > 0) {
+      selectProject(projects[0]);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, selectedProject, projects.length]);
+
   const buttonLabel = loading
     ? "Loading..."
     : selectedProject
       ? selectedProject.name
       : projects.length > 0
-        ? "All Projects"
+        ? projects[0].name  // shouldn't render, the effect above selects it
         : "No Projects";
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative" data-onboarding="project-picker">
       <button
         onClick={() => setOpen(!open)}
         className={cn(
@@ -140,25 +151,11 @@ export function StakeholderProjectSelector() {
               </div>
             ) : (
               <>
-                {/* "All Projects" option */}
-                {projects.length > 1 && (
-                  <button
-                    onClick={() => handleSelect(null)}
-                    className={cn(
-                      "w-full flex items-center gap-3 px-4 py-2.5 text-left",
-                      "hover:bg-[var(--bg-surface-raised)] transition-colors cursor-pointer",
-                      "border-b border-[var(--border-subtle)]",
-                      !selectedProject &&
-                        "bg-[var(--color-brand-secondary)]/5 text-[var(--color-brand-secondary)]"
-                    )}
-                  >
-                    <Layers size={16} className="shrink-0 opacity-60" />
-                    <span className="text-sm font-medium flex-1">All Assigned Projects</span>
-                    {!selectedProject && (
-                      <Check size={14} className="shrink-0 text-[var(--color-brand-secondary)]" />
-                    )}
-                  </button>
-                )}
+                {/* "All Assigned Projects" option removed — stakeholder
+                    dashboards aren't meaningful in aggregate mode (export
+                    totals zero out, predictability averages across
+                    unrelated teams, etc). Users always operate on one
+                    project at a time. */}
 
                 {/* Project list */}
                 <div className="max-h-64 overflow-y-auto py-1">

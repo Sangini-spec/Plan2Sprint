@@ -3,16 +3,18 @@
 /**
  * CompletionModal — confetti card shown after the last tour step.
  *
- * Pure-CSS confetti (Framer Motion + multiple coloured div particles)
- * so we don't pull in canvas-confetti as a dependency. Auto-closes
- * via the "Go to my dashboard" CTA which sets status=completed.
+ * Small corner-burst confetti — ~14 particles fan outward from the
+ * top-right of the viewport in a quick "bang" rather than raining
+ * down across the entire page. Fires once on mount and is done in
+ * about 1.4 seconds.
  */
 
 import { motion } from "framer-motion";
 import { PartyPopper, HelpCircle } from "lucide-react";
 import { useOnboarding } from "@/lib/onboarding/context";
 
-const CONFETTI_PARTICLES = Array.from({ length: 24 }, (_, i) => i);
+const NUM_PARTICLES = 14;
+const PARTICLE_COLORS = ["#a78bfa", "#5eead4", "#f9a8d4", "#fcd34d"];
 
 const ROLE_COPY = {
   product_owner: {
@@ -39,27 +41,45 @@ export function CompletionModal() {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center onb-backdrop p-4">
-      {/* Confetti layer — fires once on mount */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        {CONFETTI_PARTICLES.map((i) => {
-          // Deterministic pseudo-random so SSR matches CSR
-          const x = ((i * 37) % 100);
-          const delay = ((i * 53) % 1000) / 1000;
-          const duration = 1.6 + ((i * 17) % 800) / 1000;
-          const colorIdx = i % 4;
-          const colors = ["#a78bfa", "#5eead4", "#f9a8d4", "#fcd34d"];
+      {/* Confetti — small burst fanning outward from the top-right
+          viewport corner. Each particle gets a unique outward
+          trajectory via polar coordinates so the cluster looks like
+          a quick "bang" rather than a uniform rain. */}
+      <div
+        className="pointer-events-none absolute"
+        style={{ top: 28, right: 28, width: 0, height: 0 }}
+      >
+        {Array.from({ length: NUM_PARTICLES }).map((_, i) => {
+          // Deterministic pseudo-random so SSR matches CSR.
+          // Angle spans 180° → 270° (i.e. down-left quadrant from
+          // the top-right corner) so particles fan into the page,
+          // not off-screen.
+          const angle =
+            Math.PI + (i / (NUM_PARTICLES - 1)) * (Math.PI / 2);
+          const distance = 70 + ((i * 19) % 50); // 70–120 px
+          const dx = Math.cos(angle) * distance;
+          const dy = Math.sin(angle) * distance;
+          const duration = 1.0 + ((i * 13) % 500) / 1000; // 1.0–1.5s
+          const delay = ((i * 7) % 200) / 1000;            // 0–0.2s
           return (
             <motion.span
               key={i}
-              initial={{ y: -40, x: `${x}%`, opacity: 0, rotate: 0 }}
+              initial={{ opacity: 0, x: 0, y: 0, scale: 0.6, rotate: 0 }}
               animate={{
-                y: "100vh",
                 opacity: [0, 1, 1, 0],
-                rotate: 360 * 2,
+                x: dx,
+                y: dy,
+                scale: 1,
+                rotate: 360,
               }}
-              transition={{ duration, delay, ease: "easeIn" }}
-              className="absolute top-0 block h-2 w-2 rounded-sm"
-              style={{ background: colors[colorIdx] }}
+              transition={{ duration, delay, ease: "easeOut" }}
+              className="absolute block"
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 1.5,
+                background: PARTICLE_COLORS[i % PARTICLE_COLORS.length],
+              }}
             />
           );
         })}

@@ -14,6 +14,7 @@ import { RouteWarmer } from "@/components/dev/route-warmer";
 import { OnboardingProvider } from "@/lib/onboarding/context";
 import { OnboardingTour } from "@/components/onboarding/onboarding-tour";
 import { ReplayBanner } from "@/components/onboarding/replay-banner";
+import { TourBanner } from "@/components/onboarding/tour-banner";
 // Real-time events are processed silently in the backend — no UI toasts needed
 
 const SIDEBAR_WIDTH = 256;
@@ -100,6 +101,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
           <AppTopbar onMenuClick={() => setMobileOpen(!mobileOpen)} />
           <ReplayBanner />
+          {/* Tour banner — inline in the flex column so it pushes
+              <main> down by its natural height while active. When
+              the tour ends the banner self-unmounts and main
+              reclaims its space. No overlap with dashboard content. */}
+          <TourBanner />
           <main className="flex-1 overflow-y-auto">
             {/* Hotfix 8 — cap content width for laptop consistency.
                 Without this, a 13" / 15" / 17" laptop each stretches

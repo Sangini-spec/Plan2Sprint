@@ -170,6 +170,7 @@ export function SprintWorkspaceToolbar({
                 size="sm"
                 onClick={() => setShowPrompt(!showPrompt)}
                 disabled={generating}
+                data-onboarding="regenerate-btn"
                 className={cn(
                   showPrompt && "ring-1 ring-[var(--color-brand)]"
                 )}

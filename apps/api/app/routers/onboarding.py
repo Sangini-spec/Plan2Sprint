@@ -221,6 +221,11 @@ async def replay_tour(
     Help. The legacy ``onboarding_completed`` boolean is intentionally
     NOT reset — it's a one-way flag for older code paths that care
     about "has this user ever finished onboarding?".
+
+    ``banner_dismissed`` IS reset because the user has explicitly
+    asked to take the tour again — without this reset the frontend
+    skips the welcome modal entirely (banner_dismissed gates it),
+    which silently breaks the replay flow.
     """
     user = await _load_user(db, current_user)
     progress = _normalise(user.onboarding_progress, user.role)
@@ -229,6 +234,7 @@ async def replay_tour(
     progress["current_step"] = "welcome"
     progress["completed_steps"] = []
     progress["skipped_steps"] = []
+    progress["banner_dismissed"] = False   # let welcome modal fire
     progress["started_at"] = datetime.now(timezone.utc).isoformat()
     progress["completed_at"] = None
     progress["replay_count"] = int(progress.get("replay_count") or 0) + 1

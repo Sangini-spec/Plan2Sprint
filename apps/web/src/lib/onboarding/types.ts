@@ -42,6 +42,24 @@ export interface OnboardingStep {
   anchor?: string;
   anchorPosition?: "top" | "bottom" | "left" | "right" | "auto";
 
+  /**
+   * Additional selectors to outline alongside the primary anchor.
+   * Used when a single step is about two related controls (e.g. the
+   * developer "find your projects" step which highlights both the
+   * Connect Tools button and the Project Picker — they sit next to
+   * each other in the topbar and the dev needs to know about both).
+   */
+  extraAnchors?: string[];
+
+  /**
+   * Suppress the anchor outline (purple ring + halo) for steps where
+   * navigating to a dedicated page already makes the focus obvious
+   * (e.g. GitHub Monitoring, Standup Digest). The banner still shows
+   * the step copy; we just skip the visual ring around the whole
+   * dashboard panel which felt redundant.
+   */
+  noOutline?: boolean;
+
   /** Route the user must be on for this step. Engine navigates if mismatched. */
   route?: string;
 
@@ -50,6 +68,21 @@ export interface OnboardingStep {
 
   /** Custom callback when the step becomes active (e.g. switch a tab). */
   onEnter?: () => void;
+
+  /**
+   * Optional in-context tooltips that pop next to specific UI
+   * elements alongside the main banner. Each tooltip has its own
+   * dismissible "Got it" button and only renders while this step is
+   * the active one. Used to draw attention to secondary controls
+   * without making them whole steps of the tour (e.g. a "regenerate
+   * if not satisfied" hint next to the Regenerate button on the
+   * sprint-planning step).
+   */
+  tooltips?: Array<{
+    selector: string;
+    body: string;
+    position?: "top" | "bottom" | "left" | "right";
+  }>;
 
   /**
    * Optional predicate — if it returns true at engine evaluation time,

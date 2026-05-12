@@ -185,12 +185,15 @@ export function SpotlightCard() {
         width: r.width,
         height: r.height,
       });
-      // Bring the anchor into view if it's off-screen. Use instant
-      // scroll (not smooth) so the captured anchorRect immediately
-      // matches the rendered position — smooth scroll causes a flash
-      // where the card sits at the pre-scroll coordinates.
+      // Bring the anchor into view if it's off-screen. Use ``start``
+      // alignment (anchor lands near the top of the viewport) so the
+      // card has the full lower half to occupy — ``center`` was
+      // pushing the card below the anchor's centered position, often
+      // off the bottom edge or into the checklist-widget area.
+      // Instant scroll so the captured anchorRect immediately matches
+      // the rendered position.
       if (r.top < 0 || r.bottom > window.innerHeight) {
-        el.scrollIntoView({ block: "center", behavior: "auto" });
+        el.scrollIntoView({ block: "start", behavior: "auto" });
         // Re-measure after the scroll so the card positions against
         // the new viewport-relative rect.
         const r2 = el.getBoundingClientRect();
@@ -289,31 +292,69 @@ export function SpotlightCard() {
         />
       )}
 
-      {/* Tiny arrow pointing from the card to the anchor. */}
-      {anchorRect && position && (
-        <div
-          className="fixed pointer-events-none z-[97]"
-          style={{
-            top:
-              position.arrow === "top"
-                ? position.top - 8
-                : position.arrow === "bottom"
-                ? position.top + cardHeight
-                : position.top + cardHeight / 2 - 6,
-            left:
-              position.arrow === "left"
-                ? position.left - 8
-                : position.arrow === "right"
-                ? position.left + CARD_WIDTH
-                : position.left + CARD_WIDTH / 2 - 6,
-            width: position.arrow === "left" || position.arrow === "right" ? 8 : 12,
-            height: position.arrow === "top" || position.arrow === "bottom" ? 8 : 12,
-            background: "var(--onboarding-primary)",
-            transform: "rotate(45deg)",
-            borderRadius: 2,
-          }}
-        />
-      )}
+      {/* Tiny arrow pointing from the card to the anchor.
+          Uses CSS borders to draw a true triangle (rotated rectangle
+          looked like a fuzzy diamond). 7px sides for a subtle hint
+          without dominating the card edge. */}
+      {anchorRect && position && (() => {
+        const SIZE = 7;
+        const COLOR = "var(--onboarding-primary)";
+        const baseStyle: React.CSSProperties = {
+          position: "fixed",
+          zIndex: 99,
+          width: 0,
+          height: 0,
+          pointerEvents: "none",
+        };
+        const dir = position.arrow;
+        if (dir === "top") {
+          return (
+            <div style={{
+              ...baseStyle,
+              top: position.top - SIZE,
+              left: position.left + CARD_WIDTH / 2 - SIZE,
+              borderLeft: `${SIZE}px solid transparent`,
+              borderRight: `${SIZE}px solid transparent`,
+              borderBottom: `${SIZE}px solid ${COLOR}`,
+            }} />
+          );
+        }
+        if (dir === "bottom") {
+          return (
+            <div style={{
+              ...baseStyle,
+              top: position.top + cardHeight,
+              left: position.left + CARD_WIDTH / 2 - SIZE,
+              borderLeft: `${SIZE}px solid transparent`,
+              borderRight: `${SIZE}px solid transparent`,
+              borderTop: `${SIZE}px solid ${COLOR}`,
+            }} />
+          );
+        }
+        if (dir === "left") {
+          return (
+            <div style={{
+              ...baseStyle,
+              top: position.top + cardHeight / 2 - SIZE,
+              left: position.left - SIZE,
+              borderTop: `${SIZE}px solid transparent`,
+              borderBottom: `${SIZE}px solid transparent`,
+              borderRight: `${SIZE}px solid ${COLOR}`,
+            }} />
+          );
+        }
+        // right
+        return (
+          <div style={{
+            ...baseStyle,
+            top: position.top + cardHeight / 2 - SIZE,
+            left: position.left + CARD_WIDTH,
+            borderTop: `${SIZE}px solid transparent`,
+            borderBottom: `${SIZE}px solid transparent`,
+            borderLeft: `${SIZE}px solid ${COLOR}`,
+          }} />
+        );
+      })()}
 
       {/* Card */}
       <motion.div
@@ -322,7 +363,7 @@ export function SpotlightCard() {
         initial={{ opacity: 0, scale: 0.98 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.2 }}
-        className="onb-card fixed z-[97]"
+        className="onb-card fixed z-[99]"
         style={{
           width: CARD_WIDTH,
           ...(useFallback

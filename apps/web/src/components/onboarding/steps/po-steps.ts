@@ -84,6 +84,16 @@ export const PO_STEPS: OnboardingStep[] = [
     route: "/po/planning?tab=planning",
     anchor: "[data-onboarding=planning-generate]",
     anchorPosition: "auto",
+    // Inline tooltip next to the Regenerate button — discoverable
+    // without being a fixed tour step. The user dismisses it with
+    // "OK" and continues to Forecast via the main banner's Next.
+    tooltips: [
+      {
+        selector: "[data-onboarding=regenerate-btn]",
+        body: "Not satisfied with the plan? Click Regenerate to try again — you can also add instructions to steer the new plan.",
+        position: "bottom",
+      },
+    ],
   },
   {
     id: "sprint-forecast",
@@ -115,8 +125,11 @@ export const PO_STEPS: OnboardingStep[] = [
     body:
       "Pull requests, commits, and CI status — all linked to work items so you can see what's actually shipping vs what's still in flight.",
     route: "/po/github",
-    anchor: "[data-onboarding=github-panel]",
-    anchorPosition: "auto",
+    // No outline — the page itself is the focus once we navigate
+    // here. Drawing a ring around the whole dashboard panel felt
+    // redundant since the user already sees they've landed on
+    // GitHub Monitoring.
+    noOutline: true,
   },
   {
     id: "standup-digest",
@@ -126,8 +139,8 @@ export const PO_STEPS: OnboardingStep[] = [
     body:
       "Auto-generated standups from work item activity, PRs, and commits. Blockers surface here and route to Slack/Teams. No more chasing your team for updates.",
     route: "/po/standups",
-    anchor: "[data-onboarding=standup-digest-panel]",
-    anchorPosition: "auto",
+    // No outline — same reasoning as GitHub Monitoring step above.
+    noOutline: true,
   },
   {
     id: "channels",

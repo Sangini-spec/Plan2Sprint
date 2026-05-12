@@ -85,10 +85,13 @@ export function ChecklistWidget() {
           >
             {completed + skipped}/{total}
           </span>
+          {/* When expanded, chevron points UP — click to collapse.
+              When collapsed, chevron points DOWN — click to expand.
+              Was reversed previously. */}
           {open ? (
-            <ChevronDown size={14} style={{ color: "var(--onboarding-card-text-muted)" }} />
-          ) : (
             <ChevronUp size={14} style={{ color: "var(--onboarding-card-text-muted)" }} />
+          ) : (
+            <ChevronDown size={14} style={{ color: "var(--onboarding-card-text-muted)" }} />
           )}
         </div>
       </button>

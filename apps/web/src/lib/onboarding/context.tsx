@@ -305,7 +305,18 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const completeTour = useCallback(async () => {
     const updated = await patchProgress({ status: "completed" });
     setProgress(updated);
-  }, []);
+    // Navigate to the role's home dashboard — the "Go to my dashboard"
+    // button on the completion modal expects to actually take the user
+    // there. Without this push, they're left on whichever sub-page the
+    // last step ended on (e.g. /dev/standup), which is confusing.
+    const home =
+      updated.role === "product_owner"
+        ? "/po"
+        : updated.role === "stakeholder"
+        ? "/stakeholder"
+        : "/dev";
+    if (pathname !== home) router.push(home);
+  }, [pathname, router]);
 
   const startTour = useCallback(async () => {
     if (!progress) return;

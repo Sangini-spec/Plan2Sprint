@@ -3,23 +3,28 @@
 /**
  * OnboardingTour — root renderer for the product tour.
  *
- * Decides which primitive to mount based on the current OnboardingProgress:
- *   shouldShowWelcome (not_started OR current_step="welcome" post-replay)
- *     → WelcomeModal
- *   in_progress + step.variant=spotlight → SpotlightCard + ChecklistWidget
- *   in_progress + step.variant=completion → CompletionModal
- *   (always)                              → PageHintCard (gated internally)
+ * Banner-based UX (replaced earlier spotlight + full-page dim
+ * pattern, which made the dashboard feel locked and prevented
+ * scrolling):
  *
- * Mounted in (app)/layout once via OnboardingProvider. Sits at z-index
- * 90+ so it always wins over normal page content.
+ *   shouldShowWelcome (not_started OR current_step="welcome" post-replay)
+ *     → WelcomeModal (centered overlay, one-time)
+ *   in_progress + step.variant=spotlight → TourBanner + ChecklistWidget
+ *     The banner sticks at the top of the page below the topbar; the
+ *     rest of the page stays fully interactive (no dim, no overlay).
+ *     A subtle outline highlights the anchored element for context.
+ *   in_progress + step.variant=completion → CompletionModal (with
+ *     small corner-burst confetti)
+ *   (always) → PageHintCard (gated internally on first-visit pages)
  */
 
 import { useOnboarding } from "@/lib/onboarding/context";
 import { WelcomeModal } from "./welcome-modal";
 import { CompletionModal } from "./completion-modal";
-import { SpotlightCard } from "./spotlight-card";
+import { AnchorOutline } from "./tour-banner";
 import { ChecklistWidget } from "./checklist-widget";
 import { PageHintCard } from "./page-hint-card";
+import { InlineTooltips } from "./inline-tooltip";
 
 export function OnboardingTour() {
   const { progress, currentStep, isActive, shouldShowWelcome } = useOnboarding();
@@ -35,10 +40,14 @@ export function OnboardingTour() {
       {/* Welcome modal — pristine users only */}
       {shouldShowWelcome && <WelcomeModal />}
 
-      {/* Active tour — spotlight + checklist */}
+      {/* Active tour — bottom-right checklist widget + fixed-position
+          anchor outline + optional per-element inline tooltips. The
+          TOP BANNER is rendered inline in (app)/layout so it pushes
+          content down instead of overlapping. */}
       {isActive && currentStep?.variant === "spotlight" && (
         <>
-          <SpotlightCard />
+          <AnchorOutline />
+          <InlineTooltips />
           <ChecklistWidget />
         </>
       )}

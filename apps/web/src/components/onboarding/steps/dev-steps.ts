@@ -1,8 +1,22 @@
 /**
- * Developer main tour — 6 steps.
+ * Developer main tour — redesigned per user feedback.
  *
- * Pages NOT in this tour (notification page, project picker etc) get
- * page hints from page-hints.ts.
+ * Flow:
+ *   1. Welcome
+ *   2. Connect Tools + Project Picker (multi-anchor)  — show where
+ *      projects come from
+ *   3. Sprint board                                    — assigned
+ *      work for the active sprint
+ *   4. GitHub activity                                 — PRs +
+ *      commits linked to work items (noOutline — page focus)
+ *   5. Submit a standup                                — pre-filled
+ *      from work item activity
+ *   6. Channels (Slack / Teams)                        — workspace
+ *      already connected at the org level, you'll see updates in
+ *      the project channels (NOT a personal connection step)
+ *   7. Flag a blocker                                  — flag from
+ *      the standup, posts to your project channel
+ *   8. Completion
  */
 
 import type { OnboardingStep } from "@/lib/onboarding/types";
@@ -16,15 +30,41 @@ export const DEV_STEPS: OnboardingStep[] = [
     body: "",
   },
   {
+    id: "find-projects",
+    role: "developer",
+    variant: "spotlight",
+    title: "Find your assigned projects",
+    body:
+      "Projects are imported by your Product Owner via Connect Tools, then assigned to you. Use the project picker to switch between any projects you've been added to.",
+    route: "/dev",
+    // Multi-anchor — outline both Connect Tools button AND the
+    // project picker. The dev needs to know about both: Connect
+    // Tools is org-level (PO action), picker is per-dev navigation
+    // between their assigned projects.
+    anchor: "[data-onboarding=connect-tools-btn]",
+    extraAnchors: ["[data-onboarding=project-picker]"],
+    anchorPosition: "bottom",
+  },
+  {
     id: "sprint-board",
     role: "developer",
     variant: "spotlight",
     title: "Your sprint board",
     body:
-      "The work items currently assigned to you for this sprint. Plan2Sprint pulls these directly from ADO or Jira, so the board always matches reality.",
+      "Work items assigned to you for the active sprint — synced live from ADO or Jira, with source info per ticket and AI-optimized assignments from the PO's sprint plan.",
     route: "/dev",
     anchor: "[data-onboarding=dev-sprint-board]",
     anchorPosition: "auto",
+  },
+  {
+    id: "github-activity",
+    role: "developer",
+    variant: "spotlight",
+    title: "Your GitHub activity",
+    body:
+      "Every PR you open and commit you push shows up here, automatically linked to the work item it touches. Plan2Sprint reads this from the GitHub connection your PO set up.",
+    route: "/dev/github",
+    noOutline: true,
   },
   {
     id: "submit-standup",
@@ -32,10 +72,22 @@ export const DEV_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "Submit a standup",
     body:
-      "Plan2Sprint pre-fills your standup from work item activity, PRs, and commits. You just review what's already there — no more typing the same updates daily.",
+      "Plan2Sprint pre-fills your standup from work item activity, PRs, and commits. Review what's there and submit — no more typing the same updates daily.",
     route: "/dev/standup",
     anchor: "[data-onboarding=submit-standup-btn]",
     anchorPosition: "auto",
+  },
+  {
+    id: "channels",
+    role: "developer",
+    variant: "spotlight",
+    title: "Slack & Teams channels",
+    body:
+      "Your organisation's Slack or Microsoft Teams workspace is already connected by your PO. You'll see daily standup digests, sprint plans, and blocker alerts in your project's channel automatically — nothing to set up on your end.",
+    route: "/dev/notifications",
+    // No outline — the entire channels page is the focus; outlining
+    // the whole panel duplicated the context.
+    noOutline: true,
   },
   {
     id: "flag-blocker",
@@ -43,21 +95,12 @@ export const DEV_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "Flag a blocker",
     body:
-      "Stuck on something? Flag it as a blocker and your PO gets notified instantly in Slack or Teams. They can acknowledge or escalate without leaving chat.",
-    route: "/dev/standup",
-    anchor: "[data-onboarding=blocker-flag-btn]",
-    anchorPosition: "auto",
-  },
-  {
-    id: "personal-channel-link",
-    role: "developer",
-    variant: "spotlight",
-    title: "Link your personal Slack or Teams (optional)",
-    body:
-      "Connect your own Slack or Teams account so direct messages route to you specifically — separately from the org-level bot. Your PO can DM you a blocker question without it showing up in the channel.",
+      "Blockers flow through your Slack or Teams channel. When you flag one, Plan2Sprint posts an interactive card to the channel — your PO can acknowledge or escalate it from chat, and the resolution syncs back here. The whole loop happens in the channel; you don't have to chase anyone.",
     route: "/dev/notifications",
-    anchor: "[data-onboarding=link-personal-account]",
-    anchorPosition: "auto",
+    // No outline — the channels page is the focus. Flagging
+    // surfaces as a chat-side action (Adaptive Card buttons in
+    // Slack/Teams), not as a button on this page.
+    noOutline: true,
   },
   {
     id: "dev-completion",
