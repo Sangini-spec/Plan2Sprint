@@ -93,7 +93,17 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   // server response is the truth — they have no project access — and
   // the liveProjects fallback would leak the org's project picker into
   // a "Plan2Sprint shown to a developer who isn't on its team" UX bug.
-  const { role } = useAuth();
+  //
+  // Hotfix (refresh-twice) — gate the init fetch on auth readiness.
+  // Without this, the provider mounts in parallel with the auth state,
+  // fires ``GET /api/projects`` before the Supabase JWT cookie is
+  // attached, gets a 401 back (which fetch-cache deliberately doesn't
+  // cache), and falls into the "no projects" branch. The user sees a
+  // broken dashboard and has to refresh — by which time auth has
+  // finished setting up. Waiting for ``!authLoading && appUser`` makes
+  // the first refresh enough.
+  const { role, appUser, loading: authLoading } = useAuth();
+  const authReady = !authLoading && !!appUser;
   const isPrivileged = ["product_owner", "admin", "owner"].includes(
     (role || "").toLowerCase(),
   );
@@ -213,10 +223,25 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   // an empty projects array is NOT retried (that's a legitimate "no
   // projects yet" state for a new org).
   useEffect(() => {
+    // Hold off until auth is fully ready — without this we fire
+    // ``GET /api/projects`` before the Supabase cookie is set and
+    // get a 401, which leaves the user with an empty dashboard
+    // until they refresh.
+    if (!authReady) return;
     let cancelled = false;
 
     const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
-    const COLD_START_RETRYABLE_STATUS = new Set([408, 502, 503, 504]);
+    // Retry on cold-start statuses + 401. The 401 case covers a real
+    // race: the AuthProvider's cookie is set during the same tick we
+    // mount in, and a fetch that resolves before the cookie is
+    // attached to the next request comes back 401. We previously
+    // shipped a fix that gates this effect on ``authReady``, but in
+    // practice users still report needing two refreshes — likely a
+    // separate timing window between ``appUser`` being non-null and
+    // the cookie actually reaching the same-origin /api request.
+    // Adding 401 to the retry set burns at most one extra retry to
+    // recover instead of dropping the user on a broken dashboard.
+    const COLD_START_RETRYABLE_STATUS = new Set([401, 408, 502, 503, 504]);
 
     async function fetchWithRetry<T>(url: string): Promise<T | null> {
       let lastErr: unknown = null;
@@ -297,7 +322,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     init();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authReady]);
 
   // ── STEP 2: When liveProjects arrive (connections loaded), auto-import ──
   // This runs when connections finish loading from localStorage/status endpoints.

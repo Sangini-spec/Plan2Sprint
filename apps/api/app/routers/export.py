@@ -29,6 +29,7 @@ from ..models.iteration import Iteration
 from ..models.team_member import TeamMember
 from ..models.imported_project import ImportedProject
 from ..models.sprint_plan import SprintPlan
+from ..services.project_access import assert_project_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -336,7 +337,20 @@ async def get_export_overview(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    org_id = current_user.get("organization_id", "demo-org")
+    # Cross-org stakeholder fix — a stakeholder's JWT carries their
+    # own org_id, but the project they're assigned to may belong to a
+    # different org (PO invited them by email). Without resolving the
+    # project's actual org here, the export endpoint's
+    # ``WHERE id = ? AND organization_id = jwt_org`` lookup returns
+    # nothing, project_name falls back to "All Projects", and every
+    # stat reads 0 because work items live in the project's org.
+    # ``assert_project_access`` is the same gate used elsewhere and
+    # returns the ImportedProject row, which carries the right org.
+    if projectId:
+        project = await assert_project_access(db, projectId, current_user)
+        org_id = project.organization_id
+    else:
+        org_id = current_user.get("organization_id", "demo-org")
     data = await _get_full_report_data(db, org_id, projectId)
     return data
 
@@ -351,7 +365,12 @@ async def export_csv(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    org_id = current_user.get("organization_id", "demo-org")
+    # Same cross-org access pattern as /export/overview above.
+    if projectId:
+        project = await assert_project_access(db, projectId, current_user)
+        org_id = project.organization_id
+    else:
+        org_id = current_user.get("organization_id", "demo-org")
     data = await _get_full_report_data(db, org_id, projectId)
     s = data["summary"]
 
@@ -447,7 +466,12 @@ async def export_pdf(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    org_id = current_user.get("organization_id", "demo-org")
+    # Same cross-org access pattern as /export/overview above.
+    if projectId:
+        project = await assert_project_access(db, projectId, current_user)
+        org_id = project.organization_id
+    else:
+        org_id = current_user.get("organization_id", "demo-org")
     data = await _get_full_report_data(db, org_id, projectId)
     s = data["summary"]
 
