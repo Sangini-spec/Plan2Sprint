@@ -16,7 +16,11 @@
 
 import { useState } from "react";
 import {
-  Sparkles,
+  // Compass marks the "Product tour" section (replaces the generic
+  // Sparkles glyph that read as the AI-vibe-coded badge every starter
+  // landing page ships). Lightbulb stays for the "Tips" subsection
+  // since that's a different concept (insight/hint), not the tour.
+  Compass,
   RotateCcw,
   ChevronDown,
   Lightbulb,
@@ -113,8 +117,9 @@ export default function HelpPage() {
             className="flex h-9 w-9 items-center justify-center rounded-lg shrink-0"
             style={{ background: "var(--onboarding-gradient-soft)" }}
           >
-            <Sparkles
+            <Compass
               size={18}
+              strokeWidth={1.85}
               style={{ color: "var(--onboarding-primary)" }}
             />
           </div>

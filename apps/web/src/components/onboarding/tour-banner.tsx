@@ -16,7 +16,10 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowRight, X, Sparkles } from "lucide-react";
+// Compass replaces the generic Sparkles glyph for the onboarding
+// tour — signals "guided tour / orientation" instead of the
+// AI-vibe-coded sparkle look. See welcome-modal.tsx for rationale.
+import { ArrowRight, X, Compass } from "lucide-react";
 import { useOnboarding } from "@/lib/onboarding/context";
 
 interface Rect {
@@ -189,8 +192,9 @@ export function TourBanner() {
             className="hidden sm:flex h-8 w-8 items-center justify-center rounded-lg shrink-0"
             style={{ background: "var(--onboarding-gradient-soft)" }}
           >
-            <Sparkles
+            <Compass
               size={15}
+              strokeWidth={1.9}
               style={{ color: "var(--onboarding-primary)" }}
             />
           </div>

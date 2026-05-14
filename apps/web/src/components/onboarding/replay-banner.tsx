@@ -18,7 +18,9 @@
  */
 
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, X } from "lucide-react";
+// Compass replaces the generic Sparkles glyph for the onboarding
+// replay strip — see welcome-modal.tsx for rationale.
+import { Compass, X } from "lucide-react";
 import { useOnboarding } from "@/lib/onboarding/context";
 
 export function ReplayBanner() {
@@ -45,8 +47,9 @@ export function ReplayBanner() {
         >
           <div className="mx-auto max-w-[1600px] px-4 sm:px-5 lg:px-6 py-2.5 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0">
-              <Sparkles
+              <Compass
                 size={14}
+                strokeWidth={1.9}
                 style={{ color: "var(--onboarding-primary)" }}
               />
               <span

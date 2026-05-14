@@ -12,7 +12,15 @@
  */
 
 import { motion } from "framer-motion";
-import { Sparkles } from "lucide-react";
+// Compass over Sparkles for the onboarding hero — the sparkle look
+// reads as the generic "AI vibe-coded" badge that every starter
+// landing page ships with. A compass signals "guided tour /
+// orientation", which is what the welcome modal actually is, and
+// matches the iconography Stripe Docs / Vercel / Linear use for
+// their walkthrough sections. (Sparkles is still used elsewhere
+// in the app for *AI-generated content* actions like "Generate
+// Sprint Plan", which is the appropriate use of that glyph.)
+import { Compass } from "lucide-react";
 import { useOnboarding } from "@/lib/onboarding/context";
 
 const ROLE_COPY = {
@@ -56,8 +64,9 @@ export function WelcomeModal() {
               className="flex h-14 w-14 items-center justify-center rounded-full"
               style={{ background: "var(--onboarding-gradient-soft)" }}
             >
-              <Sparkles
+              <Compass
                 size={26}
+                strokeWidth={1.75}
                 style={{ color: "var(--onboarding-primary)" }}
               />
             </div>
