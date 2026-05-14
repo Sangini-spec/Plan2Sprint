@@ -355,6 +355,28 @@ def _dedupe_reports_by_email(
         ]
         merged_note = "\n---\n".join(notes) if notes else None
 
+        # Collapse multiple ``isCommitSummary`` entries to ONE.
+        # Each TM in the cluster runs ``_summarize_commits_with_ai``
+        # separately and gets back slightly different text, so the
+        # ticketId/title dedup above keeps every variant. The UI then
+        # renders one AI block (correct) but the narrative builder
+        # joins the first 3 titles — which are now all "Sangini Tripathi
+        # fixed multiple…" strings. Collapse to a single best summary
+        # (highest commitCount wins) BEFORE the narrative rebuild.
+        summary_entries = [
+            c for c in completed_merged
+            if isinstance(c, dict) and c.get("isCommitSummary")
+        ]
+        if len(summary_entries) > 1:
+            best = max(
+                summary_entries,
+                key=lambda c: int(c.get("commitCount") or 0),
+            )
+            completed_merged = [
+                c for c in completed_merged
+                if not (isinstance(c, dict) and c.get("isCommitSummary"))
+            ] + [best]
+
         # Mutate the representative in place. SQLAlchemy lets us mutate
         # the loaded entity; we don't commit, so this is response-only.
         rep.completed_items = completed_merged
@@ -371,18 +393,32 @@ def _dedupe_reports_by_email(
         # over a row whose merged completed_items was 20 strong,
         # because the rep TM's local narrative said "no recently
         # completed" (it had 0 done before the merge).
+        #
+        # NB: this is a FIRST-PASS narrative based on pre-project-
+        # filter counts. ``get_standup_digest`` runs a second pass
+        # AFTER ``project_ticket_ids`` strips items, so the final
+        # ``rep.narrative_text`` the response carries reflects the
+        # filtered counts.
         disp = (
             rep.team_member.display_name if rep.team_member else None
         ) or "This developer"
+        # Skip ``isCommitSummary`` rows when joining titles — their
+        # ``title`` field is the AI paragraph (starts with the dev's
+        # name), which would print twice + duplicate across multi-TM
+        # clusters even after the collapse above (defensive).
+        narrative_completed = [
+            c for c in completed_merged
+            if isinstance(c, dict) and not c.get("isCommitSummary")
+        ]
         narr_parts: list[str] = []
-        if completed_merged:
+        if narrative_completed:
             titles = ", ".join(
                 ((c.get("title") if isinstance(c, dict) else "") or "")[:40]
-                for c in completed_merged[:3]
+                for c in narrative_completed[:3]
             )
             suffix = (
-                f" and {len(completed_merged) - 3} more"
-                if len(completed_merged) > 3 else ""
+                f" and {len(narrative_completed) - 3} more"
+                if len(narrative_completed) > 3 else ""
             )
             narr_parts.append(
                 f"{disp} recently completed {titles}{suffix}."
@@ -1131,6 +1167,43 @@ async def get_standup_digest(
                     or isinstance(b, str)
                 ]
 
+    # Re-build narrative for each report AFTER the project filter so the
+    # "and N more" counts in the displayed sentence reflect the visible
+    # list, not the pre-filter merged list. Without this, the digest
+    # narrative for a merged sangini report (3-4 TMs, 30+ in-progress
+    # before project scope) said "Currently working on … and 27 more"
+    # while the actual filtered count was 9. We also skip
+    # ``isCommitSummary`` rows when joining the completed titles — the
+    # AI paragraph has its own UI block and would otherwise double-print
+    # the dev's name in the joined line.
+    for r in reports:
+        completed_list = r.completed_items if isinstance(r.completed_items, list) else []
+        in_progress_list = r.in_progress_items if isinstance(r.in_progress_items, list) else []
+        blockers_list = r.blockers if isinstance(r.blockers, list) else []
+        disp = (r.team_member.display_name if r.team_member else None) or "This developer"
+        narrative_completed = [
+            c for c in completed_list
+            if isinstance(c, dict) and not c.get("isCommitSummary")
+        ]
+        _np: list[str] = []
+        if narrative_completed:
+            _t = ", ".join((c.get("title") or "")[:40] for c in narrative_completed[:3])
+            _s = f" and {len(narrative_completed) - 3} more" if len(narrative_completed) > 3 else ""
+            _np.append(f"{disp} recently completed {_t}{_s}.")
+        else:
+            _np.append(f"{disp} has no recently completed items.")
+        if in_progress_list:
+            _t = ", ".join(
+                ((ip.get("title") if isinstance(ip, dict) else "") or "")[:40]
+                for ip in in_progress_list[:3]
+            )
+            _s = f" and {len(in_progress_list) - 3} more" if len(in_progress_list) > 3 else ""
+            _np.append(f"Currently working on {_t}{_s}.")
+        if blockers_list:
+            n = len(blockers_list)
+            _np.append(f"⚠ {n} blocker{'s' if n > 1 else ''} reported.")
+        r.narrative_text = " ".join(_np)
+
     # Hotfix 41: compute curated views (recentActivity + inFlight) for each
     # surviving report. Failures here should never block the digest — fall
     # back to empty curated buckets so the legacy capped lists still render.
@@ -1329,12 +1402,20 @@ async def get_standup_digest(
             base["inProgressCount"] = len(base["inProgress"])
             base["blockerCount"] = len(base["blockers"])
 
-            # Rebuild the narrative on top of the merged list.
+            # Rebuild the narrative on top of the merged list. Skip
+            # ``isCommitSummary`` rows when picking titles — their title
+            # IS the AI paragraph (starts with the dev's name) and would
+            # double-print in the joined line. The AI summary has its
+            # own dedicated UI block above the completed list.
             disp = base.get("displayName") or current_user.get("full_name") or "You"
+            narrative_completed = [
+                c for c in base["completed"]
+                if isinstance(c, dict) and not c.get("isCommitSummary")
+            ]
             narr_parts: list[str] = []
-            if base["completed"]:
-                titles = ", ".join((c.get("title") or "")[:40] for c in base["completed"][:3])
-                suffix = f" and {len(base['completed']) - 3} more" if len(base["completed"]) > 3 else ""
+            if narrative_completed:
+                titles = ", ".join((c.get("title") or "")[:40] for c in narrative_completed[:3])
+                suffix = f" and {len(narrative_completed) - 3} more" if len(narrative_completed) > 3 else ""
                 narr_parts.append(f"{disp} recently completed {titles}{suffix}.")
             else:
                 narr_parts.append(f"{disp} has no recently completed items.")
@@ -1558,14 +1639,30 @@ async def get_sprint_contributions(
         sibling_reports.extend(sib_rows)
 
     # Project-scope filtering — load tickets once, reuse across TMs.
+    # Also build the set of terminal-status external_ids + titles so we
+    # can apply the SAME shadow-done filter the main digest applies
+    # (Hotfix 42b). Without this, the expander showed 28 IN PROGRESS
+    # items for a row whose digest header said "9 in progress" — every
+    # work item whose duplicate sibling was already DONE in the project
+    # leaked through the expander even though the digest correctly
+    # filtered it out.
     ticket_ids: set[str] | None = None
+    terminal_ext_ids: set[str] = set()
+    terminal_titles: set[str] = set()
     if project_id:
-        wi_q = await db.execute(
-            select(WorkItem.external_id).where(
+        from ..services._planning_status import TERMINAL_STATUSES
+        wi_rows = (await db.execute(
+            select(WorkItem.external_id, WorkItem.title, WorkItem.status).where(
                 WorkItem.imported_project_id == project_id,
             )
-        )
-        ticket_ids = {row[0] for row in wi_q.all() if row[0]}
+        )).all()
+        ticket_ids = {r[0] for r in wi_rows if r[0]}
+        for ext_id, title, status in wi_rows:
+            if (status or "").upper() in TERMINAL_STATUSES:
+                if ext_id:
+                    terminal_ext_ids.add(ext_id)
+                if title:
+                    terminal_titles.add(title.strip().lower())
 
     def _key_of(item) -> str:
         if not isinstance(item, dict):
@@ -1576,6 +1673,20 @@ async def get_sprint_contributions(
             or (item.get("title") or "").strip().lower()
         )
 
+    def _is_shadow_done(item: dict) -> bool:
+        """True if a sibling of this item (same external_id or same
+        title) is already terminal in the project — meaning the work
+        is logically done even though THIS row's status hasn't been
+        synced from ADO yet."""
+        if not isinstance(item, dict):
+            return False
+        if item.get("ticketId") and item["ticketId"] in terminal_ext_ids:
+            return True
+        title = (item.get("title") or "").strip().lower()
+        if title and title in terminal_titles:
+            return True
+        return False
+
     seen_completed: set[str] = set()
     seen_inprog: set[str] = set()
     completed: list = []
@@ -1583,6 +1694,12 @@ async def get_sprint_contributions(
     for sr in sibling_reports:
         for it in (sr.completed_items if isinstance(sr.completed_items, list) else []):
             if not isinstance(it, dict):
+                continue
+            # Drop the AI commit summary — it's already shown as its
+            # own paragraph block in the digest header; surfacing it
+            # again inside a "sprint contributions" list (where every
+            # row is a sprint ticket) is confusing.
+            if it.get("isCommitSummary"):
                 continue
             if ticket_ids is not None and it.get("ticketId") not in ticket_ids:
                 continue
@@ -1594,6 +1711,9 @@ async def get_sprint_contributions(
             if not isinstance(it, dict):
                 continue
             if ticket_ids is not None and it.get("ticketId") not in ticket_ids:
+                continue
+            # Shadow-done filter — see comment above.
+            if _is_shadow_done(it):
                 continue
             k = _key_of(it)
             if k and k not in seen_inprog:

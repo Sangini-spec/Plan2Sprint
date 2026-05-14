@@ -77,9 +77,23 @@ def _build_narrative(
 
     # Opening — "recently" rather than "newly" because the cutoff is
     # a rolling 72h window (Mon morning still surfaces Friday's work).
-    if completed:
-        titles = ", ".join(c["title"][:40] for c in completed[:3])
-        suffix = f" and {len(completed) - 3} more" if len(completed) > 3 else ""
+    #
+    # SKIP ``isCommitSummary`` entries when picking titles for the
+    # joined sentence: their ``title`` field IS the AI-written summary
+    # paragraph (which already starts with the dev's name), so
+    # including it produces things like:
+    #   "Sangini Tripathi recently completed Sangini Tripathi fixed
+    #    multiple standup, Sangini Tripathi fixed multiple standups,
+    #    Sangini Tripathi fixed multiple standups."
+    # The AI summary already has its own dedicated UI block; it
+    # doesn't belong in this single-line preamble.
+    narrative_completed = [
+        c for c in completed
+        if isinstance(c, dict) and not c.get("isCommitSummary")
+    ]
+    if narrative_completed:
+        titles = ", ".join((c.get("title") or "")[:40] for c in narrative_completed[:3])
+        suffix = f" and {len(narrative_completed) - 3} more" if len(narrative_completed) > 3 else ""
         parts.append(f"{member_name} recently completed {titles}{suffix}.")
     else:
         parts.append(f"{member_name} has no recently completed items.")
