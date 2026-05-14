@@ -282,7 +282,9 @@ async def generate_member_standup(
     items are NOT cluster-expanded — those are project-scoped and
     legitimately distinct per TM.
     """
-    today = date.today()
+    # UTC date — see routers/standups.py for the rationale (frontend +
+    # report_date column are UTC, so "today" must be UTC too).
+    today = datetime.now(timezone.utc).date()
 
     # Build the cluster of "same human" TM ids — every dev TM in the
     # org with the same display_name. Without this, commits attributed
@@ -607,8 +609,8 @@ async def generate_team_digest(
     active_iteration_id: str | None = None,
 ) -> TeamStandupDigest:
     """Generate or update the team standup digest for today."""
-    today = date.today()
     now = datetime.now(timezone.utc)
+    today = now.date()  # UTC date — matches report_date storage
 
     # Compute metrics
     total_reports = len(reports)
@@ -745,7 +747,8 @@ async def generate_all_standups(
 
     Returns a summary dict with counts.
     """
-    today = date.today()
+    # UTC date — see standups.py for the TZ-consistency rationale.
+    today = datetime.now(timezone.utc).date()
 
     # Skip weekends
     if today.weekday() in (5, 6):

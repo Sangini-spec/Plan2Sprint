@@ -802,7 +802,15 @@ async def get_standup_digest(
     if project_id:
         from ..services.project_access import assert_project_access
         await assert_project_access(db, project_id, current_user)
-    today = date.today()
+    # Use UTC date — not local server date — so the auto-regen gate
+    # below (``is_today_request``) lines up with the frontend's
+    # ``new Date().toISOString().split('T')[0]`` (which is also UTC).
+    # Previously this used ``date.today()`` (local server TZ); a user
+    # refreshing at IST 00:35 = UTC 19:05 would send ``date=2026-05-14``
+    # while the server saw ``today=2026-05-15`` (local), making
+    # ``is_today_request=False`` and silently disabling forceRefresh +
+    # auto-regen for several hours every night. Reports stayed stale.
+    today = datetime.now(timezone.utc).date()
     query_date = date_param or today.isoformat()
 
     # If requesting today's data and auto_generate is on, generate if needed.
@@ -1606,7 +1614,7 @@ async def trigger_standup_generation(
         "type": "standup_generated",
         "data": {
             "reportsGenerated": result.get("reports_generated", 0),
-            "date": date.today().isoformat(),
+            "date": datetime.now(timezone.utc).date().isoformat(),
         },
     })
 
@@ -1626,7 +1634,7 @@ async def submit_standup_note(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     if today.weekday() in (5, 6):
         raise HTTPException(
             status_code=400,
@@ -1924,7 +1932,7 @@ async def get_notes_by_date(
     else sees only their own notes (filtered by email match).
     """
     org_id = current_user.get("organization_id", "demo-org")
-    query_date = body.get("date", date.today().isoformat())
+    query_date = body.get("date", datetime.now(timezone.utc).date().isoformat())
     role = (current_user.get("role") or "").lower()
     user_email = (current_user.get("email") or "").strip().lower()
 
