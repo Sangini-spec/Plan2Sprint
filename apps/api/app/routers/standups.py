@@ -471,6 +471,8 @@ async def _compute_curated_views(
     reports: list,
     org_id: str,
     project_id: str | None,
+    project_repo_ids: set[str] | None = None,
+    project_ticket_ids: set[str] | None = None,
 ) -> dict[str, dict]:
     """For each StandupReport, compute:
 
@@ -599,6 +601,28 @@ async def _compute_curated_views(
         )
         commits = (await db.execute(commit_q)).all()
 
+        # ── Project-scope filter for commits ──
+        # When a project is selected, drop commits that don't belong to
+        # this project. "Belongs to" = repo associated with project
+        # (name match) OR commit has at least one linked_ticket_id in
+        # this project's ticket set. Without this, MediCare's PO view
+        # showed commits from the Plan2Sprint repo just because the
+        # same human was a dev in both projects — a clear leak. If
+        # the user's commits don't reference tickets and the repo name
+        # doesn't match the project name, the Recent Activity section
+        # will be empty for that project (correct, not a bug).
+        if project_id and (project_repo_ids or project_ticket_ids):
+            filtered = []
+            for c, repo_name in commits:
+                in_project_repo = c.repository_id in (project_repo_ids or set())
+                linked = c.linked_ticket_ids or []
+                ticket_overlap = bool(
+                    project_ticket_ids and any(t in project_ticket_ids for t in linked)
+                )
+                if in_project_repo or ticket_overlap:
+                    filtered.append((c, repo_name))
+            commits = filtered
+
         pr_q = (
             select(PullRequest, Repository.name)
             .join(Repository, PullRequest.repository_id == Repository.id)
@@ -615,6 +639,12 @@ async def _compute_curated_views(
             .limit(100)
         )
         prs = (await db.execute(pr_q)).all()
+
+        # Same project-scope filter for PRs — applied via repository_id.
+        # If the repo isn't associated with this project, the PR doesn't
+        # surface here either.
+        if project_id and project_repo_ids:
+            prs = [(p, repo_name) for p, repo_name in prs if p.repository_id in project_repo_ids]
 
     # Index by tm_id AND by author_email — a commit that matched via
     # author_email but has a NULL or wrong author_id still needs to
@@ -1083,6 +1113,13 @@ async def get_standup_digest(
     project_terminal_ext_ids: set[str] = set()
     project_terminal_titles: set[str] = set()
     ticket_title_by_ext_id: dict[str, str] = {}
+    # Repos heuristically associated with the selected project. A commit
+    # "belongs to" project P if its repository is in this set OR its
+    # linked_ticket_ids overlap with project_ticket_ids. Without this,
+    # the PO sees commits from the Plan2Sprint repo when looking at the
+    # MediCare project, which is wrong — distinct projects must not
+    # leak each other's code activity.
+    project_repo_ids: set[str] = set()
     if project_id:
         from ..services._planning_status import TERMINAL_STATUSES
 
@@ -1100,6 +1137,36 @@ async def get_standup_digest(
                     project_terminal_ext_ids.add(ext_id)
                 if title:
                     project_terminal_titles.add(title.strip().lower())
+
+        # Compute project_repo_ids — repos whose name or full_name
+        # contains the project's name OR key (case-insensitive
+        # substring match). For users who haven't explicitly linked
+        # their repo to a project, this heuristic catches the common
+        # case where the repo IS the project (e.g. ``Sangini-spec/
+        # Plan2Sprint`` → Plan2Sprint project, ``acme/medicare-api``
+        # → MediCare project). Users whose repo names diverge from
+        # project names need to add ticket prefixes (``MED-12``) to
+        # commit messages so the linked_ticket_ids signal kicks in.
+        from ..models.imported_project import ImportedProject
+        proj = (await db.execute(
+            select(ImportedProject).where(ImportedProject.id == project_id)
+        )).scalar_one_or_none()
+        if proj:
+            tokens: list[str] = []
+            if proj.name:
+                tokens.append(proj.name.strip().lower())
+            if proj.key:
+                tokens.append(proj.key.strip().lower())
+            if tokens:
+                repos_q = await db.execute(
+                    select(Repository).where(Repository.organization_id == org_id)
+                )
+                for repo in repos_q.scalars().all():
+                    repo_name_norm = (
+                        (repo.name or "") + " " + (repo.full_name or "")
+                    ).lower()
+                    if any(t and t in repo_name_norm for t in tokens):
+                        project_repo_ids.add(repo.id)
     else:
         # No project filter — fall back to org-scoped lookup so blocker text
         # still gets enriched with ticket titles in the all-projects view.
@@ -1123,39 +1190,72 @@ async def get_standup_digest(
             return True
         return False
 
+    # Compute curated views FIRST (before project filter) — we use its
+    # ``recentActivity`` output to decide whether each dev has any
+    # project-scoped commits in the window. That signal then gates the
+    # ``isCommitSummary`` / ``commitSha`` rows in ``completed_items``
+    # below, so a dev whose recent commits all live in some OTHER
+    # project's repo doesn't leak their AI commit summary into this
+    # project's digest. Without this ordering, MediCare's view would
+    # surface Plan2Sprint repo commits just because the same human is
+    # a dev in both projects.
+    curated: dict[str, dict] = {}
+    try:
+        curated = await _compute_curated_views(
+            db, reports, org_id, project_id,
+            project_repo_ids=project_repo_ids if project_id else None,
+            project_ticket_ids=project_ticket_ids,
+        )
+    except Exception as e:
+        logger.warning(f"[standups] _compute_curated_views failed: {e}")
+
     if project_ticket_ids is not None:
         for r in reports:
+            # "Has any project-scoped commits in window" — pulled from
+            # the just-computed curated view, which already applied
+            # repo-name + ticket-overlap filters.
+            has_proj_commits = bool(
+                (curated.get(r.id, {}).get("recentActivity") or [])
+            )
+            # Track if this report has any project-scoped PR activity
+            # in the recent window (PRs in recentActivity have type='pr').
+            has_proj_prs = any(
+                isinstance(it, dict) and it.get("type") == "pr"
+                for it in (curated.get(r.id, {}).get("recentActivity") or [])
+            )
             if isinstance(r.completed_items, list):
-                # GitHub-derived items don't carry a project ticket id —
-                # they're REPO-scoped, not project-scoped:
-                #   • AI commit summary  → isCommitSummary=True
-                #   • Standalone commits → commitSha (no linked ticket)
-                #   • Merged PR rows     → prId
-                # Strictly requiring `ticketId in project_ticket_ids`
-                # silently strips all three categories, leaving the PO
-                # digest and dev view with no GitHub activity even when
-                # the standup generator produced it correctly. Audit
-                # finding: this single rule was the reason commits never
-                # surfaced after the project selector was introduced.
+                # Project filter for completed_items:
+                #   • Work item rows (have ticketId)   → keep if ticketId
+                #     is in project_ticket_ids.
+                #   • AI commit summary rows           → keep ONLY if at
+                #     least one of the dev's recent commits is project-
+                #     scoped (else hide — its text was generated org-
+                #     wide and would leak other projects' work).
+                #   • Standalone commit rows (commitSha) → same gate
+                #     as AI summary. Without this, a commit with no
+                #     ticketId in a non-project repo still showed in
+                #     this project's completed list.
+                #   • Merged PR rows (prId)            → keep only if
+                #     the PR is project-scoped (any PR in recentActivity).
                 r.completed_items = [
                     item for item in r.completed_items
                     if isinstance(item, dict) and (
-                        item.get("isCommitSummary") is True
-                        or item.get("commitSha")
-                        or item.get("prId")
-                        or item.get("ticketId") in project_ticket_ids
+                        (item.get("isCommitSummary") is True and has_proj_commits)
+                        or (item.get("commitSha") and has_proj_commits)
+                        or (item.get("prId") and has_proj_prs)
+                        or (item.get("ticketId") and item.get("ticketId") in project_ticket_ids)
                     )
                 ]
             if isinstance(r.in_progress_items, list):
-                # Same logic for in-progress: open PR rows have prId
-                # but no ticketId; keep them so reviewers/authors don't
-                # vanish from the in-flight column.
+                # In-progress: open PR rows surface only when their PR
+                # is project-scoped; work items surface by ticketId
+                # membership.
                 r.in_progress_items = [
                     item for item in r.in_progress_items
                     if isinstance(item, dict)
                     and not _is_already_done(item)
                     and (
-                        item.get("prId")
+                        (item.get("prId") and has_proj_prs)
                         or item.get("ticketId") in project_ticket_ids
                     )
                 ]
@@ -1204,14 +1304,10 @@ async def get_standup_digest(
             _np.append(f"⚠ {n} blocker{'s' if n > 1 else ''} reported.")
         r.narrative_text = " ".join(_np)
 
-    # Hotfix 41: compute curated views (recentActivity + inFlight) for each
-    # surviving report. Failures here should never block the digest — fall
-    # back to empty curated buckets so the legacy capped lists still render.
-    curated: dict[str, dict] = {}
-    try:
-        curated = await _compute_curated_views(db, reports, org_id, project_id)
-    except Exception as e:
-        logger.warning(f"[standups] _compute_curated_views failed: {e}")
+    # (``curated`` was computed above the project filter so it could
+    # gate the isCommitSummary/commitSha/prId rows in completed_items.
+    # The block that used to re-compute it here was removed when this
+    # ordering changed.)
 
     # Hotfix 43: build notes-by-email so empty-row dropper still surfaces a
     # developer who submitted a note even if their tracked activity is dry.
