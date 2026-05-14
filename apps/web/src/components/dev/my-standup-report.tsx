@@ -75,11 +75,21 @@ const MONTH_NAMES = [
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function toDateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // UTC, NOT local. The backend stores StandupReport.report_date as a
+  // UTC timestamp and compares against the requested ``date`` query
+  // parameter using ``func.date(report_date)`` (which extracts the UTC
+  // date). The PO digest panel already sends UTC via
+  // ``new Date().toISOString().split('T')[0]``. Previously this
+  // function used local getters (getFullYear/getMonth/getDate), so a
+  // user opening /dev/standup at IST 00:35 sent date=2026-05-15
+  // (their tomorrow UTC) while the reports were stored under UTC
+  // 2026-05-14 — empty result, no auto-regen.
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
 function isWeekend(d: Date): boolean {
-  const day = d.getDay();
+  // UTC day so weekend boundaries align with the calendar grid above.
+  const day = d.getUTCDay();
   return day === 0 || day === 6;
 }
 

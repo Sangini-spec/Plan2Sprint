@@ -827,7 +827,23 @@ async def get_standup_digest(
     #      developers close half a sprint's worth of tickets and see
     #      "No standup generated" because the report_count > 0 gate
     #      blocked any refresh.
-    is_today_request = query_date == today.isoformat()
+    # Accept query dates within ±1 day of UTC today as "today". This
+    # handles two cases that both produced empty dashboards in the
+    # wild:
+    #   • Dev page sends LOCAL date (toDateKey uses local getters) — a
+    #     user in IST at 00:35 sent ``date=2026-05-15`` while UTC today
+    #     was still ``2026-05-14``. Strict equality would fail the gate
+    #     and silently skip the entire forceRefresh + staleness regen
+    #     block, leaving the user staring at stale morning reports.
+    #   • A TZ behind UTC sees the inverse (their "today" lags UTC).
+    # The fallback further down (effective_date > today branch) then
+    # repoints effective_date to the latest available date so the
+    # digest query still finds the freshly-generated rows.
+    try:
+        _qd = date.fromisoformat(query_date)
+        is_today_request = abs((_qd - today).days) <= 1
+    except (ValueError, TypeError):
+        is_today_request = query_date == today.isoformat()
     is_weekend = today.weekday() in (5, 6)
     STALENESS_THRESHOLD_SEC = 60  # regenerate if last gen older than this
     if is_today_request and auto_generate and not is_weekend:
