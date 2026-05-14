@@ -113,7 +113,15 @@ async def read_new_messages(
             count=count,
             block=block_ms,
         )
-    except Exception:
+    except Exception as e:
+        # Azure Cache for Redis Enterprise uses cluster mode; the
+        # redis-py async client we use isn't cluster-aware and every
+        # XREADGROUP raises ``MovedError``. Propagate that exception
+        # to the caller (ws_relay) so the caller can exit the loop
+        # cleanly. Other exceptions are logged + swallowed so a
+        # transient hiccup doesn't bring down the loop.
+        if type(e).__name__ == "MovedError":
+            raise
         logger.warning("[EventBus] XREADGROUP failed", exc_info=True)
         return []
 

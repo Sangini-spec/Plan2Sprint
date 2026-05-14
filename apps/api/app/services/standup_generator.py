@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta, date
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, case
+from sqlalchemy import select, func, and_, case, or_
 
 from ..models.standup import StandupReport, TeamStandupDigest, BlockerFlag
 from ..models.work_item import WorkItem
@@ -36,35 +36,32 @@ logger = logging.getLogger(__name__)
 def _since_cutoff(last_report_date: datetime | None) -> datetime:
     """Determine the cutoff time for 'recent' activity.
 
-    Returns 7 days ago. This covers:
-      • Today's closes (mid-day standup catches morning work)
-      • Yesterday's closes (Tuesday morning still shows Monday's work)
-      • A full sprint's worth of recent work — devs often want to see
-        their delivery streak from the past week, not just the prior
-        24-72 hours, because they batch closes (close 10 tickets one
-        evening) and gaps shouldn't blank the dashboard.
+    Returns 72 hours ago — a rolling three-day window.
 
-    Three earlier iterations of this function were all too narrow:
+    Rationale (per product owner):
+      A daily standup is fundamentally a *daily* signal. The 72h window
+      is wide enough to:
+        • Catch today's closes (mid-day standup sees morning work)
+        • Span weekends (Monday's standup still shows Friday's work)
+        • Absorb minor batching (the dev who closed 8 tickets last
+          night)
+      …and narrow enough to keep the dashboard meaningful: items older
+      than three days belong to the sprint history / retrospective view,
+      not the daily standup.
 
-      A. `return last_report_date` (delta-since-last-regen). Combined
-         with the upsert path overwriting `completed_items`, regens
+    Earlier iterations tried tighter or looser windows:
+      A. `return last_report_date` (delta-since-last-regen) — combined
+         with the upsert path overwriting ``completed_items``, regens
          after the morning auto-gen wiped out the morning's items.
+      B. Start of today UTC — items closed yesterday dropped the moment
+         UTC midnight rolled over.
+      C. 7 days — too wide; surfaced stale work and pretended
+         long-quiet developers had recent activity.
 
-      B. Start of today UTC. Items closed yesterday were dropped the
-         moment UTC midnight rolled over, so the dashboard read empty
-         for the developer who'd just shipped 14 tickets the night
-         before.
-
-      C. 72h rolling window. Better, but still missed work older than
-         3 days even when the developer hadn't closed anything since
-         — leaving the standup blank between batches.
-
-    7 days is the right "recent" window for daily standups: enough
-    to span weekend gaps + slow weeks, narrow enough to stay
-    relevant. Items older than 7 days are sprint history, not
-    recent activity, and belong in the retrospective view instead.
+    72h is the chosen middle. Adjust here if needed; the curated view
+    in routers/standups.py must match.
     """
-    return datetime.now(timezone.utc) - timedelta(days=7)
+    return datetime.now(timezone.utc) - timedelta(hours=72)
 
 
 def _build_narrative(
@@ -275,8 +272,34 @@ async def generate_member_standup(
     since: datetime,
     active_iteration_id: str | None = None,
 ) -> StandupReport | None:
-    """Generate or update a standup report for a single team member."""
+    """Generate or update a standup report for a single team member.
+
+    Cluster-aware: for orgs where the same human has multiple TM rows
+    (each role/project creates its own TM, often with different
+    emails), this function expands ``member.id`` to a cluster of TM
+    ids matching the same display_name. GitHub commits/PRs attributed
+    to a sibling TM still surface in this member's standup. Work
+    items are NOT cluster-expanded — those are project-scoped and
+    legitimately distinct per TM.
+    """
     today = date.today()
+
+    # Build the cluster of "same human" TM ids — every dev TM in the
+    # org with the same display_name. Without this, commits attributed
+    # to a sibling TM (e.g. the one with the user's work email) never
+    # surface in this TM's standup (e.g. the one with the user's
+    # signup email).
+    cluster_tm_ids: list[str] = [member.id]
+    if member.display_name:
+        sibling_q = await db.execute(
+            select(TeamMember.id).where(
+                TeamMember.organization_id == org_id,
+                func.lower(func.trim(TeamMember.display_name))
+                    == member.display_name.strip().lower(),
+                TeamMember.id != member.id,
+            )
+        )
+        cluster_tm_ids.extend([row[0] for row in sibling_q.all()])
 
     # ── 1. Completed items: work items moved to DONE since last standup ──
     done_query = (
@@ -322,10 +345,13 @@ async def generate_member_standup(
     ]
 
     # ── 3. PR activity ──
+    # Cluster-expanded — picks up PRs attributed to any of this
+    # human's TM rows (different roles/emails generate separate TM
+    # rows but the human is the same).
     pr_query = (
         select(PullRequest)
         .where(
-            PullRequest.author_id == member.id,
+            PullRequest.author_id.in_(cluster_tm_ids),
             PullRequest.created_external_at >= since,
         )
         .order_by(PullRequest.created_external_at.desc())
@@ -360,18 +386,17 @@ async def generate_member_standup(
             ))
 
     # ── 4. Commits ──
-    # Fetch commits the developer pushed in the window. Promote
-    # substantive commits (skip "wip"/"typo"/merge noise) to
-    # ``completed`` standup items when the work isn't already
-    # represented by a closed ticket or merged PR. This means devs
-    # who close GitHub work without a corresponding ADO/Jira ticket
-    # (very common during early iterations or for refactors) still
-    # see their progress in the standup digest, instead of a blank
-    # report that makes them look idle.
+    # Cluster-expanded query — fetches commits attributed to ANY of
+    # this human's TM rows. Single-TM-per-human orgs collapse to the
+    # original ``author_id == member.id`` behaviour because the
+    # cluster has size 1. Multi-TM orgs (the same human has separate
+    # TMs for different roles/projects/email-types) finally see their
+    # commits in their standup regardless of which TM they're logged
+    # in as.
     commits_query = (
         select(Commit)
         .where(
-            Commit.author_id == member.id,
+            Commit.author_id.in_(cluster_tm_ids),
             Commit.committed_at >= since,
         )
         .order_by(Commit.committed_at.desc())
@@ -390,13 +415,24 @@ async def generate_member_standup(
     # of already-in-completed tickets). We need the full list to decide
     # whether to call AI for a summary; just collect into a temp list.
     surfaced_commit_objs: list[Any] = []
+    skipped_noise = 0
+    skipped_dedup = 0
     for c in commits:
         if _is_noise_commit(c.message):
+            skipped_noise += 1
             continue
         linked = list(c.linked_ticket_ids or [])
         if linked and any(t in completed_ticket_ids for t in linked):
+            skipped_dedup += 1
             continue
         surfaced_commit_objs.append(c)
+
+    logger.info(
+        f"[Standup Gen] member={member.email!r} display={member.display_name!r} "
+        f"cluster_tm_ids_count={len(cluster_tm_ids)} "
+        f"commits_returned={commit_count} surfaced={len(surfaced_commit_objs)} "
+        f"skipped_noise={skipped_noise} skipped_dedup={skipped_dedup}"
+    )
 
     # Decision: if the developer has 4+ surfaced commits, listing each
     # one clutters the standup digest. Instead, run them through the AI
@@ -406,16 +442,28 @@ async def generate_member_standup(
     # Under 4 commits → fall through to the individual-item path
     # because a 1-2 line list is more skimmable than a paragraph.
     if len(surfaced_commit_objs) >= 4:
+        logger.info(
+            f"[Standup Gen] member={member.email!r}: calling AI "
+            f"summarizer on {len(surfaced_commit_objs[:30])} commit(s)"
+        )
         summary = await _summarize_commits_with_ai(
             surfaced_commit_objs[:30], member.display_name
         )
         if summary:
+            logger.info(
+                f"[Standup Gen] member={member.email!r}: AI summary "
+                f"OK ({len(summary)} chars) — adding isCommitSummary item"
+            )
             completed.append({
                 "title": summary,
                 "isCommitSummary": True,
                 "commitCount": len(surfaced_commit_objs),
             })
         else:
+            logger.warning(
+                f"[Standup Gen] member={member.email!r}: AI summary "
+                f"returned None — falling back to per-commit list"
+            )
             # AI unavailable / failed — fall back to listing the top 10
             # so the dev still sees their work.
             for c in surfaced_commit_objs[:10]:
@@ -745,6 +793,109 @@ async def generate_all_standups(
         from ..models.repository import Repository as _Repo
         from ..models.team_member import TeamMember as _TM
 
+        # ── Author-email backfill via GitHub API ──
+        # If this org has commits whose ``author_email`` is NULL, the
+        # curated standup view's email-bridge match path can't fire
+        # for them. Run a one-shot refetch against GitHub to populate
+        # the missing identity fields BEFORE we run the per-member
+        # loop. Best effort — silent failure leaves the commits orphan
+        # but doesn't block standup generation.
+        try:
+            null_email_count_q = await db.execute(
+                select(func.count(Commit.id))
+                .join(_Repo, _Repo.id == Commit.repository_id)
+                .where(
+                    _Repo.organization_id == org_id,
+                    Commit.author_email.is_(None),
+                )
+            )
+            null_email_count = null_email_count_q.scalar() or 0
+            if null_email_count > 0:
+                logger.info(
+                    f"[Standup Gen] Org={org_id} has {null_email_count} "
+                    f"commit(s) without author_email — triggering inline "
+                    f"GitHub API refetch to populate identity fields."
+                )
+                from .github_author_refetch import refetch_orphan_authors
+                refetch_result = await refetch_orphan_authors(db, org_id)
+                logger.info(
+                    f"[Standup Gen] Refetch complete: {refetch_result}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[Standup Gen] Inline author refetch failed for "
+                f"{org_id}: {e}"
+            )
+
+        # Diagnostic: how many Repository rows belong to THIS org, vs total.
+        # Multi-org users (the founder has accounts across multiple
+        # orgs) sometimes have their GitHub repo linked to a different
+        # org than the one their JWT scopes to — the standup digest
+        # for the JWT org never sees those commits.
+        total_repos_q = await db.execute(
+            select(func.count(_Repo.id)).where(_Repo.organization_id == org_id)
+        )
+        total_repos_in_org = total_repos_q.scalar() or 0
+        total_commits_q = await db.execute(
+            select(func.count(Commit.id))
+            .join(_Repo, _Repo.id == Commit.repository_id)
+            .where(_Repo.organization_id == org_id)
+        )
+        total_commits_in_org = total_commits_q.scalar() or 0
+        # Also count NULL-author across ALL orgs so we can detect the
+        # cross-org case (commits exist somewhere but not here).
+        global_orphan_q = await db.execute(
+            select(func.count(Commit.id)).where(Commit.author_id.is_(None))
+        )
+        global_orphan_count = global_orphan_q.scalar() or 0
+        logger.info(
+            f"[Standup Gen] Org={org_id} state: "
+            f"repos={total_repos_in_org}, commits_in_org={total_commits_in_org}, "
+            f"global_null_author_commits={global_orphan_count}"
+        )
+
+        # Deep diagnostic — dump distinct (author_email, author_id, author_name)
+        # tuples for the org's commits along with each dev TM's
+        # (email, display_name, id). This is the exact data the curated
+        # view's match uses. Once we can see what's there vs what's
+        # being matched, the gap is obvious.
+        try:
+            sample_q = await db.execute(
+                select(
+                    Commit.author_email,
+                    Commit.author_name,
+                    Commit.author_id,
+                    func.count(Commit.id).label("n"),
+                )
+                .join(_Repo, _Repo.id == Commit.repository_id)
+                .where(_Repo.organization_id == org_id)
+                .group_by(Commit.author_email, Commit.author_name, Commit.author_id)
+                .limit(20)
+            )
+            for row in sample_q.all():
+                logger.info(
+                    f"[Standup Gen] DIAG commit-author group: "
+                    f"email={row.author_email!r}, name={row.author_name!r}, "
+                    f"tm_id={row.author_id!r}, count={row.n}"
+                )
+            dev_tms_q = await db.execute(
+                select(_TM.id, _TM.email, _TM.display_name, _TM.role, _TM.github_username)
+                .where(
+                    _TM.organization_id == org_id,
+                    _TM.role.in_(DEV_ROLES),
+                )
+                .limit(10)
+            )
+            for tm_row in dev_tms_q.all():
+                logger.info(
+                    f"[Standup Gen] DIAG dev TM: "
+                    f"id={tm_row.id}, email={tm_row.email!r}, "
+                    f"display={tm_row.display_name!r}, "
+                    f"role={tm_row.role!r}, gh={tm_row.github_username!r}"
+                )
+        except Exception as e:
+            logger.warning(f"[Standup Gen] DIAG dump failed: {e}")
+
         # Repos in this org with at least one NULL-author commit
         repos_with_orphans_q = await db.execute(
             select(_Repo)
@@ -756,16 +907,164 @@ async def generate_all_standups(
             .distinct()
         )
         repos_with_orphans = list(repos_with_orphans_q.scalars().all())
+        logger.info(
+            f"[Standup Gen] Orphan backfill scan for org={org_id}: "
+            f"{len(repos_with_orphans)} repo(s) have NULL-author commits"
+        )
 
-        if repos_with_orphans:
-            # Cache: TMs in this org keyed by lowercase match strings.
-            all_tms_q = await db.execute(
-                select(_TM).where(
+        # ── Misattribution detection ──
+        # Even when 0 commits are technically "orphan" (NULL author),
+        # they may all be attributed to a TM in this org whose role is
+        # NOT in DEV_ROLES (e.g. the same human's PO TM row, or a
+        # stakeholder TM). The curated digest view filters by emails
+        # belonging to dev TMs only — non-dev attributions are
+        # invisible in the digest even though the rows exist. Detect
+        # by checking whether the author TMs are in the dev set; if
+        # not, re-attribute to the right dev TM.
+        if total_commits_in_org > 0 and len(members) > 0:
+            dev_tm_ids_q = await db.execute(
+                select(_TM.id).where(
                     _TM.organization_id == org_id,
                     _TM.role.in_(DEV_ROLES),
                 )
             )
-            all_tms = list(all_tms_q.scalars().all())
+            dev_tm_ids = {row[0] for row in dev_tm_ids_q.all()}
+            mis_q = await db.execute(
+                select(func.count(Commit.id))
+                .join(_Repo, _Repo.id == Commit.repository_id)
+                .where(
+                    _Repo.organization_id == org_id,
+                    Commit.author_id.isnot(None),
+                    ~Commit.author_id.in_(list(dev_tm_ids)) if dev_tm_ids else Commit.author_id.is_(None),
+                )
+            )
+            mis_count = mis_q.scalar() or 0
+            if mis_count:
+                logger.warning(
+                    f"[Standup Gen] MISATTRIBUTION: {mis_count} commit(s) "
+                    f"in org={org_id}'s repos are attributed to non-DEV "
+                    f"TMs (likely the same human's PO/stakeholder TM row). "
+                    f"Resetting them so the lookup-table path can "
+                    f"re-attribute to the correct dev TM."
+                )
+                await db.execute(
+                    _update(Commit)
+                    .where(
+                        Commit.repository_id.in_(
+                            select(_Repo.id).where(_Repo.organization_id == org_id)
+                        ),
+                        Commit.author_id.isnot(None),
+                        ~Commit.author_id.in_(list(dev_tm_ids)),
+                    )
+                    .values(author_id=None)
+                )
+                # Re-scan
+                repos_with_orphans_q = await db.execute(
+                    select(_Repo)
+                    .join(Commit, Commit.repository_id == _Repo.id)
+                    .where(
+                        _Repo.organization_id == org_id,
+                        Commit.author_id.is_(None),
+                    )
+                    .distinct()
+                )
+                repos_with_orphans = list(repos_with_orphans_q.scalars().all())
+                logger.info(
+                    f"[Standup Gen] After misattribution reset: "
+                    f"{len(repos_with_orphans)} repo(s) now have orphans"
+                )
+
+        # Cross-org safety net — if this org has commits but the
+        # author_id points to a TM in a DIFFERENT org, the standup
+        # generator's per-member query (Commit.author_id == this_tm.id)
+        # will miss them. List the distinct author_ids on this org's
+        # commits and check whether any are NOT in this org's TM set.
+        if total_commits_in_org > 0:
+            cross_org_q = await db.execute(
+                select(func.count(Commit.id.distinct()))
+                .join(_Repo, _Repo.id == Commit.repository_id)
+                .where(
+                    _Repo.organization_id == org_id,
+                    Commit.author_id.isnot(None),
+                    ~Commit.author_id.in_(
+                        select(_TM.id).where(_TM.organization_id == org_id)
+                    ),
+                )
+            )
+            cross_org_attributed = cross_org_q.scalar() or 0
+            if cross_org_attributed:
+                logger.warning(
+                    f"[Standup Gen] CROSS-ORG ATTRIBUTION DETECTED: "
+                    f"{cross_org_attributed} commit(s) in org={org_id}'s "
+                    f"repos are attributed to TMs in DIFFERENT orgs. "
+                    f"Re-attributing to TMs in this org."
+                )
+                # Treat these as orphans for re-attribution purposes
+                # so the lookup-table path below picks them up. We do
+                # this by NULL-ing their author_id temporarily, then
+                # the backfill flow assigns them to the right TM.
+                # Safe because the original attribution was wrong by
+                # construction — those TMs can't appear in this org's
+                # standup digest anyway.
+                from sqlalchemy import update as _u2
+                await db.execute(
+                    _u2(Commit)
+                    .where(
+                        Commit.repository_id.in_(
+                            select(_Repo.id).where(_Repo.organization_id == org_id)
+                        ),
+                        Commit.author_id.isnot(None),
+                        ~Commit.author_id.in_(
+                            select(_TM.id).where(_TM.organization_id == org_id)
+                        ),
+                    )
+                    .values(author_id=None)
+                )
+                # Re-query repos_with_orphans now that we created some.
+                repos_with_orphans_q = await db.execute(
+                    select(_Repo)
+                    .join(Commit, Commit.repository_id == _Repo.id)
+                    .where(
+                        _Repo.organization_id == org_id,
+                        Commit.author_id.is_(None),
+                    )
+                    .distinct()
+                )
+                repos_with_orphans = list(repos_with_orphans_q.scalars().all())
+                logger.info(
+                    f"[Standup Gen] After cross-org reset: "
+                    f"{len(repos_with_orphans)} repo(s) now have orphans"
+                )
+
+        if repos_with_orphans:
+            # ALL TMs in the org, not just DEV_ROLES — a commit author
+            # might be a PO/admin whose TM row has a non-dev role yet
+            # is the actual GitHub committer. Filtering by DEV_ROLES
+            # here would exclude the very person who needs to be
+            # matched. Generated standups still filter by DEV_ROLES
+            # separately — this lookup is only for resolving commit
+            # attribution.
+            all_tms_q = await db.execute(
+                select(_TM).where(
+                    _TM.organization_id == org_id,
+                    or_(_TM.role.is_(None), _TM.role != "excluded"),
+                )
+            )
+            all_tms_raw = list(all_tms_q.scalars().all())
+            # Bias toward DEV_ROLES: insert non-dev TMs FIRST then
+            # dev TMs LAST so dev TMs overwrite duplicate keys (same
+            # human's dev TM + PO TM share display-name first-word
+            # "sangini" → the dev one wins). The standup digest is
+            # only meaningful when commits attribute to dev TMs (the
+            # only ones with StandupReport rows).
+            non_dev = [t for t in all_tms_raw if (t.role or "").lower() not in DEV_ROLES]
+            dev = [t for t in all_tms_raw if (t.role or "").lower() in DEV_ROLES]
+            all_tms = non_dev + dev
+            logger.info(
+                f"[Standup Gen] Orphan backfill lookup table: "
+                f"{len(all_tms)} TM candidate(s) "
+                f"(non_dev={len(non_dev)}, dev={len(dev)})"
+            )
             lookup: dict[str, _TM] = {}
             for tm in all_tms:
                 if tm.github_username:
@@ -789,21 +1088,46 @@ async def generate_all_standups(
                 full = (repo.full_name or "")
                 owner = full.split("/", 1)[0].strip().lower() if "/" in full else ""
                 if not owner:
+                    logger.warning(
+                        f"[Standup Gen] Repo {repo.id} has no parseable "
+                        f"owner from full_name='{full}'; skipping"
+                    )
                     continue
                 # Try exact owner match against any TM signal.
                 tm = lookup.get(owner)
+                match_path = "owner_exact"
                 if not tm:
                     # Owner might be "Sangini-spec" but the TM key is
                     # "sangini" — try the owner's first hyphen-separated
                     # segment (e.g. "Sangini-spec" → "sangini").
                     owner_prefix = owner.split("-", 1)[0]
                     tm = lookup.get(owner_prefix)
-                if not tm and len(all_tms) == 1:
-                    # Single-dev-org fallback when owner-based match
-                    # fails. All orphan commits in this org's repos
-                    # must belong to the lone dev TM.
-                    tm = all_tms[0]
+                    if tm:
+                        match_path = f"owner_prefix({owner_prefix})"
                 if not tm:
+                    # Try substring containment — owner "sangini-spec"
+                    # contains a TM's display first-word "sangini" or
+                    # vice versa. Helps when the owner has a suffix
+                    # like "-spec" that isn't separated by a hyphen
+                    # in the prefix slice.
+                    for key, candidate in lookup.items():
+                        if key and (key in owner or owner in key):
+                            tm = candidate
+                            match_path = f"substring({key})"
+                            break
+                if not tm and len(all_tms) == 1:
+                    # Single-TM-org fallback when owner-based match
+                    # fails. All orphan commits in this org's repos
+                    # must belong to the lone TM.
+                    tm = all_tms[0]
+                    match_path = "single_tm_org"
+                if not tm:
+                    logger.warning(
+                        f"[Standup Gen] No TM match for repo "
+                        f"'{repo.full_name}' (owner='{owner}'); "
+                        f"lookup_keys={sorted(lookup.keys())[:10]}…; "
+                        f"orphan commits stay attribution-less."
+                    )
                     continue
 
                 upd = await db.execute(
@@ -818,13 +1142,17 @@ async def generate_all_standups(
                 if n:
                     total_attributed += n
                     logger.info(
-                        f"[Standup Gen] Orphan backfill: "
-                        f"attributed {n} commit(s) in repo "
-                        f"'{repo.full_name}' (owner='{owner}') → "
-                        f"{tm.email} (id={tm.id})"
+                        f"[Standup Gen] Orphan backfill MATCH "
+                        f"(path={match_path}): attributed {n} commit(s) "
+                        f"in repo '{repo.full_name}' (owner='{owner}') → "
+                        f"TM {tm.email} (id={tm.id}, role={tm.role})"
                     )
             if total_attributed:
                 await db.flush()
+                logger.info(
+                    f"[Standup Gen] Orphan backfill complete for "
+                    f"org={org_id}: {total_attributed} commit(s) attributed."
+                )
     except Exception as e:
         logger.warning(f"Orphan commit backfill failed for {org_id}: {e}")
 

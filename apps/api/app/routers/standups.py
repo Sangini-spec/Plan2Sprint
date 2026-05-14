@@ -134,7 +134,24 @@ def _build_individual_reports(
         in_progress_full = r.in_progress_items if isinstance(r.in_progress_items, list) else []
 
         # Cap the legacy arrays so the default response stays compact.
-        completed_capped = completed_full[:8]
+        # Pull AI commit-summary entries to the FRONT of the capped list
+        # so the dev page's render-by-flag path (which iterates
+        # ``report.completed`` looking for ``isCommitSummary``) always
+        # finds the summary within the first 8 slots. The generator
+        # appends the summary LAST in completed_items (after work items
+        # + PR rows), so any developer with 8+ DONE items would lose
+        # the summary off the back of the cap. Without this reordering,
+        # the "Recent code activity" block silently disappears from the
+        # dev view for active devs.
+        summary_items = [
+            it for it in completed_full
+            if isinstance(it, dict) and it.get("isCommitSummary")
+        ]
+        other_items = [
+            it for it in completed_full
+            if not (isinstance(it, dict) and it.get("isCommitSummary"))
+        ]
+        completed_capped = (summary_items + other_items)[:8]
         in_progress_capped = in_progress_full[:5]
 
         curated = (curated_by_report_id or {}).get(r.id, {})
@@ -164,6 +181,22 @@ def _build_individual_reports(
         ):
             continue
 
+        # Extract the AI commit summary entry (if present) from
+        # ``completed_items`` so the PO digest can render it the same
+        # way the dev's own /dev/standup view does — a concise
+        # 3–4-sentence paragraph instead of a long row of commit
+        # titles. The standup generator stores this as a single item
+        # with ``isCommitSummary=True`` when there are 4+ unticketed
+        # commits in the window.
+        commit_summary: dict | None = None
+        for it in completed_full:
+            if isinstance(it, dict) and it.get("isCommitSummary"):
+                commit_summary = {
+                    "text": it.get("title") or "",
+                    "commitCount": int(it.get("commitCount") or 0),
+                }
+                break
+
         individual_reports.append({
             "id": r.id,
             "teamMemberId": r.team_member_id,
@@ -176,6 +209,8 @@ def _build_individual_reports(
             # Curated views (Hotfix 41)
             "recentActivity": recent_activity,
             "inFlight": in_flight,
+            # AI-generated commit summary (shown by both dev + PO views)
+            "commitSummary": commit_summary,
             # Legacy capped arrays (kept for backward compatibility)
             "completedCount": len(completed_full),
             "inProgressCount": len(in_progress_full),
@@ -403,11 +438,11 @@ async def _compute_curated_views(
 ) -> dict[str, dict]:
     """For each StandupReport, compute:
 
-      - recentActivity: last 48h (or 72h on Mondays) commits + PRs, scoped
-        to the project's repos (via author_id IN project_team_members) so a
-        developer in two projects only sees their selected-project work.
-      - inFlight: WorkItems still IN_PROGRESS / IN_REVIEW assigned to this
-        developer, scoped to the project, capped at 5.
+      - recentActivity: last 72h commits + PRs, scoped to the project's
+        repos (via author_id IN project_team_members) so a developer
+        in two projects only sees their selected-project work.
+      - inFlight: WorkItems still IN_PROGRESS / IN_REVIEW assigned to
+        this developer, scoped to the project, capped at 5.
 
     Returned shape: {report_id: {recentActivity: [...], inFlight: [...]}}.
     """
@@ -415,37 +450,76 @@ async def _compute_curated_views(
         return {}
 
     now = datetime.now(timezone.utc)
-    # Monday → look back 72h (so weekend GitHub work surfaces); else 48h.
-    hours = 72 if now.weekday() == 0 else 48
-    since = now - timedelta(hours=hours)
+    # 72-hour rolling window for GitHub activity. Must match
+    # ``_since_cutoff`` in standup_generator.py — both compute "recent"
+    # for the same dashboard so they have to agree, otherwise a commit
+    # surfaces in one section and not the other.
+    since = now - timedelta(hours=72)
 
-    # Build author-cluster: all TeamMember rows in the org sharing the same
-    # email as a report's team_member. Scoping a single human's GitHub
-    # activity requires hitting every TM row their commits/PRs were ever
-    # attributed to. We then narrow further to the project later.
+    # Build author-cluster: every TeamMember row in the org sharing the
+    # same EMAIL or DISPLAY_NAME as a report's team_member. The display
+    # name match is critical for multi-org / multi-email humans whose
+    # GitHub commits attribute to one TM (often the one with their
+    # GitHub no-reply email) while the standup report is generated for
+    # a different TM with their org-level email. Both rows say
+    # "Sangini Tripathi" — that's the bridge.
     emails = list({
         (r.team_member.email or "").lower()
         for r in reports
         if r.team_member and r.team_member.email
     })
-    if not emails:
+    display_names = list({
+        (r.team_member.display_name or "").strip().lower()
+        for r in reports
+        if r.team_member and r.team_member.display_name
+    })
+    if not emails and not display_names:
         return {r.id: {"recentActivity": [], "inFlight": []} for r in reports}
 
+    cluster_clauses = []
+    if emails:
+        cluster_clauses.append(func.lower(TeamMember.email).in_(emails))
+    if display_names:
+        cluster_clauses.append(
+            func.lower(func.trim(TeamMember.display_name)).in_(display_names)
+        )
     cluster_q = select(TeamMember).where(
         TeamMember.organization_id == org_id,
-        func.lower(TeamMember.email).in_(emails),
+        or_(*cluster_clauses) if len(cluster_clauses) > 1 else cluster_clauses[0],
         or_(TeamMember.role.is_(None), TeamMember.role != "excluded"),
     )
     cluster_rows = (await db.execute(cluster_q)).scalars().all()
 
-    # Map email -> [tm_id, ...] (project-scoped if project_id given)
+    # Map email -> [tm_id, ...] for ALL TMs in the cluster.
+    # A TM that matched only via display_name (no shared email) still
+    # needs to bucket under its OWN email for the per-report lookup,
+    # AND under every report's email whose display_name equals this
+    # TM's display_name. Otherwise the cluster expansion is wasted —
+    # the report's email lookup wouldn't find the cluster TM's id.
     tms_by_email: dict[str, list[str]] = {}
     project_tm_ids_by_email: dict[str, list[str]] = {}
+    # Build a display_name -> report_emails map for the cross-attribution
+    name_to_report_emails: dict[str, set[str]] = {}
+    for r in reports:
+        if r.team_member and r.team_member.display_name:
+            name_key = r.team_member.display_name.strip().lower()
+            em = (r.team_member.email or "").lower()
+            if em:
+                name_to_report_emails.setdefault(name_key, set()).add(em)
     for tm in cluster_rows:
         em = (tm.email or "").lower()
-        tms_by_email.setdefault(em, []).append(tm.id)
-        if project_id and tm.imported_project_id == project_id:
-            project_tm_ids_by_email.setdefault(em, []).append(tm.id)
+        name_key = (tm.display_name or "").strip().lower()
+        if em:
+            tms_by_email.setdefault(em, []).append(tm.id)
+            if project_id and tm.imported_project_id == project_id:
+                project_tm_ids_by_email.setdefault(em, []).append(tm.id)
+        # ALSO bucket this TM under each report email that shares the
+        # same display name so the per-report iteration picks it up.
+        for report_em in name_to_report_emails.get(name_key, set()):
+            if report_em != em:
+                tms_by_email.setdefault(report_em, []).append(tm.id)
+                if project_id and tm.imported_project_id == project_id:
+                    project_tm_ids_by_email.setdefault(report_em, []).append(tm.id)
 
     # If project_id given, prefer project-scoped TM ids; else use full cluster.
     activity_tms_by_email: dict[str, list[str]] = {}
@@ -460,12 +534,28 @@ async def _compute_curated_views(
     commits: list = []
     prs: list = []
 
-    if all_tm_ids:
+    if all_tm_ids or emails:
+        # Match commits by EITHER author_id (the TM resolution path)
+        # OR author_email (the identity-bridge path, populated from
+        # the GitHub webhook payload). Email matching is essential
+        # because the standup engine's TM lookup can attribute the
+        # commit to the WRONG TM row (multi-org users have TMs across
+        # several orgs with different emails per role). Without
+        # author_email we'd miss every such commit.
+        # The Repository.organization_id filter keeps the result
+        # scoped — we don't surface commits from someone else's repo
+        # just because the email matched globally.
+        match_clauses = []
+        if all_tm_ids:
+            match_clauses.append(Commit.author_id.in_(all_tm_ids))
+        if emails:
+            match_clauses.append(func.lower(Commit.author_email).in_(emails))
         commit_q = (
             select(Commit, Repository.name)
             .join(Repository, Commit.repository_id == Repository.id)
             .where(
-                Commit.author_id.in_(all_tm_ids),
+                Repository.organization_id == org_id,
+                or_(*match_clauses) if len(match_clauses) > 1 else match_clauses[0],
                 Commit.committed_at >= since,
             )
             .order_by(Commit.committed_at.desc())
@@ -490,10 +580,17 @@ async def _compute_curated_views(
         )
         prs = (await db.execute(pr_q)).all()
 
-    # Index by tm_id for fast bucketing
+    # Index by tm_id AND by author_email — a commit that matched via
+    # author_email but has a NULL or wrong author_id still needs to
+    # surface under the right standup report, which is keyed off the
+    # report's TM email.
     commits_by_tm: dict[str, list] = {}
+    commits_by_email: dict[str, list] = {}
     for c, repo_name in commits:
-        commits_by_tm.setdefault(c.author_id, []).append((c, repo_name))
+        if c.author_id:
+            commits_by_tm.setdefault(c.author_id, []).append((c, repo_name))
+        if c.author_email:
+            commits_by_email.setdefault(c.author_email.lower(), []).append((c, repo_name))
     prs_by_tm: dict[str, list] = {}
     for p, repo_name in prs:
         prs_by_tm.setdefault(p.author_id, []).append((p, repo_name))
@@ -557,24 +654,38 @@ async def _compute_curated_views(
         tm_ids = activity_tms_by_email.get(em, [])
 
         recent: list[dict] = []
-        # Group commits per (repo, day) to avoid 47-line lists
+        # Group commits per (repo, day) to avoid 47-line lists.
+        # Source is BOTH author_id buckets (legacy strict match) and
+        # author_email buckets (identity-bridge match) so commits
+        # attributed to the wrong TM still surface under the right
+        # standup report — keyed off the report's TM email.
         commit_groups: dict[tuple[str, str], dict] = {}
+        seen_shas: set[str] = set()  # dedup if both buckets fire for same commit
+
+        def _ingest_commit(c, repo_name: str):
+            if c.sha in seen_shas:
+                return
+            seen_shas.add(c.sha)
+            day = c.committed_at.date().isoformat() if c.committed_at else ""
+            key = (repo_name or "", day)
+            if key not in commit_groups:
+                commit_groups[key] = {
+                    "type": "commits",
+                    "repo": repo_name or "",
+                    "day": day,
+                    "count": 0,
+                    "occurredAt": c.committed_at.isoformat() if c.committed_at else "",
+                }
+            commit_groups[key]["count"] += 1
+            if c.committed_at and c.committed_at.isoformat() > commit_groups[key]["occurredAt"]:
+                commit_groups[key]["occurredAt"] = c.committed_at.isoformat()
+
         for tid in tm_ids:
             for c, repo_name in commits_by_tm.get(tid, []):
-                day = c.committed_at.date().isoformat() if c.committed_at else ""
-                key = (repo_name or "", day)
-                if key not in commit_groups:
-                    commit_groups[key] = {
-                        "type": "commits",
-                        "repo": repo_name or "",
-                        "day": day,
-                        "count": 0,
-                        "occurredAt": c.committed_at.isoformat() if c.committed_at else "",
-                    }
-                commit_groups[key]["count"] += 1
-                # Keep the latest occurredAt for sorting
-                if c.committed_at and c.committed_at.isoformat() > commit_groups[key]["occurredAt"]:
-                    commit_groups[key]["occurredAt"] = c.committed_at.isoformat()
+                _ingest_commit(c, repo_name)
+        # Also include commits matched by author_email == this report's email
+        for c, repo_name in commits_by_email.get(em, []):
+            _ingest_commit(c, repo_name)
 
         for grp in commit_groups.values():
             recent.append({
@@ -955,16 +1066,38 @@ async def get_standup_digest(
     if project_ticket_ids is not None:
         for r in reports:
             if isinstance(r.completed_items, list):
+                # GitHub-derived items don't carry a project ticket id —
+                # they're REPO-scoped, not project-scoped:
+                #   • AI commit summary  → isCommitSummary=True
+                #   • Standalone commits → commitSha (no linked ticket)
+                #   • Merged PR rows     → prId
+                # Strictly requiring `ticketId in project_ticket_ids`
+                # silently strips all three categories, leaving the PO
+                # digest and dev view with no GitHub activity even when
+                # the standup generator produced it correctly. Audit
+                # finding: this single rule was the reason commits never
+                # surfaced after the project selector was introduced.
                 r.completed_items = [
                     item for item in r.completed_items
-                    if isinstance(item, dict) and item.get("ticketId") in project_ticket_ids
+                    if isinstance(item, dict) and (
+                        item.get("isCommitSummary") is True
+                        or item.get("commitSha")
+                        or item.get("prId")
+                        or item.get("ticketId") in project_ticket_ids
+                    )
                 ]
             if isinstance(r.in_progress_items, list):
+                # Same logic for in-progress: open PR rows have prId
+                # but no ticketId; keep them so reviewers/authors don't
+                # vanish from the in-flight column.
                 r.in_progress_items = [
                     item for item in r.in_progress_items
                     if isinstance(item, dict)
-                    and item.get("ticketId") in project_ticket_ids
                     and not _is_already_done(item)
+                    and (
+                        item.get("prId")
+                        or item.get("ticketId") in project_ticket_ids
+                    )
                 ]
             # Blockers may or may not have ticketIds — keep those that match or have no ticketId
             if isinstance(r.blockers, list):
@@ -1060,20 +1193,32 @@ async def get_standup_digest(
 
         # Apply the same item-level project filter we apply to the
         # main reports list, so the merged "mine" only counts work
-        # belonging to the selected project.
+        # belonging to the selected project. GitHub-derived items
+        # (AI commit summary, standalone commits, PR rows) are kept
+        # regardless — they're repo-scoped, not project-scoped, and
+        # the dev view loses its entire "Recent code activity" block
+        # when they're stripped here.
         if project_ticket_ids is not None:
             for r in matching_reports:
                 if isinstance(r.completed_items, list):
                     r.completed_items = [
                         it for it in r.completed_items
-                        if isinstance(it, dict) and it.get("ticketId") in project_ticket_ids
+                        if isinstance(it, dict) and (
+                            it.get("isCommitSummary") is True
+                            or it.get("commitSha")
+                            or it.get("prId")
+                            or it.get("ticketId") in project_ticket_ids
+                        )
                     ]
                 if isinstance(r.in_progress_items, list):
                     r.in_progress_items = [
                         it for it in r.in_progress_items
                         if isinstance(it, dict)
-                        and it.get("ticketId") in project_ticket_ids
                         and not _is_already_done(it)
+                        and (
+                            it.get("prId")
+                            or it.get("ticketId") in project_ticket_ids
+                        )
                     ]
 
     if matching_reports:
@@ -1135,6 +1280,21 @@ async def get_standup_digest(
                 total_completed += int(v.get("completedCount") or 0)
                 total_in_progress += int(v.get("inProgressCount") or 0)
                 total_blockers += int(v.get("blockerCount") or 0)
+
+            # Merge commitSummary across TMs — pick the one with the
+            # highest commit count (most signal). Multi-TM users can
+            # have commits attributed across their dev/PO TM rows;
+            # whichever has the most surfaced commits gets to drive
+            # the displayed paragraph.
+            best_summary: dict | None = None
+            for v in per_tm:
+                cs = v.get("commitSummary")
+                if not cs:
+                    continue
+                if (best_summary is None or
+                    int(cs.get("commitCount") or 0) > int(best_summary.get("commitCount") or 0)):
+                    best_summary = cs
+            base["commitSummary"] = best_summary
 
             # Use the requesting user's auth email so the frontend's
             # legacy email-string check (older web revisions) still

@@ -169,6 +169,15 @@ class Commit(Base):
         name="author_id",
         nullable=True,
     )
+    # Author identity from GitHub webhook (or API re-fetch). Lets the
+    # standup engine match by email when author_id is missing or
+    # resolved to the wrong TM (common for multi-org users).
+    author_email: Mapped[Optional[str]] = mapped_column(
+        String, name="author_email", nullable=True
+    )
+    author_name: Mapped[Optional[str]] = mapped_column(
+        String, name="author_name", nullable=True
+    )
     branch: Mapped[str] = mapped_column(String, nullable=False)
     linked_ticket_ids: Mapped[List[str]] = mapped_column(
         ARRAY(String), name="linked_ticket_ids", default=list

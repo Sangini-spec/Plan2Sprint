@@ -153,6 +153,21 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_progress JSONB"
             ))
+            # Commit author identity — captured straight from the
+            # GitHub webhook so the standup engine can match by email
+            # even when the TeamMember resolution fails or attributes
+            # the row to the wrong TM (very common for multi-org users
+            # whose dev/PO/stakeholder roles each generate separate
+            # TM rows with different emails).
+            await conn.execute(text(
+                "ALTER TABLE commits ADD COLUMN IF NOT EXISTS author_email VARCHAR"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE commits ADD COLUMN IF NOT EXISTS author_name VARCHAR"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_commits_author_email ON commits(LOWER(author_email))"
+            ))
             # Timeline revamp (Sprint 1) — target launch date + persisted phase
             # dates + Ready phase backfill. Idempotent: ALTER IF NOT EXISTS, and
             # the Ready insert skips projects that already have it.

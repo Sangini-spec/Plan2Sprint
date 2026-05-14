@@ -66,6 +66,12 @@ interface IndividualReport {
   isInactive: boolean;
   recentActivity: RecentActivityItem[];
   inFlight: InFlightItem[];
+  /** AI-generated 3–4 sentence summary of the dev's recent commits.
+   *  Backend extracts this from the standup's completed_items when
+   *  there are 4+ surfaced commits. Same shape as the dev page's
+   *  isCommitSummary block, surfaced here so the PO sees the same
+   *  concise paragraph instead of a long row of commit titles. */
+  commitSummary?: { text: string; commitCount: number } | null;
   completedCount: number;
   inProgressCount: number;
   blockerCount: number;
@@ -441,6 +447,38 @@ export function StandupDigestPanel() {
                           <p className="text-sm text-[var(--text-secondary)] leading-relaxed italic">
                             {report.narrativeText}
                           </p>
+                        )}
+
+                        {/* AI-generated commit summary — same data the dev's
+                            own /dev/standup view renders. Shown as a
+                            bordered paragraph block instead of a long row
+                            of commit titles. Only renders when the
+                            standup engine collapsed 4+ commits into a
+                            summary. */}
+                        {report.commitSummary && report.commitSummary.text && (
+                          <div
+                            className="rounded-lg border p-3 space-y-1.5"
+                            style={{
+                              borderColor: "color-mix(in srgb, var(--color-brand-secondary) 30%, transparent)",
+                              background: "color-mix(in srgb, var(--color-brand-secondary) 6%, transparent)",
+                            }}
+                          >
+                            <div className="flex items-center gap-2 mb-1">
+                              <GitCommit className="h-3.5 w-3.5 text-[var(--color-brand-secondary)]" />
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-brand-secondary)]">
+                                Recent code activity
+                              </span>
+                              {report.commitSummary.commitCount > 0 && (
+                                <span className="text-[10px] text-[var(--text-tertiary)]">
+                                  {report.commitSummary.commitCount} commit
+                                  {report.commitSummary.commitCount === 1 ? "" : "s"}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-sm leading-relaxed text-[var(--text-primary)]">
+                              {report.commitSummary.text}
+                            </p>
+                          </div>
                         )}
 
                         {/* Recent Activity (last 48-72h GitHub) */}

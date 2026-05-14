@@ -316,6 +316,8 @@ async def process_push_event(
                         sha=sha,
                         message=message[:500],
                         author_id=member.id if member else None,
+                        author_email=(author_info.get("email") or pusher.get("email") or None),
+                        author_name=(author_info.get("name") or pusher.get("name") or None),
                         branch=branch,
                         linked_ticket_ids=ticket_refs,
                         files_changed=len(commit_data.get("modified", []))

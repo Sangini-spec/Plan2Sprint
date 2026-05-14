@@ -56,9 +56,17 @@ async def _relay_loop(consumer_name: str) -> None:
     """
     Main consumer loop — reads from Redis Stream and relays to local WS.
 
-    Runs indefinitely until cancelled. Handles errors gracefully with
-    a short back-off to avoid tight error loops.
+    Runs indefinitely until cancelled. Handles errors gracefully.
+
+    Azure Cache for Redis Enterprise uses the OSS Cluster API, but the
+    redis-py async client we use isn't cluster-aware. Every XREADGROUP
+    raises ``MovedError`` and the loop tight-spins log lines. Detect that
+    once and EXIT the loop cleanly — cross-replica WS broadcasts will be
+    disabled until the client is upgraded, but a single replica still
+    serves the WebSocket protocol locally via direct broadcasts. The
+    standup digest data path doesn't depend on this loop at all.
     """
+    moved_error_seen = False
     while True:
         try:
             messages = await read_new_messages(
@@ -88,6 +96,23 @@ async def _relay_loop(consumer_name: str) -> None:
         except asyncio.CancelledError:
             logger.info("[WS-Relay] Consumer '%s' shutting down", consumer_name)
             break
-        except Exception:
+        except Exception as e:
+            # Detect Azure Redis Enterprise cluster-mode mismatch and
+            # stop the loop entirely so we don't tight-spin error logs
+            # every 2 seconds for the lifetime of the container.
+            if type(e).__name__ == "MovedError":
+                if not moved_error_seen:
+                    logger.warning(
+                        "[WS-Relay] Redis is in cluster mode; this "
+                        "client isn't cluster-aware. Disabling the "
+                        "cross-replica relay. Direct same-replica WS "
+                        "broadcasts continue to work; the standup "
+                        "digest doesn't depend on this loop. To re-"
+                        "enable, switch the redis client to "
+                        "RedisCluster or run a non-cluster Redis."
+                    )
+                    moved_error_seen = True
+                logger.info("[WS-Relay] Exiting consumer '%s' (cluster-mode redis)", consumer_name)
+                break
             logger.warning("[WS-Relay] Error in consumer loop — retrying in 1s", exc_info=True)
             await asyncio.sleep(1)

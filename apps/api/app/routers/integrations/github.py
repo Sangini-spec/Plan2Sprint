@@ -1010,6 +1010,25 @@ async def backfill_webhook_secrets(
     return summary
 
 
+@router.post("/refetch-commit-authors")
+async def refetch_commit_authors(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Backfill ``Commit.author_email`` / ``author_name`` for every
+    commit in the caller's org whose email is NULL. Thin HTTP wrapper
+    around ``github_author_refetch.refetch_orphan_authors`` — the same
+    function the standup generator calls inline.
+
+    Safe to re-run — only touches rows with NULL ``author_email``.
+    """
+    from ...services.github_author_refetch import refetch_orphan_authors
+    org_id = current_user.get("organization_id", "demo-org")
+    result = await refetch_orphan_authors(db, org_id)
+    await db.commit()
+    return {"ok": True, "orgId": org_id, **result}
+
+
 @router.post("/update-linked-repos")
 async def update_linked_repos(
     body: dict,
@@ -2072,7 +2091,17 @@ async def _resolve_org_from_repo(
     connections = result.scalars().all()
 
     for conn in connections:
-        config = conn.config_ or {}
+        # The model attribute is ``config`` (no trailing underscore). The
+        # earlier typo ``conn.config_`` raised AttributeError on the very
+        # first iteration of this loop, crashing the entire webhook
+        # handler with a 500 — which is why every push event since the
+        # last revision shipped silently dropped on the floor (verified
+        # via GitHub's deliveries API: 9 consecutive 500s/504s with body
+        # "'ToolConnection' object has no attribute 'config_'"). No new
+        # commits reached the DB; the standup engine then had nothing
+        # within its 7-day window to surface, which masked this typo as
+        # an alleged "no recent commits" issue in the PO/dev dashboards.
+        config = conn.config or {}
         linked_repos = config.get("linked_repos", [])
         if repo_full_name in linked_repos:
             return conn.organization_id
