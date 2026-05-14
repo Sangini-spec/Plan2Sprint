@@ -2030,8 +2030,18 @@ async def receive_webhook(
                 from ...services.ws_manager import ws_manager as _ws
                 since = _since_cutoff(None)
                 for mid in affected_member_ids:
+                    # NB: this module imports ``select as sa_select`` at the
+                    # top, NOT bare ``select``. The earlier ``select(_TM)…``
+                    # call raised NameError at runtime (verified in the
+                    # Container App logs: "standup auto-regen pipeline
+                    # failed: name 'select' is not defined"), silently
+                    # skipping the live regen + WS broadcast that should
+                    # fold a fresh commit into the dev's standup without
+                    # them refreshing. Webhook still returned 200 (caught
+                    # by the outer try/except), so push ingestion itself
+                    # was fine — just no real-time standup update.
                     tm = (await db.execute(
-                        select(_TM).where(_TM.id == mid)
+                        sa_select(_TM).where(_TM.id == mid)
                     )).scalar_one_or_none()
                     if not tm:
                         continue
