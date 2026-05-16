@@ -34,11 +34,20 @@ export async function GET(request: Request) {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      // Check if this is a password recovery flow
-      const type = searchParams.get("type");
-      if (type === "recovery") {
-        return NextResponse.redirect(`${origin}/reset-password`);
-      }
+      // Password-recovery flow no longer touches this callback. The
+      // forgot-password form's ``redirectTo`` now points STRAIGHT to
+      // /reset-password, which exchanges its own code on mount and
+      // renders the new-password form. Routing recovery through here
+      // was unreliable because Supabase's /auth/v1/verify endpoint
+      // doesn't preserve query params on ``redirect_to``, so the
+      // ``type=recovery`` hint that drove this branch was getting
+      // lost in transit and users were silently bounced to
+      // /dashboard with a recovery session — never seeing the
+      // password form, never actually changing their password.
+      //
+      // This callback is now only for the OAuth (Google/Microsoft)
+      // sign-in + signup-confirmation flows, both of which want the
+      // user to land on their role's default route.
       return NextResponse.redirect(`${origin}${next}`);
     }
     // Hotfix 15 — surface the actual failure reason in the URL so we

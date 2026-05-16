@@ -127,15 +127,41 @@ credentials (test-send in the SMTP screen will surface the error).
 
 ## Files in this folder
 
-- `confirm-signup.html` — branded template. Paste into Supabase Auth
-  → Email Templates → Confirm signup → Message (HTML).
+- `confirm-signup.html` — branded confirm-signup template.
+- `reset-password.html` — branded password-recovery template (matches
+  the confirm-signup design so the experience feels consistent).
 - `README.md` — this file.
 
-No other transactional emails are templated yet. Order to do them in,
-when ready:
+The push script in `scripts/push_supabase_email_template.py` writes
+both files up to Supabase in one atomic PATCH. To push just one when
+iterating on design, pass `--only confirmation` or `--only recovery`.
 
-1. Confirm signup ← **done** with this commit
-2. Reset password (next-most-touched)
+Order to brand the remaining transactional emails in, when ready:
+
+1. Confirm signup ← **done**
+2. Reset password ← **done**
 3. Magic Link (only if passwordless flow is exposed in the app)
 4. Invite User (PO-invites-team-member flow, if used)
 5. Change Email Address (low-volume, low priority)
+
+## Notes on the recovery (reset password) flow
+
+Supabase's recovery flow needs three things working together:
+
+1. **This HTML template** — what the user sees in their inbox.
+2. **Forgot-password form** (`components/auth/forgot-password-form.tsx`)
+   — calls `resetPasswordForEmail(email, { redirectTo: "<origin>/reset-password" })`.
+   Note: `redirectTo` must point STRAIGHT to `/reset-password`, NOT
+   to `/auth/callback`. Supabase's `/auth/v1/verify` endpoint doesn't
+   reliably preserve query params on `redirect_to`, so routing
+   recovery through the OAuth callback drops the `type=recovery`
+   hint and the user ends up on the dashboard signed in with their
+   old password — never seeing the new-password form.
+3. **Reset-password page** (`components/auth/reset-password-form.tsx`)
+   — exchanges the recovery code on mount via
+   `exchangeCodeForSession`, renders the new-password form, calls
+   `updateUser({password})` on submit, then signs the user out and
+   redirects to `/login?password_reset=success` so they sign in
+   fresh with the new password.
+
+If you change either #2 or #3, mirror the change in the other.

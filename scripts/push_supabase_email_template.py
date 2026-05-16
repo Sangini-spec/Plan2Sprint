@@ -22,18 +22,24 @@ USAGE
        # PowerShell
        $env:SUPABASE_PAT="sbp_xxxxxxxxxxxx"; python scripts/push_supabase_email_template.py
 
+   By default this pushes BOTH ``confirmation`` (signup) and
+   ``recovery`` (password reset) templates in a single atomic PATCH.
+   To push just one, add ``--only confirmation`` or ``--only recovery``.
+
 3. The script PATCHes the auth config for the Plan2Sprint project
-   (ref ``obmbpfoormxbbizudrrp``) with the new subject + HTML and
+   (ref ``obmbpfoormxbbizudrrp``) with the new subjects + HTML and
    exits 0 on success.
 
 WHAT IT TOUCHES
 ---------------
-- ``mailer_subjects_confirmation``     ← "Confirm your Plan2Sprint email"
+- ``mailer_subjects_confirmation``       ← "Confirm your Plan2Sprint email"
 - ``mailer_templates_confirmation_content`` ← contents of confirm-signup.html
+- ``mailer_subjects_recovery``           ← "Reset your Plan2Sprint password"
+- ``mailer_templates_recovery_content``  ← contents of reset-password.html
 
-Nothing else. Existing templates (reset password, magic link, invite,
-email change) are left as-is. SMTP settings are NOT touched — those
-stay on the Gmail config you saved in the dashboard.
+Nothing else. Other templates (magic link, invite, email change) are
+left as-is. SMTP settings are NOT touched — those stay on the Gmail
+config you saved in the dashboard.
 
 RE-RUNNING
 ----------
@@ -56,10 +62,27 @@ import httpx  # standard in the API venv; falls back to a clear error below
 
 
 PROJECT_REF = "obmbpfoormxbbizudrrp"
-SUBJECT = "Confirm your Plan2Sprint email"
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE_PATH = REPO_ROOT / "docs" / "email-templates" / "confirm-signup.html"
+
+# Each entry maps a logical "template kind" to:
+#   - The local HTML file in docs/email-templates/ that is the source of truth.
+#   - The Supabase Auth config field for the SUBJECT.
+#   - The Supabase Auth config field for the HTML body.
+#   - The default subject we set on Supabase.
+TEMPLATES = {
+    "confirmation": {
+        "file": "confirm-signup.html",
+        "subject_field": "mailer_subjects_confirmation",
+        "body_field": "mailer_templates_confirmation_content",
+        "subject": "Confirm your Plan2Sprint email",
+    },
+    "recovery": {
+        "file": "reset-password.html",
+        "subject_field": "mailer_subjects_recovery",
+        "body_field": "mailer_templates_recovery_content",
+        "subject": "Reset your Plan2Sprint password",
+    },
+}
 
 
 def fail(msg: str, code: int = 1) -> None:
@@ -74,7 +97,7 @@ def main() -> None:
             "SUPABASE_PAT env var not set. Generate a token at "
             "https://supabase.com/dashboard/account/tokens then "
             "run:\n  SUPABASE_PAT=sbp_xxxx python "
-            "scripts/push_supabase_email_template.py"
+            "scripts/push_supabase_email_template.py [--only confirmation|recovery]"
         )
     if not pat.startswith("sbp_"):
         fail(
@@ -84,35 +107,57 @@ def main() -> None:
             "work for the Management API."
         )
 
-    if not TEMPLATE_PATH.exists():
-        fail(
-            f"Template not found at {TEMPLATE_PATH}\n"
-            "Check that you're running from the repo root and that "
-            "docs/email-templates/confirm-signup.html hasn't been "
-            "deleted."
-        )
+    # CLI: ``--only <kind>`` pushes just one template (handy when
+    # iterating on a single template's design). Default = push all.
+    only = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--only" and i + 1 < len(sys.argv):
+            only = sys.argv[i + 1]
+            if only not in TEMPLATES:
+                fail(
+                    f"--only {only} not recognised. Valid values: "
+                    f"{', '.join(TEMPLATES.keys())}."
+                )
 
-    html = TEMPLATE_PATH.read_text(encoding="utf-8")
-    if "{{ .ConfirmationURL }}" not in html:
-        fail(
-            "Template HTML is missing the Supabase variable "
-            "``{{ .ConfirmationURL }}`` — that's the verification "
-            "link. Refusing to push a template that won't work."
-        )
-    print(f"Loaded template: {len(html):,} chars from "
-          f"{TEMPLATE_PATH.relative_to(REPO_ROOT).as_posix()}")
-    print(f"Subject:        {SUBJECT!r}")
+    # Collect template contents up front so we either push EVERY
+    # configured template atomically or bail with a clear error before
+    # we touch Supabase. PATCH-ing two fields in one call is
+    # transactionally cleaner than two separate PATCHes.
+    body: dict[str, str] = {}
+    pushed: list[str] = []
+    for kind, spec in TEMPLATES.items():
+        if only and kind != only:
+            continue
+        path = REPO_ROOT / "docs" / "email-templates" / spec["file"]
+        if not path.exists():
+            fail(
+                f"Template not found at {path}\n"
+                f"docs/email-templates/{spec['file']} is missing — has "
+                "it been deleted or moved?"
+            )
+        html = path.read_text(encoding="utf-8")
+        if "{{ .ConfirmationURL }}" not in html:
+            fail(
+                f"{spec['file']} is missing the Supabase variable "
+                "``{{ .ConfirmationURL }}`` — that's the verification "
+                "link. Refusing to push a template that won't work."
+            )
+        body[spec["subject_field"]] = spec["subject"]
+        body[spec["body_field"]] = html
+        pushed.append(kind)
+        print(f"Loaded {kind:13s} ← {path.relative_to(REPO_ROOT).as_posix()} "
+              f"({len(html):,} chars, subject={spec['subject']!r})")
+
+    if not pushed:
+        fail("Nothing to push. Check --only argument.")
+
     print(f"Target project: https://supabase.com/dashboard/project/{PROJECT_REF}")
 
     url = f"https://api.supabase.com/v1/projects/{PROJECT_REF}/config/auth"
-    body = {
-        "mailer_subjects_confirmation": SUBJECT,
-        "mailer_templates_confirmation_content": html,
-    }
     headers = {
         "Authorization": f"Bearer {pat}",
         "Content-Type": "application/json",
-        "User-Agent": "plan2sprint-cli/1.0",
+        "User-Agent": "plan2sprint-cli/1.1",
     }
 
     print()
@@ -124,15 +169,17 @@ def main() -> None:
         return  # for type-checker; fail() exits
 
     if resp.status_code in (200, 204):
-        print(f"  OK ({resp.status_code}). Template + subject updated.")
+        print(f"  OK ({resp.status_code}). Updated: {', '.join(pushed)}.")
         print()
         print("Next:")
-        print("  1. Sign up at the Plan2Sprint app with a fresh email.")
-        print("  2. Check inbox — From should be "
-              "``Plan2Sprint <sanginitripathi8@gmail.com>`` "
-              "with the new branded card.")
-        print("  3. Click ``Confirm my email`` — should land you back "
-              "in the app, signed in.")
+        if "confirmation" in pushed:
+            print("  • Sign up at Plan2Sprint with a fresh email.")
+            print("    Inbox should show the branded confirm-signup card.")
+        if "recovery" in pushed:
+            print("  • Hit /forgot-password, enter your email.")
+            print("    Inbox should show the branded reset-password card.")
+            print("    Click the button → /reset-password should render a "
+                  "new-password form (not auto-log you in).")
     elif resp.status_code == 401:
         fail(
             "401 Unauthorized — your SUPABASE_PAT was rejected. "

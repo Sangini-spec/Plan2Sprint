@@ -10,6 +10,7 @@ import {
   AlertCircle,
   ArrowRight,
   Loader2,
+  CheckCircle2,
 } from "lucide-react";
 import { ROLE_DASHBOARD_ROUTES, type UserRole } from "@/lib/types/auth";
 
@@ -283,6 +284,19 @@ export function LoginForm() {
           <span className="bg-[var(--bg-base)] px-4 text-[var(--text-secondary)]">or</span>
         </div>
       </div>
+
+      {/* Post-password-reset confirmation. After the user finishes the
+          /reset-password flow we redirect here with
+          ``?password_reset=success`` so they get a clear "now sign in
+          with the new password" beat instead of being dropped silently
+          on the login page wondering whether the reset actually
+          worked. The banner shows ONLY when this param is present. */}
+      {searchParams.get("password_reset") === "success" && (
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-rag-green)]/30 bg-[var(--color-rag-green)]/10 px-4 py-3 text-sm text-[var(--color-rag-green)] mb-3">
+          <CheckCircle2 className="h-4 w-4 shrink-0" />
+          Password updated. Sign in with your new password.
+        </div>
+      )}
 
       {/* Hotfix 88 — OAuth callback failure banner. ``autoRetrying``
           shows a calmer "Completing sign-in…" indicator while the
