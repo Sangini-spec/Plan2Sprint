@@ -1,0 +1,135 @@
+<!--
+  Plan2Sprint — "Confirm signup" email template
+  ===============================================
+  Paste this entire file (everything between <!DOCTYPE> and </html>)
+  into Supabase Dashboard → Auth → Email Templates → "Confirm signup"
+  → Message (HTML) editor.
+
+  Supabase variables used:
+    {{ .ConfirmationURL }}  -- the verification link (REQUIRED)
+    {{ .Email }}            -- the recipient's email (optional, shown
+                               in body for context)
+
+  Design notes:
+    • Table-based layout with inline styles for maximum email-client
+      compatibility (Outlook desktop is the bottleneck; this passes).
+    • Max content width 560px (industry standard for mobile-readable
+      buttons + body copy without forced zooming).
+    • Light-mode only — dark-mode email theming is unreliable across
+      clients. Plan2Sprint marketing brand is the navy+blue palette,
+      not the in-app dark surface.
+    • Logo is loaded from the Azure Container Apps public URL. If you
+      put Plan2Sprint behind a custom domain later, update both <img>
+      src lines below.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>Confirm your Plan2Sprint email</title>
+</head>
+<body style="margin:0;padding:0;background:#F0F0F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#0F2A48;">
+  <!-- preview text (hidden in body, shown in inbox preview) -->
+  <div style="display:none;font-size:1px;color:#F0F0F8;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">
+    One click and you're in. Confirm your email to finish setting up Plan2Sprint.
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F0F0F8;padding:32px 16px;">
+    <tr>
+      <td align="center">
+
+        <!-- ── Branded wordmark / logo ── -->
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;margin-bottom:18px;">
+          <tr>
+            <td align="center" style="padding:0 0 4px 0;">
+              <img src="https://plan2sprint-web.purplebeach-150945ee.westus3.azurecontainerapps.io/logo-transparent.png"
+                   alt="Plan2Sprint"
+                   width="140"
+                   style="display:block;border:0;outline:none;text-decoration:none;height:auto;max-width:140px;">
+            </td>
+          </tr>
+        </table>
+
+        <!-- ── Card ── -->
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background:#FFFFFF;border-radius:16px;box-shadow:0 1px 3px rgba(15,42,72,0.06),0 8px 24px rgba(15,42,72,0.08);overflow:hidden;">
+
+          <!-- thin brand-color top stripe -->
+          <tr>
+            <td style="height:4px;background:linear-gradient(90deg,#0F2A48 0%,#0D96E6 60%,#D07D4E 100%);font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+
+          <tr>
+            <td style="padding:40px 40px 32px 40px;">
+
+              <!-- Headline -->
+              <h1 style="margin:0 0 12px 0;font-size:24px;line-height:1.25;font-weight:700;color:#0F2A48;letter-spacing:-0.01em;">
+                Confirm your email
+              </h1>
+
+              <!-- Body -->
+              <p style="margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#3A4A5E;">
+                Welcome to <strong style="color:#0F2A48;">Plan2Sprint</strong>. We just need to verify
+                <strong style="color:#0F2A48;">{{ .Email }}</strong> belongs to you. Click the button
+                below and you'll land back in your workspace, ready to plan your first sprint.
+              </p>
+
+              <!-- CTA button (bullet-proof table button) -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 28px 0;">
+                <tr>
+                  <td align="center" bgcolor="#0D96E6" style="border-radius:10px;">
+                    <a href="{{ .ConfirmationURL }}"
+                       target="_blank"
+                       style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:10px;background:#0D96E6;letter-spacing:0.01em;mso-padding-alt:0;">
+                      Confirm my email
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Manual-link fallback -->
+              <p style="margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#6B7280;">
+                Button not working? Paste this link into your browser:
+              </p>
+              <p style="margin:0 0 24px 0;font-size:13px;line-height:1.5;color:#0D96E6;word-break:break-all;">
+                <a href="{{ .ConfirmationURL }}" style="color:#0D96E6;text-decoration:underline;">{{ .ConfirmationURL }}</a>
+              </p>
+
+              <!-- Divider -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;">
+                <tr>
+                  <td style="border-top:1px solid #E5E7EB;height:1px;font-size:0;line-height:0;">&nbsp;</td>
+                </tr>
+              </table>
+
+              <!-- Footer note -->
+              <p style="margin:0;font-size:12px;line-height:1.55;color:#6B7280;">
+                If you didn't sign up for Plan2Sprint, you can safely ignore this email — your address
+                won't be added to any account.
+              </p>
+            </td>
+          </tr>
+        </table>
+
+        <!-- ── Footer (outside card) ── -->
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;margin-top:20px;">
+          <tr>
+            <td align="center" style="padding:0 24px;">
+              <p style="margin:0 0 6px 0;font-size:12px;line-height:1.5;color:#6B7280;">
+                Plan2Sprint — AI-native sprint planning for engineering teams
+              </p>
+              <p style="margin:0;font-size:11px;line-height:1.5;color:#9CA3AF;">
+                This is a transactional email about your sign-up. You'll only receive this once per
+                verification request.
+              </p>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

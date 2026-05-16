@@ -529,6 +529,14 @@ export function DevSprintView() {
   });
 
   return (
+    // The ``data-onboarding="dev-sprint-board"`` hook moved here from
+    // the /dev dashboard. The developer-tour ``sprint-board`` step
+    // now navigates to /dev/sprint and anchors on this panel — which
+    // is the actual Sprint section the user sees in the sidebar (with
+    // the SOURCE vs AI-OPTIMIZED toggle), not a slimmer dashboard
+    // widget. Keep the attribute on the OUTER wrapper so it's
+    // measurable even before the panel's inner content has data.
+    <div data-onboarding="dev-sprint-board">
     <DashboardPanel
       title="Sprint View"
       icon={CalendarClock}
@@ -690,5 +698,6 @@ export function DevSprintView() {
         )
       )}
     </DashboardPanel>
+    </div>
   );
 }

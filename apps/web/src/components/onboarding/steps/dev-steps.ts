@@ -51,8 +51,12 @@ export const DEV_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "Your sprint board",
     body:
-      "Work items assigned to you for the active sprint — synced live from ADO or Jira, with source info per ticket and AI-optimized assignments from the PO's sprint plan.",
-    route: "/dev",
+      "Work items assigned to you for the active sprint — synced live from ADO or Jira. Toggle between the SOURCE view (raw ADO/Jira state) and the AI-OPTIMIZED view (the PO's rebalanced plan) at the top.",
+    // Route the user to the dedicated Sprint section in the sidebar
+    // (the page that hosts ``DevSprintView`` with the source vs.
+    // AI-optimized toggle) — not the /dev dashboard, which previously
+    // anchored an older sprint widget at this step.
+    route: "/dev/sprint",
     anchor: "[data-onboarding=dev-sprint-board]",
     anchorPosition: "auto",
   },

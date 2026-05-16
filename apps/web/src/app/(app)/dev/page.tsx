@@ -23,7 +23,14 @@ export default function DevDashboardPage() {
     // got removed from. Renders children unchanged when access is
     // granted.
     <ProjectAccessDeniedBanner>
-      <div className="space-y-4" data-onboarding="dev-sprint-board">
+      {/* The ``data-onboarding="dev-sprint-board"`` anchor moved to
+          components/dev/dev-sprint-view.tsx (rendered by /dev/sprint).
+          The developer tour's sprint-board step now routes there so
+          the user is shown the actual Sprint section, not the
+          dashboard. Leaving an unused attribute here would have let
+          the spotlight occasionally anchor on the dashboard if the
+          /dev/sprint route was slow to resolve. */}
+      <div className="space-y-4">
         {/* Project Hero Banner — dark banner with KPIs + timeline */}
         <ProjectHeroBanner />
 
