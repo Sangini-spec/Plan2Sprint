@@ -50,6 +50,35 @@ through your relay and ship with your from-name.
 
 ## Upload the "Confirm signup" template
 
+Two ways — pick one.
+
+### Option A — scripted (recommended; idempotent, version-controlled)
+
+Pushes the HTML + subject to Supabase via the Management API. Re-run
+any time you change `confirm-signup.html`.
+
+1. Generate a Personal Access Token at:
+   <https://supabase.com/dashboard/account/tokens>
+   Name it `plan2sprint-cli`, copy the `sbp_…` value. Treat it like
+   a password.
+2. From the repo root, run:
+
+   ```bash
+   # bash / git-bash
+   SUPABASE_PAT=sbp_xxxxxxxxxxxx python scripts/push_supabase_email_template.py
+   ```
+
+   ```powershell
+   # PowerShell
+   $env:SUPABASE_PAT="sbp_xxxxxxxxxxxx"; python scripts/push_supabase_email_template.py
+   ```
+
+3. The script reports `OK (200)` on success and prints what to test
+   next. If your token is wrong or the project ref is off, it fails
+   loudly with a clear message — no silent half-updates.
+
+### Option B — manual paste (use only if you can't run the script)
+
 1. Go to **Supabase Dashboard → Project → Authentication → Emails →
    Email Templates → Confirm signup**.
 2. **Subject:** replace the default with:
