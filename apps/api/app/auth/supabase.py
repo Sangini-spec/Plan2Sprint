@@ -70,6 +70,7 @@ async def _resolve_user_org(request: Request, payload: dict) -> dict:
 
             if user:
                 # User exists — use their stored org
+                payload["id"] = user.id
                 payload["organization_id"] = user.organization_id
                 payload["role"] = user.role
                 payload["full_name"] = user.full_name
@@ -85,6 +86,7 @@ async def _resolve_user_org(request: Request, payload: dict) -> dict:
                     # Link supabase_user_id and return
                     user.supabase_user_id = supabase_uid
                     await db.commit()
+                    payload["id"] = user.id
                     payload["organization_id"] = user.organization_id
                     payload["role"] = user.role
                     payload["full_name"] = user.full_name
@@ -191,6 +193,7 @@ async def _resolve_user_org(request: Request, payload: dict) -> dict:
                             f"[invite-autoaccept] Supabase metadata sync error: {_e!r}"
                         )
 
+                    payload["id"] = new_user_id
                     payload["organization_id"] = live_inv.organization_id
                     payload["role"] = (live_inv.role or "developer").lower()
                     payload["full_name"] = full_name
@@ -269,6 +272,7 @@ async def _resolve_user_org(request: Request, payload: dict) -> dict:
 
             new_org_id = org_obj.id  # keep the symbol used downstream
 
+            payload["id"] = new_user_id
             payload["organization_id"] = new_org_id
             payload["role"] = role_from_signup
             payload["full_name"] = full_name
@@ -288,6 +292,7 @@ async def _resolve_user_org(request: Request, payload: dict) -> dict:
 
 DEMO_USER = {
     "sub": "demo-user-1",
+    "id": "demo-user-1",
     "email": "demo@plan2sprint.app",
     "full_name": "Demo User",
     "role": "product_owner",
