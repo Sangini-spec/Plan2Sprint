@@ -129,7 +129,7 @@ export default function ProfileSettingsPage() {
           }
         }
       } catch {
-        // API unavailable — auth context data is already set above
+        // API unavailable - auth context data is already set above
       }
       setLoading(false);
     })();
@@ -180,7 +180,7 @@ export default function ProfileSettingsPage() {
         month: "long",
         day: "numeric",
       })
-    : "—";
+    : "-";
 
   const initial = name?.charAt(0)?.toUpperCase() ?? "U";
 
@@ -243,7 +243,7 @@ export default function ProfileSettingsPage() {
             </FormField>
           </div>
 
-          {/* Role — read-only */}
+          {/* Role - read-only */}
           <FormField label="Role">
             <div className="flex items-center gap-3 h-10">
               <Badge variant="brand">{roleLabel}</Badge>
@@ -276,7 +276,7 @@ export default function ProfileSettingsPage() {
             )}
           </FormField>
 
-          {/* Linked tools — PO only */}
+          {/* Linked tools - PO only */}
           {isPO && <LinkedToolsSummary />}
         </div>
       </DashboardPanel>
@@ -288,7 +288,7 @@ export default function ProfileSettingsPage() {
             <Badge variant="rag-amber">Coming Soon</Badge>
           </div>
           <p className="text-sm text-[var(--text-secondary)]">
-            Programmatic access to Plan2Sprint data — pull sprint metrics, push
+            Programmatic access to Plan2Sprint data - pull sprint metrics, push
             standup updates, and integrate with your CI/CD pipeline via REST API.
           </p>
           <Button variant="secondary" size="md" disabled>

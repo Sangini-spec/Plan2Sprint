@@ -82,7 +82,7 @@ export function AdoConnectCard() {
         return;
       }
 
-      // Success — refresh status
+      // Success - refresh status
       refreshAdoStatus?.();
       setOrgUrl("");
       setPat("");
@@ -184,7 +184,7 @@ export function AdoConnectCard() {
           </div>
         </div>
       ) : (
-        /* Disconnected state — Dual mode */
+        /* Disconnected state - Dual mode */
         <div className="space-y-3">
           {/* Mode toggle */}
           <div className="flex rounded-lg border border-[var(--border-subtle)] overflow-hidden">
@@ -246,7 +246,7 @@ export function AdoConnectCard() {
               </button>
             </div>
           ) : (
-            /* PAT mode — for shared/external organizations */
+            /* PAT mode - for shared/external organizations */
             <div className="space-y-3">
               <p className="text-xs text-[var(--text-tertiary)]">
                 Access a shared Azure DevOps organization using the company URL and an access token.

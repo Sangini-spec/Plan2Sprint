@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * TourBanner — INLINE banner inserted between the topbar and the main
+ * TourBanner - INLINE banner inserted between the topbar and the main
  * content area. Takes its own height in the document flow so the
  * dashboard naturally shifts down, and shifts back up when the tour
  * ends. No overlay, no overlap.
@@ -17,7 +17,7 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 // Compass replaces the generic Sparkles glyph for the onboarding
-// tour — signals "guided tour / orientation" instead of the
+// tour - signals "guided tour / orientation" instead of the
 // AI-vibe-coded sparkle look. See welcome-modal.tsx for rationale.
 import { ArrowRight, X, Compass } from "lucide-react";
 import { useOnboarding } from "@/lib/onboarding/context";
@@ -32,7 +32,7 @@ interface Rect {
 }
 
 /** Single-selector outline. Used internally by AnchorOutline to render
- *  one ring per selector — multi-anchor support comes from wrapping
+ *  one ring per selector - multi-anchor support comes from wrapping
  *  this in a list. */
 function SingleAnchorOutline({ selector }: { selector: string }) {
   const [rect, setRect] = useState<Rect | null>(null);
@@ -116,10 +116,10 @@ function SingleAnchorOutline({ selector }: { selector: string }) {
 
 /** Light-weight outline(s) on the anchored element(s). Renders one
  *  ring per selector in [anchor, ...extraAnchors]. No backdrop dim,
- *  no pulse — just 2px purple border + soft halo per ring. */
+ *  no pulse - just 2px purple border + soft halo per ring. */
 export function AnchorOutline() {
   const { progress, currentStep, isActive } = useOnboarding();
-  // Respect ``noOutline`` — some steps just navigate to a page where
+  // Respect ``noOutline`` - some steps just navigate to a page where
   // the focus is obvious (e.g. GitHub Monitoring, Standup Digest).
   if (
     !progress ||
@@ -143,7 +143,7 @@ export function AnchorOutline() {
   );
 }
 
-/** Inline banner — takes its own height in the layout so the
+/** Inline banner - takes its own height in the layout so the
  *  dashboard shifts down under it instead of being overlapped. */
 export function TourBanner() {
   const {
@@ -159,7 +159,7 @@ export function TourBanner() {
   } = useOnboarding();
 
   // Render nothing when tour isn't active or the current step is a
-  // welcome/completion modal — the banner is only for spotlight steps.
+  // welcome/completion modal - the banner is only for spotlight steps.
   if (!progress || !isActive || !currentStep) return null;
   if (currentStep.variant !== "spotlight") return null;
 

@@ -1,7 +1,7 @@
 "use client";
 
 /* ==========================================================================
-   RoleGuard — gates role-specific routes (/po, /dev, /stakeholder).
+   RoleGuard - gates role-specific routes (/po, /dev, /stakeholder).
 
    Without this, a user logged in as PO can navigate to /stakeholder and see
    the stakeholder dashboard (and vice versa). That's a UI/data isolation

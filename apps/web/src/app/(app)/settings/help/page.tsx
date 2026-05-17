@@ -4,9 +4,9 @@
  * Settings → Help & Onboarding.
  *
  * Three sections:
- *   1. Product tour    — Replay full tour + Jump to specific step + last-completed line
- *   2. Page hints      — Reset all page hints with seen-count
- *   3. Documentation   — placeholder external links
+ *   1. Product tour    - Replay full tour + Jump to specific step + last-completed line
+ *   2. Page hints      - Reset all page hints with seen-count
+ *   3. Documentation   - placeholder external links
  *
  * Crucially this is where the user goes for their own testing workflow
  * (since they already have multiple accounts logged in without the tour).
@@ -49,7 +49,7 @@ export default function HelpPage() {
   const [resettingHints, setResettingHints] = useState(false);
   const [resetConfirmed, setResetConfirmed] = useState(false);
 
-  // Total page hints registered (mirrors PAGE_HINTS count — kept in
+  // Total page hints registered (mirrors PAGE_HINTS count - kept in
   // sync manually since this is just a display number).
   const TOTAL_PAGE_HINTS = 9;
   const hintsSeen = progress?.page_hints_seen.length ?? 0;
@@ -104,7 +104,7 @@ export default function HelpPage() {
 
   const stepCount = allSteps.length;
   const completedCount = progress?.completed_steps.length ?? 0;
-  // Steps available in the dropdown — skip welcome (always step 1) since
+  // Steps available in the dropdown - skip welcome (always step 1) since
   // "Replay full tour" already covers that case.
   const jumpableSteps = allSteps.filter((s) => s.variant === "spotlight");
 
@@ -141,7 +141,7 @@ export default function HelpPage() {
                 </>
               ) : progress?.status === "in_progress" ? (
                 <>
-                  In progress —{" "}
+                  In progress -{" "}
                   <span className="text-[var(--text-primary)] font-medium">
                     {completedCount} of {stepCount} steps
                   </span>{" "}
@@ -238,7 +238,7 @@ export default function HelpPage() {
           {resetConfirmed ? (
             <>
               <CheckCircle2 size={14} style={{ color: "var(--onboarding-accent)" }} />
-              Reset — all hints will fire again
+              Reset - all hints will fire again
             </>
           ) : resettingHints ? (
             <>

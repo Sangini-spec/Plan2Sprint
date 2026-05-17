@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * SelectedProjectContext — Project Selection & Auto-Import
+ * SelectedProjectContext - Project Selection & Auto-Import
  *
  * Provides the currently selected project across the entire app shell.
  * Every data-fetching page reads `selectedProject` from this context to
@@ -35,7 +35,7 @@ import { invalidateCache } from "@/lib/fetch-cache";
 // ---------------------------------------------------------------------------
 
 export interface ProjectItem {
-  /** Internal DB id (25-char CUID) — used for preference storage */
+  /** Internal DB id (25-char CUID) - used for preference storage */
   internalId: string;
   /** External id from Jira/ADO */
   id: string;
@@ -87,19 +87,19 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
   const [initialized, setInitialized] = useState(false);
   const switchingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { connections } = useIntegrations();
-  // Hotfix 90b — only privileged roles (PO/admin/owner) are allowed to
+  // Hotfix 90b - only privileged roles (PO/admin/owner) are allowed to
   // fall back to the connection's selectedProjects list when their
   // ``/api/projects`` came back empty. For devs / stakeholders an empty
-  // server response is the truth — they have no project access — and
+  // server response is the truth - they have no project access - and
   // the liveProjects fallback would leak the org's project picker into
   // a "Plan2Sprint shown to a developer who isn't on its team" UX bug.
   //
-  // Hotfix (refresh-twice) — gate the init fetch on auth readiness.
+  // Hotfix (refresh-twice) - gate the init fetch on auth readiness.
   // Without this, the provider mounts in parallel with the auth state,
   // fires ``GET /api/projects`` before the Supabase JWT cookie is
   // attached, gets a 401 back (which fetch-cache deliberately doesn't
   // cache), and falls into the "no projects" branch. The user sees a
-  // broken dashboard and has to refresh — by which time auth has
+  // broken dashboard and has to refresh - by which time auth has
   // finished setting up. Waiting for ``!authLoading && appUser`` makes
   // the first refresh enough.
   const { role, appUser, loading: authLoading } = useAuth();
@@ -187,7 +187,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
           });
         }
       }
-    } catch { /* ADO not connected — skip */ }
+    } catch { /* ADO not connected - skip */ }
     // Try Jira
     try {
       const res = await fetch("/api/integrations/jira/projects");
@@ -204,26 +204,26 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
           });
         }
       }
-    } catch { /* Jira not connected — skip */ }
+    } catch { /* Jira not connected - skip */ }
     return discovered;
   }
 
   // ── STEP 1: Initial load from DB ──
   // Runs once on mount. Loads DB projects + saved preference.
   //
-  // Hotfix 31 — cold-start retry. The API runs on Azure Container Apps
+  // Hotfix 31 - cold-start retry. The API runs on Azure Container Apps
   // with minReplicas=0 (cost-saving), so when a user opens the app after
   // ~5 min of idle the container has scaled to zero and the first
   // request hits a cold start (10-30s before a replica is ready). The
   // previous one-shot ``fetch`` would time out at the browser level and
   // render "No Projects" with the user's data fully intact in the DB.
   // ``fetchProjectsWithRetry`` retries on network errors, 5xx, and
-  // 408/504 with exponential backoff (1s, 2s, 4s, 8s, 16s, 30s — total
+  // 408/504 with exponential backoff (1s, 2s, 4s, 8s, 16s, 30s - total
   // ~60s max wait), giving the cold start time to complete. A 200 with
   // an empty projects array is NOT retried (that's a legitimate "no
   // projects yet" state for a new org).
   useEffect(() => {
-    // Hold off until auth is fully ready — without this we fire
+    // Hold off until auth is fully ready - without this we fire
     // ``GET /api/projects`` before the Supabase cookie is set and
     // get a 401, which leaves the user with an empty dashboard
     // until they refresh.
@@ -236,7 +236,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     // mount in, and a fetch that resolves before the cookie is
     // attached to the next request comes back 401. We previously
     // shipped a fix that gates this effect on ``authReady``, but in
-    // practice users still report needing two refreshes — likely a
+    // practice users still report needing two refreshes - likely a
     // separate timing window between ``appUser`` being non-null and
     // the cookie actually reaching the same-origin /api request.
     // Adding 401 to the retry set burns at most one extra retry to
@@ -250,11 +250,11 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
         try {
           const r = await fetch(url);
           if (r.ok) return (await r.json()) as T;
-          // 4xx (except retryable 408) — don't retry, no amount of waiting fixes a 401/403/404
+          // 4xx (except retryable 408) - don't retry, no amount of waiting fixes a 401/403/404
           if (!COLD_START_RETRYABLE_STATUS.has(r.status)) return null;
           lastErr = new Error(`HTTP ${r.status}`);
         } catch (e) {
-          // Network error / timeout / DNS — exactly the cold-start case
+          // Network error / timeout / DNS - exactly the cold-start case
           lastErr = e;
         }
         if (attempt < RETRY_DELAYS_MS.length) {
@@ -310,7 +310,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
           setLoading(false);
           setInitialized(true);
         } else {
-          // No DB projects — mark initialized but keep loading=true
+          // No DB projects - mark initialized but keep loading=true
           // so STEP 2 can pick up liveProjects when connections load.
           setInitialized(true);
         }
@@ -333,7 +333,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
     if (selectedProject?.internalId) return;
     // If auto-import already done, skip
     if (autoImportDone.current) return;
-    // Hotfix 90b — only POs / admins / owners get the liveProjects
+    // Hotfix 90b - only POs / admins / owners get the liveProjects
     // fallback. For dev / stakeholder accounts an empty dbProjects
     // is the correct answer: they have no project memberships, show
     // the empty welcome state instead of leaking the org's full
@@ -358,7 +358,7 @@ export function SelectedProjectProvider({ children }: { children: ReactNode }) {
       }
 
       if (projectsToUse.length === 0) {
-        // No projects anywhere — show welcome screen
+        // No projects anywhere - show welcome screen
         setProjects([]);
         setSelectedProject(null);
         setLoading(false);

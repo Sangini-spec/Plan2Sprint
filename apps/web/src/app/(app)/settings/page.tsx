@@ -50,7 +50,7 @@ export default function GeneralSettingsPage() {
   const [workEnd, setWorkEnd] = useState("17:00");
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Hotfix 86 — pending join request state. When the PO renames their org
+  // Hotfix 86 - pending join request state. When the PO renames their org
   // to a name that matches an existing organisation, the API returns
   // 200 + {joinRequest: {status: "pending_approval", ...}} instead of
   // performing the migration immediately. We surface that here as a
@@ -91,7 +91,7 @@ export default function GeneralSettingsPage() {
           setWorkEnd(data.workingHoursEnd || "17:00");
         }
       } catch {
-        // API unavailable — keep defaults
+        // API unavailable - keep defaults
       }
       await fetchPending();
       setLoading(false);
@@ -160,7 +160,7 @@ export default function GeneralSettingsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Hotfix 86 — pending join request banner. Visible whenever the
+      {/* Hotfix 86 - pending join request banner. Visible whenever the
           PO has an open request waiting for the target org's founder. */}
       {pending && (
         <div

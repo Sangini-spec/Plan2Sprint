@@ -83,7 +83,7 @@ function toDateKey(d: Date): string {
   // function used local getters (getFullYear/getMonth/getDate), so a
   // user opening /dev/standup at IST 00:35 sent date=2026-05-15
   // (their tomorrow UTC) while the reports were stored under UTC
-  // 2026-05-14 — empty result, no auto-regen.
+  // 2026-05-14 - empty result, no auto-regen.
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
@@ -197,11 +197,11 @@ export function MyStandupReport() {
       const res = await fetch(`/api/standups?date=${dateKey}${pidParam}${forceParam}`);
       const data = await res.json();
 
-      // Hotfix 42: pick the LOGGED-IN USER's report — was previously
+      // Hotfix 42: pick the LOGGED-IN USER's report - was previously
       // grabbing reports[0], which surfaced whichever developer's report
       // happened to be first in the list (e.g. someone else entirely).
       // Hotfix 43: dropped displayName fallback for the same identity-leak
-      // reason as my-standup-compact.tsx — strict email match only.
+      // reason as my-standup-compact.tsx - strict email match only.
       // Hotfix (today): backend now resolves `mine` server-side using
       // email + displayName fallback. Use that first; fall back to
       // local email scan for older API revisions.
@@ -236,7 +236,7 @@ export function MyStandupReport() {
 
   useEffect(() => { fetchStandup(selectedKey); }, [selectedKey, fetchStandup]);
 
-  // Live refresh — when GitHub commits land or the backend regens a
+  // Live refresh - when GitHub commits land or the backend regens a
   // standup, refetch this dev's report so the "completed" section
   // reflects new commits without a manual refresh. The events are
   // broadcast Redis-backed via ws_manager so they reach every
@@ -251,7 +251,7 @@ export function MyStandupReport() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
-  // Hotfix 42: refetch when the user identity becomes available — the very
+  // Hotfix 42: refetch when the user identity becomes available - the very
   // first render runs with empty user, which previously cached a wrong-user
   // result and never refreshed.
   useEffect(() => { if (userEmail) fetchStandup(selectedKey); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [userEmail, userName]);
@@ -320,7 +320,7 @@ export function MyStandupReport() {
           data: {
             completed: completedTitles,
             workingOn: inProgressTitles,
-            blockers: blockerCount > 0 ? `${blockerCount} blocker(s) — see Plan2Sprint for details` : "",
+            blockers: blockerCount > 0 ? `${blockerCount} blocker(s) - see Plan2Sprint for details` : "",
           },
         }),
       });
@@ -436,7 +436,7 @@ export function MyStandupReport() {
         {/* ---- STANDUP CONTENT ---- */}
         <div className="space-y-4">
           <DashboardPanel
-            title={selectedIsToday ? "Today's Standup" : `Standup — ${selectedDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}`}
+            title={selectedIsToday ? "Today's Standup" : `Standup - ${selectedDate.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}`}
             icon={MessageSquareText}
             actions={
               <button
@@ -468,7 +468,7 @@ export function MyStandupReport() {
                     {selectedIsPast && (
                       <div className="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
                         <Lock size={12} />
-                        <span>Read-only — past standups cannot be edited</span>
+                        <span>Read-only - past standups cannot be edited</span>
                       </div>
                     )}
                   </div>
@@ -488,7 +488,7 @@ export function MyStandupReport() {
                       <p className="text-sm text-[var(--text-tertiary)] italic">No completed items</p>
                     ) : (
                       completedItems.map((item, i) => {
-                        // AI-summarised batch of commits — render as a
+                        // AI-summarised batch of commits - render as a
                         // paragraph block with a small "N commits"
                         // badge, not as a single-line title row. The
                         // backend collapses 4+ surfaced commits into
@@ -681,7 +681,7 @@ export function MyStandupReport() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  SPLIT BUTTON — "Send to Slack ▾" with dropdown showing Teams (or vice     */
+/*  SPLIT BUTTON - "Send to Slack ▾" with dropdown showing Teams (or vice     */
 /*  versa). Default = Slack if connected, else Teams. Remembers last choice.  */
 /* -------------------------------------------------------------------------- */
 
@@ -767,7 +767,7 @@ function ChannelSendSplitButton({
         </button>
       </div>
 
-      {/* Dropdown — always shows the other platform */}
+      {/* Dropdown - always shows the other platform */}
       {open && (
         <div className="absolute z-50 top-full mt-1 right-0 min-w-[200px] rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-xl overflow-hidden">
           {others.map((p) => (

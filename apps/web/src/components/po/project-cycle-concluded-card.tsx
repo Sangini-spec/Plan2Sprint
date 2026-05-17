@@ -79,7 +79,7 @@ export function ProjectCycleConcludedCard() {
         if (res.ok && !cancelled) {
           setData(await res.json());
         }
-      } catch { /* fail closed — no card */ }
+      } catch { /* fail closed - no card */ }
       if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -92,8 +92,8 @@ export function ProjectCycleConcludedCard() {
   const accent = isOverdue ? "rag-red" : "rag-amber";
   const accentVar = `var(--color-${accent})`;
   const headline = isOverdue
-    ? `Project Cycle Concluded — Overdue`
-    : `Project Cycle Concluded — Delivered Late`;
+    ? `Project Cycle Concluded - Overdue`
+    : `Project Cycle Concluded - Delivered Late`;
   const explainer = isOverdue
     ? `${data.projectName} was scheduled to launch on ${fmtDateShort(data.targetLaunchDate)}. That date has now passed ${data.daysPastTarget} day${data.daysPastTarget === 1 ? "" : "s"} ago with the project at ${data.completionPct}% complete. All sprints scheduled before this date have run their course; outstanding work is summarised below. Generate a new plan with a fresh launch date to clear this alert.`
     : `${data.projectName} reached 100% completion, but landed ${data.daysPastTarget} day${data.daysPastTarget === 1 ? "" : "s"} past its committed launch (${fmtDateShort(data.targetLaunchDate)}). Useful context for the post-mortem; update the target date when the next plan is set.`;

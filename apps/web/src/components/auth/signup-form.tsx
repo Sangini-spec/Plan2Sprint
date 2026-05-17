@@ -16,7 +16,7 @@ const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
-// Hotfix 65C — accept ``?next=/invite/<token>`` from the chain
+// Hotfix 65C - accept ``?next=/invite/<token>`` from the chain
 // (invite → login → signup) and propagate it through Supabase email
 // confirmation back to /auth/callback. Same-origin path guard prevents
 // open-redirects.
@@ -97,7 +97,7 @@ export function SignupForm() {
               organization_name: organizationName,
               role: "product_owner",
             },
-            // Hotfix 65C — carry ?next=/invite/<token> through the
+            // Hotfix 65C - carry ?next=/invite/<token> through the
             // confirmation email so the post-confirm callback puts the
             // user back on the invite page (where Hotfix 65A's
             // server-side auto-accept already moved them into the

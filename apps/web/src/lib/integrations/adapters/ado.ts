@@ -21,7 +21,7 @@ const isDemoMode =
 export class AdoAdapter {
   private pat: string;
   private orgUrl: string;
-  /** True when real credentials are provided — always use real API */
+  /** True when real credentials are provided - always use real API */
   private hasRealCredentials: boolean;
 
   constructor(pat: string, orgUrl: string) {
@@ -99,7 +99,7 @@ export class AdoAdapter {
       }));
     }
 
-    // WIQL query — fetch ALL work item types from the project
+    // WIQL query - fetch ALL work item types from the project
     const res = await fetch(
       `${this.orgUrl}/${encodeURIComponent(projectName)}/_apis/wit/wiql?api-version=7.0`,
       {

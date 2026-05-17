@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * ChecklistWidget — floating bottom-right widget showing tour progress.
+ * ChecklistWidget - floating bottom-right widget showing tour progress.
  *
  * Visible whenever the tour is active. Click a row to jump to that step.
- * Collapsible — collapsed state shows just a chip with progress.
+ * Collapsible - collapsed state shows just a chip with progress.
  */
 
 import { useState } from "react";
@@ -85,8 +85,8 @@ export function ChecklistWidget() {
           >
             {completed + skipped}/{total}
           </span>
-          {/* When expanded, chevron points UP — click to collapse.
-              When collapsed, chevron points DOWN — click to expand.
+          {/* When expanded, chevron points UP - click to collapse.
+              When collapsed, chevron points DOWN - click to expand.
               Was reversed previously. */}
           {open ? (
             <ChevronUp size={14} style={{ color: "var(--onboarding-card-text-muted)" }} />
@@ -123,7 +123,7 @@ export function ChecklistWidget() {
           >
             <ul className="max-h-72 overflow-y-auto py-1">
               {allSteps.map((step, idx) => {
-                // Skip the welcome and completion bookends — they're
+                // Skip the welcome and completion bookends - they're
                 // not actionable rows the user can navigate to.
                 if (step.variant !== "spotlight") return null;
                 const isCompleted = progress.completed_steps.includes(step.id);

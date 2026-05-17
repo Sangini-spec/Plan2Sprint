@@ -620,7 +620,7 @@ export function TeamHealthOverview() {
               className="text-[var(--color-rag-green)]"
             />
             <p className="text-sm font-medium text-[var(--color-rag-green)]">
-              No recommendations — team is healthy!
+              No recommendations - team is healthy!
             </p>
           </div>
         )}

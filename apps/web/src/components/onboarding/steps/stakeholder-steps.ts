@@ -1,5 +1,5 @@
 /**
- * Stakeholder main tour — 5 steps.
+ * Stakeholder main tour - 5 steps.
  */
 
 import type { OnboardingStep } from "@/lib/onboarding/types";
@@ -18,7 +18,7 @@ export const STAKEHOLDER_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "Portfolio health",
     body:
-      "RAG indicators show severity at a glance: 🟢 healthy, 🟡 needs attention, 🔴 act now. Each signal is backed by data — no manual status reporting.",
+      "RAG indicators show severity at a glance: 🟢 healthy, 🟡 needs attention, 🔴 act now. Each signal is backed by data - no manual status reporting.",
     route: "/stakeholder",
     anchor: "[data-onboarding=portfolio-health]",
     anchorPosition: "auto",
@@ -40,7 +40,7 @@ export const STAKEHOLDER_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "Switch between projects",
     body:
-      "You can be assigned to multiple projects. Use the picker in the topbar to flip between them — your assigned projects are listed here.",
+      "You can be assigned to multiple projects. Use the picker in the topbar to flip between them - your assigned projects are listed here.",
     route: "/stakeholder",
     anchor: "[data-onboarding=project-picker]",
     anchorPosition: "bottom",
@@ -53,7 +53,7 @@ export const STAKEHOLDER_STEPS: OnboardingStep[] = [
     body:
       "Every Friday at 5 PM IST you'll get a PDF summary delivered to your inbox. You can also generate one on demand from the Export page.",
     route: "/stakeholder/export",
-    // No outline — the whole Export page wraps multiple panels, and
+    // No outline - the whole Export page wraps multiple panels, and
     // outlining the entire wrapper drew a giant purple box across the
     // viewport that crossed over the banner above. Navigating to the
     // Export page is enough context.

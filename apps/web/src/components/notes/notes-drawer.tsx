@@ -41,7 +41,7 @@ export interface Note {
   updatedAt: string | null;
 }
 
-/* Pastel color map — matches the gradient palette (blue ↔ green) */
+/* Pastel color map - matches the gradient palette (blue ↔ green) */
 const NOTE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
   blue: { bg: "#dbeafe", border: "#93c5fd", text: "#1e3a8a" },
   teal: { bg: "#ccfbf1", border: "#5eead4", text: "#115e59" },
@@ -179,7 +179,7 @@ export function NotesDrawer({ open, onClose }: NotesDrawerProps) {
     <AnimatePresence>
       {open && (
         <>
-          {/* Backdrop — darker so the drawer reads as a clear foreground panel */}
+          {/* Backdrop - darker so the drawer reads as a clear foreground panel */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -188,7 +188,7 @@ export function NotesDrawer({ open, onClose }: NotesDrawerProps) {
             className="fixed inset-0 z-40 bg-black/60"
           />
 
-          {/* Drawer — explicit full viewport height + hardcoded opaque bg */}
+          {/* Drawer - explicit full viewport height + hardcoded opaque bg */}
           <motion.aside
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
@@ -276,7 +276,7 @@ export function NotesDrawer({ open, onClose }: NotesDrawerProps) {
               </div>
             </div>
 
-            {/* Notes list — min-h-0 lets it actually shrink inside the flex parent so overflow-y-auto kicks in */}
+            {/* Notes list - min-h-0 lets it actually shrink inside the flex parent so overflow-y-auto kicks in */}
             <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3">
               {loading ? (
                 <div className="flex items-center justify-center py-8">
@@ -342,7 +342,7 @@ export function NotesDrawer({ open, onClose }: NotesDrawerProps) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  NOTE CARD — sticky-note aesthetic                                         */
+/*  NOTE CARD - sticky-note aesthetic                                         */
 /* -------------------------------------------------------------------------- */
 
 function NoteCard({
@@ -440,7 +440,7 @@ function NoteCard({
         </p>
       )}
 
-      {/* Actions — appear on hover */}
+      {/* Actions - appear on hover */}
       <div className="mt-3 pt-2 border-t flex items-center justify-between gap-2 opacity-60 group-hover:opacity-100 transition-opacity" style={{ borderColor: palette.border }}>
         <div className="flex items-center gap-1">
           <IconButton

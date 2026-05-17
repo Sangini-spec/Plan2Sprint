@@ -59,7 +59,7 @@ const DEV_ACTIONS: QuickAction[] = [
   {
     id: "flag_blocker",
     label: "Flag a Blocker",
-    description: "Raise a blocker directly to Slack — your PO will be notified",
+    description: "Raise a blocker directly to Slack - your PO will be notified",
     icon: Flag,
     color: "text-[var(--color-rag-red)]",
     bg: "bg-[var(--color-rag-red)]/10",
@@ -123,8 +123,8 @@ export function SlackQuickActions({ role = "po" }: SlackQuickActionsProps) {
           </h3>
           <p className="text-[11px] text-[var(--text-secondary)]">
             {role === "dev"
-              ? "Flag blockers directly to Slack — your PO will be notified instantly"
-              : "Human-initiated actions — system handles everything else automatically"}
+              ? "Flag blockers directly to Slack - your PO will be notified instantly"
+              : "Human-initiated actions - system handles everything else automatically"}
           </p>
         </div>
       </div>
@@ -175,7 +175,7 @@ export function SlackQuickActions({ role = "po" }: SlackQuickActionsProps) {
                   {actionResult === "success"
                     ? "Sent to Slack!"
                     : actionResult === "error"
-                      ? "Failed — check Slack connection"
+                      ? "Failed - check Slack connection"
                       : action.description}
                 </p>
               </div>

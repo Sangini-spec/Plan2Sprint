@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ProjectSelector — dropdown in the topbar for selecting the active project.
+ * ProjectSelector - dropdown in the topbar for selecting the active project.
  *
  * Visible on PO and Developer dashboard routes. Shows all imported projects
  * from connected Jira/ADO tools. Selecting a project scopes every data query
@@ -117,7 +117,7 @@ export function ProjectSelector() {
             className="absolute left-0 top-full mt-1.5 w-72 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 backdrop-blur-xl shadow-xl z-50 overflow-hidden"
           >
             {projects.length === 0 ? (
-              /* Empty state — no projects imported yet */
+              /* Empty state - no projects imported yet */
               <div className="px-4 py-5 text-center">
                 <FolderKanban size={24} className="mx-auto mb-2 text-[var(--text-tertiary)]" />
                 <p className="text-sm font-medium text-[var(--text-primary)] mb-1">

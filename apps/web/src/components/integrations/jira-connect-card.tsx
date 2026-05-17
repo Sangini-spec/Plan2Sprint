@@ -81,7 +81,7 @@ export function JiraConnectCard() {
         return;
       }
 
-      // Success — refresh status
+      // Success - refresh status
       refreshJiraStatus?.();
       setSiteUrl("");
       setEmail("");
@@ -185,7 +185,7 @@ export function JiraConnectCard() {
           </div>
         </div>
       ) : (
-        /* Disconnected state — Dual mode */
+        /* Disconnected state - Dual mode */
         <div className="space-y-3">
           {/* Mode toggle */}
           <div className="flex rounded-lg border border-[var(--border-subtle)] overflow-hidden">
@@ -247,7 +247,7 @@ export function JiraConnectCard() {
               </button>
             </div>
           ) : (
-            /* Access token mode — for shared/external sites */
+            /* Access token mode - for shared/external sites */
             <div className="space-y-3">
               <p className="text-xs text-[var(--text-tertiary)]">
                 Access a shared Jira site using your work email and an access token.

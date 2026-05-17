@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * OnboardingTour — root renderer for the product tour.
+ * OnboardingTour - root renderer for the product tour.
  *
  * Banner-based UX (replaced earlier spotlight + full-page dim
  * pattern, which made the dashboard feel locked and prevented
@@ -37,10 +37,10 @@ export function OnboardingTour() {
 
   return (
     <>
-      {/* Welcome modal — pristine users only */}
+      {/* Welcome modal - pristine users only */}
       {shouldShowWelcome && <WelcomeModal />}
 
-      {/* Active tour — bottom-right checklist widget + fixed-position
+      {/* Active tour - bottom-right checklist widget + fixed-position
           anchor outline + optional per-element inline tooltips. The
           TOP BANNER is rendered inline in (app)/layout so it pushes
           content down instead of overlapping. */}
@@ -52,10 +52,10 @@ export function OnboardingTour() {
         </>
       )}
 
-      {/* Completion modal — last step */}
+      {/* Completion modal - last step */}
       {isActive && currentStep?.variant === "completion" && <CompletionModal />}
 
-      {/* Page hint — gated by activePageHint inside the component */}
+      {/* Page hint - gated by activePageHint inside the component */}
       <PageHintCard />
     </>
   );

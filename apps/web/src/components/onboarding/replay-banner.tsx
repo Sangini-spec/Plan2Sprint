@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * ReplayBanner — dismissible top banner for existing users (those who
+ * ReplayBanner - dismissible top banner for existing users (those who
  * created their account before onboarding shipped).
  *
  * Hidden when:
  *  - User has already started the tour (status != not_started)
  *  - User has dismissed the banner
  *  - User would see the welcome modal instead (status = not_started AND
- *    !banner_dismissed AND the modal-trigger-route check passes — but
+ *    !banner_dismissed AND the modal-trigger-route check passes - but
  *    the modal is preferred for brand-new users; the banner is for
  *    users who somehow ended up at status=dismissed without taking
  *    the tour)
@@ -19,7 +19,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 // Compass replaces the generic Sparkles glyph for the onboarding
-// replay strip — see welcome-modal.tsx for rationale.
+// replay strip - see welcome-modal.tsx for rationale.
 import { Compass, X } from "lucide-react";
 import { useOnboarding } from "@/lib/onboarding/context";
 

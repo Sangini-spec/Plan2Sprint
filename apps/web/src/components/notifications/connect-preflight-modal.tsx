@@ -44,7 +44,7 @@ const SLACK_ALLOWED: PermissionItem[] = [
   {
     label: "Read user email addresses",
     description:
-      "Used exclusively for account matching — never stored or shared.",
+      "Used exclusively for account matching - never stored or shared.",
   },
 ];
 
@@ -60,7 +60,7 @@ const SLACK_DENIED: PermissionItem[] = [
   {
     label: "Access private channels or DMs",
     description:
-      "No access to any existing conversations — only sends new messages.",
+      "No access to any existing conversations - only sends new messages.",
   },
 ];
 

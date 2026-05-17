@@ -168,7 +168,7 @@ export function GithubMonitoringPanel() {
         </span>
       }
     >
-      {/* Hotfix 8 — wrap the fixed-pixel grid in a horizontal-scroll
+      {/* Hotfix 8 - wrap the fixed-pixel grid in a horizontal-scroll
           container so the 600+px-wide table doesn't blow out the
           viewport on phones. min-w ensures columns don't squeeze
           unreadably tight before the scroll kicks in. */}
@@ -254,7 +254,7 @@ export function GithubMonitoringPanel() {
                   </span>
                 ) : (
                   <span className="text-xs text-[var(--text-secondary)]">
-                    &mdash;
+                    -
                   </span>
                 )}
               </div>

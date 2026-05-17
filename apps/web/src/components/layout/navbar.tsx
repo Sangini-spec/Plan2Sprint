@@ -281,7 +281,7 @@ export function Navbar() {
 
           {/* ---- Right: Actions ---- */}
           <div className="flex items-center gap-2">
-            {/* Theme toggle — always visible */}
+            {/* Theme toggle - always visible */}
             <ThemeToggle />
 
             {/* Desktop-only buttons */}

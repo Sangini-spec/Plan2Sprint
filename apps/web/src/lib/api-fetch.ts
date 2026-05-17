@@ -1,5 +1,5 @@
 /**
- * Authenticated fetch wrapper — automatically attaches the Supabase
+ * Authenticated fetch wrapper - automatically attaches the Supabase
  * access token as an Authorization header so the FastAPI backend can
  * identify the real logged-in user instead of falling back to DEMO_USER.
  *
@@ -7,7 +7,7 @@
  */
 import { createClient } from "@/lib/supabase/client";
 
-// Singleton client — same pattern as auth context
+// Singleton client - same pattern as auth context
 let _supabase: ReturnType<typeof createClient> | null = null;
 function getSupabase() {
   if (!_supabase) _supabase = createClient();
@@ -29,7 +29,7 @@ export async function apiFetch(
         headers.set("Authorization", `Bearer ${accessToken}`);
       }
     } catch {
-      // fallback — no token
+      // fallback - no token
     }
   }
 

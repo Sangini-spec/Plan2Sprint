@@ -170,7 +170,7 @@ function getEventIcon(type: string) {
   }
 }
 
-// (No mock tabs — real data only when connected)
+// (No mock tabs - real data only when connected)
 
 // ---------------------------------------------------------------------------
 // Main Component
@@ -237,7 +237,7 @@ export function MyGithubActivity() {
         }).catch(() => {});
       }
     } else {
-      // No localStorage data — try restoring from backend
+      // No localStorage data - try restoring from backend
       fetch("/api/integrations/github/status")
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
@@ -276,7 +276,7 @@ export function MyGithubActivity() {
 
   // ---------- Handle OAuth code from URL ----------
   // GitHub redirects back with ?code=... to whatever callback URL is configured.
-  // We handle it here — wherever the page loads with a `code` param.
+  // We handle it here - wherever the page loads with a `code` param.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);

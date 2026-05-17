@@ -8,9 +8,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 /*  Fetches real connection status from the backend for Slack / Teams.          */
 /*  Also handles URL search params from OAuth callback redirects.              */
 /*                                                                              */
-/*  Hotfix 73/74 — accepts a ``mode``:                                          */
-/*    "org" — calls /api/integrations/{slack,teams}/status (PO view).          */
-/*    "me"  — calls /api/integrations/{slack,teams}/me/status (per-user view). */
+/*  Hotfix 73/74 - accepts a ``mode``:                                          */
+/*    "org" - calls /api/integrations/{slack,teams}/status (PO view).          */
+/*    "me"  - calls /api/integrations/{slack,teams}/me/status (per-user view). */
 /*  The shared ``ChannelStatus`` shape carries either                           */
 /*  team_name (org mode) or linkedAs handle/displayName (me mode).              */
 /* -------------------------------------------------------------------------- */
@@ -25,7 +25,7 @@ export interface ChannelStatus {
   scope: string;
   error: string | null;
   tokenExpired?: boolean;
-  /** Hotfix 73/74 — set in ``mode: "me"``: the dev's @handle / display name */
+  /** Hotfix 73/74 - set in ``mode: "me"``: the dev's @handle / display name */
   linkedAs?: string;
 }
 
@@ -140,7 +140,7 @@ export function useChannelStatus(
 
     const params = new URLSearchParams(window.location.search);
 
-    // Hotfix 73 — per-user Slack OAuth callback (slack_me=linked|error|demo_linked)
+    // Hotfix 73 - per-user Slack OAuth callback (slack_me=linked|error|demo_linked)
     const slackMeParam = params.get("slack_me");
     if (slackMeParam === "linked" || slackMeParam === "demo_linked") {
       slackFromParams.current = true;
@@ -165,7 +165,7 @@ export function useChannelStatus(
       window.history.replaceState({}, "", url.pathname);
     }
 
-    // Hotfix 74 — per-user Teams OAuth callback
+    // Hotfix 74 - per-user Teams OAuth callback
     const teamsMeParam = params.get("teams_me");
     if (teamsMeParam === "linked" || teamsMeParam === "demo_linked") {
       teamsFromParams.current = true;
@@ -255,13 +255,13 @@ export function useChannelStatus(
       window.history.replaceState({}, "", url.pathname);
     }
 
-    // Hotfix 73/74 — always fetch status from API on mount AND when
+    // Hotfix 73/74 - always fetch status from API on mount AND when
     // ``mode`` changes (i.e. when auth context lazily resolves the
     // user's role). Without this unconditional fetch, a non-PO whose
     // role takes a tick to load would have ``mode`` flip from "org"
     // to "me" AFTER the URL-param branch already set ``fromParams=
     // true``, and the second effect run would skip the fetch entirely
-    // — leaving the card stuck on whatever ``/status`` returned (which
+    // - leaving the card stuck on whatever ``/status`` returned (which
     // is ``connected: false`` for non-PO post-Hotfix 72). The URL
     // param branch above is for optimistic UX during the OAuth
     // round-trip; the server fetch is the source of truth.

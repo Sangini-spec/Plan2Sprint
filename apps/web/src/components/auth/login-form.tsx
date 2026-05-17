@@ -18,7 +18,7 @@ const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
-// Hotfix 61 — only allow ``next`` redirects to internal app paths so a
+// Hotfix 61 - only allow ``next`` redirects to internal app paths so a
 // malicious crafted ``/login?next=https://attacker.com`` link can't
 // hijack the post-login navigation. Anything that isn't a same-origin
 // path falls back to the role-based default.
@@ -29,7 +29,7 @@ function safeNextPath(raw: string | null): string | null {
   return raw;
 }
 
-// Hotfix 88 — recognise PKCE-flavoured failures from /auth/callback so
+// Hotfix 88 - recognise PKCE-flavoured failures from /auth/callback so
 // we can auto-retry rather than bouncing the user back without explanation.
 // Common values logged by /auth/callback's exchangeCodeForSession when
 // the verifier cookie went missing (Brave's strict cookies; Chrome with
@@ -56,7 +56,7 @@ export function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  // Hotfix 88 — surface OAuth callback failures + drive the silent retry.
+  // Hotfix 88 - surface OAuth callback failures + drive the silent retry.
   // ``oauthFailure`` is the formatted message we render in the red banner;
   // ``autoRetrying`` is the brief "Completing sign-in…" indicator while
   // signInWithOAuth fires again under the hood.
@@ -80,7 +80,7 @@ export function LoginForm() {
     router.push("/po");
   };
 
-  // Hotfix 61 — propagate ?next=/invite/<token> through the OAuth round
+  // Hotfix 61 - propagate ?next=/invite/<token> through the OAuth round
   // trip so Google / Microsoft invitees also land on the invite-accept
   // page after auth completes (not just password-login users).
   const oauthRedirect = () => {
@@ -139,7 +139,7 @@ export function LoginForm() {
     }
   };
 
-  // Hotfix 88 — when the user lands here with ``?error=auth_callback_failed``,
+  // Hotfix 88 - when the user lands here with ``?error=auth_callback_failed``,
   // surface a banner explaining the bounceback AND, for known PKCE
   // races, fire one silent retry of the OAuth flow without
   // ``prompt=select_account``. Google reuses the recent session and
@@ -168,7 +168,7 @@ export function LoginForm() {
     if (looksLikePkceFailure(reason) && !autoRetryFiredRef.current) {
       autoRetryFiredRef.current = true;
       setAutoRetrying(true);
-      // Best-effort guess the provider — most users are on Google.
+      // Best-effort guess the provider - most users are on Google.
       // Microsoft users will see the banner + can click manually.
       const provider = (searchParams.get("provider") || "google").toLowerCase();
       const fire = provider === "azure" || provider === "microsoft"
@@ -222,7 +222,7 @@ export function LoginForm() {
 
       const userRole = data?.user?.user_metadata?.role as UserRole | undefined;
       const dashboardRoute = userRole ? (ROLE_DASHBOARD_ROUTES[userRole] ?? "/po") : "/po";
-      // Hotfix 61 — honour ?next=/invite/<token> so an unauthenticated
+      // Hotfix 61 - honour ?next=/invite/<token> so an unauthenticated
       // invitee who hits the invite page lands back on it after login,
       // instead of being dumped on /po and having to find their email
       // again.
@@ -298,7 +298,7 @@ export function LoginForm() {
         </div>
       )}
 
-      {/* Hotfix 88 — OAuth callback failure banner. ``autoRetrying``
+      {/* Hotfix 88 - OAuth callback failure banner. ``autoRetrying``
           shows a calmer "Completing sign-in…" indicator while the
           silent re-attempt is in flight; otherwise the banner is the
           standard red error. */}
@@ -390,7 +390,7 @@ export function LoginForm() {
       {/* Sign up link */}
       <p className="mt-6 text-center text-sm text-[var(--text-secondary)]">
         Don&apos;t have an account?{" "}
-        {/* Hotfix 65C — preserve ?next= through to the signup page so
+        {/* Hotfix 65C - preserve ?next= through to the signup page so
             an invitee who clicked their email link, got bounced to
             /login, and then hits "Create free account" still ends up
             back on /invite/<token> after auth (where Hotfix 65A's

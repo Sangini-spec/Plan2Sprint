@@ -85,7 +85,7 @@ export function TeamsMessageComposer() {
         setProjects(withCh.filter((x): x is TeamsProjectChannel => x !== null));
       }
     } catch {
-      // Ignore — targets just won't load
+      // Ignore - targets just won't load
     } finally {
       setLoadingTargets(false);
     }

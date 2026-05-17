@@ -147,7 +147,7 @@ export default function Hero() {
       <div className="relative z-10 w-full max-w-7xl mx-auto px-6 py-24 lg:pt-8 lg:pb-0">
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-12 lg:gap-8 items-center">
           {/* ════════════════════════════
-             LEFT COLUMN — Text (3/5 = 60%)
+             LEFT COLUMN - Text (3/5 = 60%)
              ════════════════════════════ */}
           <motion.div
             className="lg:col-span-3 flex flex-col gap-8"
@@ -215,7 +215,7 @@ export default function Hero() {
           </motion.div>
 
           {/* ════════════════════════════
-             RIGHT COLUMN — Hero visual (2/5 = 40%)
+             RIGHT COLUMN - Hero visual (2/5 = 40%)
              ════════════════════════════ */}
           <motion.div
             className="lg:col-span-2 relative w-full min-h-[420px] lg:min-h-[520px]"

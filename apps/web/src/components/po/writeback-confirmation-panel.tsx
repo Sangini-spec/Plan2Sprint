@@ -156,7 +156,7 @@ export function WritebackConfirmationPanel() {
         }
       }
     } catch {
-      // API unavailable — show empty state
+      // API unavailable - show empty state
     }
     setItems([]);
     setLoading(false);

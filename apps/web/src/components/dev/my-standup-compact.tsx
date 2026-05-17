@@ -84,7 +84,7 @@ function formatTime(iso: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Compact Standup Widget — for developer overview dashboard (no calendar)
+// Compact Standup Widget - for developer overview dashboard (no calendar)
 // ---------------------------------------------------------------------------
 
 export function MyStandupCompact() {
@@ -131,7 +131,7 @@ export function MyStandupCompact() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = res.data as any;
 
-      // Hotfix 42: pick the LOGGED-IN USER's report — not just reports[0],
+      // Hotfix 42: pick the LOGGED-IN USER's report - not just reports[0],
       // which used to surface whichever developer's report_date was latest.
       // Hotfix 43: removed the displayName fallback; matching by name was
       // surfacing the wrong "Sangini Tripathi" (PO's row) when the dev row
@@ -228,7 +228,7 @@ export function MyStandupCompact() {
 
             {/* Compact section rows */}
             <div className="space-y-3">
-              {/* Recent Activity (last 48-72h GitHub) — Hotfix 42 */}
+              {/* Recent Activity (last 48-72h GitHub) - Hotfix 42 */}
               {recentActivity.length > 0 && (
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
@@ -265,7 +265,7 @@ export function MyStandupCompact() {
                 </div>
               )}
 
-              {/* In Flight (work items) — Hotfix 42 */}
+              {/* In Flight (work items) - Hotfix 42 */}
               {inFlight.length > 0 && (
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
@@ -354,7 +354,7 @@ export function MyStandupCompact() {
                 </div>
               ) : null}
 
-              {/* Empty state — Hotfix 42 also checks recentActivity / inFlight */}
+              {/* Empty state - Hotfix 42 also checks recentActivity / inFlight */}
               {completedItems.length === 0 &&
                 inProgressItems.length === 0 &&
                 blockerItems.length === 0 &&

@@ -1,12 +1,12 @@
 /**
- * Product Owner main tour — 12 steps.
+ * Product Owner main tour - 12 steps.
  *
  * Order matches the actual workflow: connect tool → pick project →
  * import projects → invite team → assign projects → sprint planning
  * (3 sub-views) → GitHub → standups → channels → done.
  *
  * Pages NOT in this tour (Retro, Team Health, Smart Notes) are covered
- * by ``page-hints.ts`` — first-visit one-shot cards.
+ * by ``page-hints.ts`` - first-visit one-shot cards.
  */
 
 import type { OnboardingStep } from "@/lib/onboarding/types";
@@ -25,7 +25,7 @@ export const PO_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "Connect ADO or Jira",
     body:
-      "Plan2Sprint reads work items from your project tool. Click 'Connect Tools' to set up Azure DevOps, Jira, or GitHub — pick whichever your team already uses.",
+      "Plan2Sprint reads work items from your project tool. Click 'Connect Tools' to set up Azure DevOps, Jira, or GitHub - pick whichever your team already uses.",
     route: "/po",
     anchor: "[data-onboarding=connect-tools-btn]",
     anchorPosition: "bottom",
@@ -69,7 +69,7 @@ export const PO_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "Assign projects to team members",
     body:
-      "Each developer and stakeholder gets access only to the projects you assign them. This drives the access guard — they can't see projects they're not on.",
+      "Each developer and stakeholder gets access only to the projects you assign them. This drives the access guard - they can't see projects they're not on.",
     route: "/settings/team",
     anchor: "[data-onboarding=assign-projects-section]",
     anchorPosition: "auto",
@@ -84,13 +84,13 @@ export const PO_STEPS: OnboardingStep[] = [
     route: "/po/planning?tab=planning",
     anchor: "[data-onboarding=planning-generate]",
     anchorPosition: "auto",
-    // Inline tooltip next to the Regenerate button — discoverable
+    // Inline tooltip next to the Regenerate button - discoverable
     // without being a fixed tour step. The user dismisses it with
     // "OK" and continues to Forecast via the main banner's Next.
     tooltips: [
       {
         selector: "[data-onboarding=regenerate-btn]",
-        body: "Not satisfied with the plan? Click Regenerate to try again — you can also add instructions to steer the new plan.",
+        body: "Not satisfied with the plan? Click Regenerate to try again - you can also add instructions to steer the new plan.",
         position: "bottom",
       },
     ],
@@ -112,7 +112,7 @@ export const PO_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "Rebalance",
     body:
-      "When the plan ends past your target launch, Plan2Sprint suggests realistic shifts — move scope, extend the sprint, or both. Review and approve the rebalanced plan here.",
+      "When the plan ends past your target launch, Plan2Sprint suggests realistic shifts - move scope, extend the sprint, or both. Review and approve the rebalanced plan here.",
     route: "/po/planning?tab=rebalance",
     anchor: "[data-onboarding=planning-rebalance]",
     anchorPosition: "auto",
@@ -123,9 +123,9 @@ export const PO_STEPS: OnboardingStep[] = [
     variant: "spotlight",
     title: "GitHub Monitoring",
     body:
-      "Pull requests, commits, and CI status — all linked to work items so you can see what's actually shipping vs what's still in flight.",
+      "Pull requests, commits, and CI status - all linked to work items so you can see what's actually shipping vs what's still in flight.",
     route: "/po/github",
-    // No outline — the page itself is the focus once we navigate
+    // No outline - the page itself is the focus once we navigate
     // here. Drawing a ring around the whole dashboard panel felt
     // redundant since the user already sees they've landed on
     // GitHub Monitoring.
@@ -139,14 +139,14 @@ export const PO_STEPS: OnboardingStep[] = [
     body:
       "Auto-generated standups from work item activity, PRs, and commits. Blockers surface here and route to Slack/Teams. No more chasing your team for updates.",
     route: "/po/standups",
-    // No outline — same reasoning as GitHub Monitoring step above.
+    // No outline - same reasoning as GitHub Monitoring step above.
     noOutline: true,
   },
   {
     id: "channels",
     role: "product_owner",
     variant: "spotlight",
-    title: "Channels — Slack & Teams",
+    title: "Channels - Slack & Teams",
     body:
       "Connect Slack or Microsoft Teams to auto-post sprint plans, blockers, and daily digests. Each project gets its own channel. Use the tab switcher to pick whichever platform your team prefers.",
     route: "/po/notifications",

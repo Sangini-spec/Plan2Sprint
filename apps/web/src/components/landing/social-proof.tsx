@@ -84,7 +84,7 @@ export default function SocialProof() {
             Trusted by engineering teams at
           </motion.p>
 
-          {/* ── Logo row — single line, no chips ── */}
+          {/* ── Logo row - single line, no chips ── */}
           <motion.div
             variants={containerVariants}
             className={cn(

@@ -82,7 +82,7 @@ export function SlackMessageComposer() {
         );
       }
     } catch {
-      // Ignore — targets just won't load
+      // Ignore - targets just won't load
     } finally {
       setLoadingTargets(false);
     }
@@ -172,7 +172,7 @@ export function SlackMessageComposer() {
 
       {/* Target selector */}
       <div className="flex items-center gap-2">
-        {/* Type toggle — only show Channel option if channels are available */}
+        {/* Type toggle - only show Channel option if channels are available */}
         <div className="flex rounded-lg border border-[var(--border-subtle)] overflow-hidden shrink-0">
           <button
             onClick={() => setTargetType("dm")}

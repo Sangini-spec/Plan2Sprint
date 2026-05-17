@@ -1,7 +1,7 @@
 /**
  * GitHub API adapter (READ-ONLY).
  * Uses GitHub REST API v3.
- * No write-back methods — GitHub is read-only per MRD.
+ * No write-back methods - GitHub is read-only per MRD.
  */
 
 import type { GitHubRepo } from "../types";

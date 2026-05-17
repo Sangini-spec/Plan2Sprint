@@ -134,7 +134,7 @@ function typeBadge(type: string) {
 }
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "—";
+  if (!dateStr) return "-";
   return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
@@ -171,7 +171,7 @@ function WorkItemRow({ item }: { item: WorkItem }) {
             {item.storyPoints}
           </span>
         ) : (
-          <span className="text-xs text-[var(--text-tertiary)]">—</span>
+          <span className="text-xs text-[var(--text-tertiary)]">-</span>
         )}
       </div>
 
@@ -247,7 +247,7 @@ function SprintGroup({
             )}
           </div>
           <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-            {formatDate(sprint.startDate)} — {formatDate(sprint.endDate)}
+            {formatDate(sprint.startDate)} - {formatDate(sprint.endDate)}
           </p>
         </div>
 
@@ -531,7 +531,7 @@ export function DevSprintView() {
   return (
     // The ``data-onboarding="dev-sprint-board"`` hook moved here from
     // the /dev dashboard. The developer-tour ``sprint-board`` step
-    // now navigates to /dev/sprint and anchors on this panel — which
+    // now navigates to /dev/sprint and anchors on this panel - which
     // is the actual Sprint section the user sees in the sidebar (with
     // the SOURCE vs AI-OPTIMIZED toggle), not a slimmer dashboard
     // widget. Keep the attribute on the OUTER wrapper so it's

@@ -18,7 +18,7 @@ export type SprintPlanStatus =
   | "SYNCED_PARTIAL"
   | "UNDONE"
   | "EXPIRED"
-  // Hotfix 24 — async generation. ``FAILED`` is set by the
+  // Hotfix 24 - async generation. ``FAILED`` is set by the
   // background task when generation crashes or times out, so the
   // frontend polling can stop and surface a clear error message.
   | "FAILED";
@@ -415,7 +415,7 @@ export interface FeatureProgressData {
   overallCompletePct: number;
   readyForTestCount: number;
   features: FeatureProgressCard[];
-  /** Composite confidence score (0-100) — replaces SprintPlan.confidence_score
+  /** Composite confidence score (0-100) - replaces SprintPlan.confidence_score
    * for the PO hero banner KPI. ``null`` when no approved plan exists yet. */
   confidence?: ConfidenceBlock | null;
 }
@@ -454,11 +454,11 @@ export interface ProjectPlanRow {
   actualStart?: string;
   actualEnd?: string;
   assignees: string[];
-  /* Sprint E — true when the PO has marked this feature as hidden from
+  /* Sprint E - true when the PO has marked this feature as hidden from
    * the Gantt. The row is only included in the payload when the request
    * was made with ``includeHidden=1``. */
   hidden?: boolean;
-  /* Diagnostic — raw external status string from ADO/Jira (e.g. "Resolved",
+  /* Diagnostic - raw external status string from ADO/Jira (e.g. "Resolved",
    * "In Review", "Deployed"). Surfaced on hover so the PO can see what
    * string the upstream tool actually returned, useful for diagnosing
    * features that the terminal-status alias list missed. */
@@ -467,7 +467,7 @@ export interface ProjectPlanRow {
 
 export interface ProjectPlanData {
   features: ProjectPlanRow[];
-  /** Hotfix 34 — split former ``unassigned`` into two semantic buckets.
+  /** Hotfix 34 - split former ``unassigned`` into two semantic buckets.
    *  ``completed``: features with terminal status (delivered already).
    *  ``outOfPlan``: features with open stories not in current sprint plan.
    *  ``unassigned`` is kept for back-compat = completed + outOfPlan. */
@@ -493,7 +493,7 @@ export interface ProjectPlanData {
    * hero banner. When present, the hero banner ignores its local date math
    * and renders directly from this block. */
   timeline?: TimelineBlock | null;
-  /* Sprint E — visibility toggle. ``hiddenCount`` is the number of features
+  /* Sprint E - visibility toggle. ``hiddenCount`` is the number of features
    * the PO has hidden from the Gantt; ``includeHidden`` mirrors the request
    * parameter so the UI knows whether the current payload includes the
    * hidden rows or not. Both are optional because legacy/cached payloads
@@ -526,20 +526,20 @@ export interface TimelineBlock {
   targetViolatedDays: number;
   currentPhaseSlug: string | null;
   currentPhaseSource: CurrentPhaseSource;
-  /* Hotfix 16 — phases the project's frontier has passed but which
+  /* Hotfix 16 - phases the project's frontier has passed but which
    * still have in-flight items. Hero-banner timeline renders these in
    * a cyan glow so stakeholders see "Deployment is current, Testing
    * still has loose ends" without conflating the two states. Empty /
    * undefined when nothing is straggling. */
   alsoActivePhaseSlugs?: string[];
-  /* Hotfix 83 — project lifecycle status relative to its target launch:
-   *   "on_track"       — target unset, project archived, or still
+  /* Hotfix 83 - project lifecycle status relative to its target launch:
+   *   "on_track"       - target unset, project archived, or still
    *                      within grace
-   *   "overdue"        — past target_launch_date + 24h grace AND
+   *   "overdue"        - past target_launch_date + 24h grace AND
    *                      completion < 100%. Triggers red Target Launch
    *                      tile, "PLAN OVERDUE" badge, and the cron-fired
    *                      one-shot email to the PO.
-   *   "delivered_late" — past target but completion = 100%. Amber
+   *   "delivered_late" - past target but completion = 100%. Amber
    *                      "DELIVERED LATE" badge, no email.
    * ``daysPastTarget`` is the integer day count past the target;
    * always 0 when status === "on_track". */

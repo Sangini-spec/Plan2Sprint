@@ -53,7 +53,7 @@ export default function InviteAcceptPage() {
     })();
   }, [token]);
 
-  // Hotfix 65B — when the loaded invitation is already accepted (most
+  // Hotfix 65B - when the loaded invitation is already accepted (most
   // commonly because Hotfix 65A consumed it server-side during signup
   // and the auth callback bounced the user back to ``?next=/invite/...``)
   // silently route through /dashboard. The role-aware middleware
@@ -87,10 +87,10 @@ export default function InviteAcceptPage() {
           else if (role === "stakeholder") landing = "/stakeholder";
           else if (role === "product_owner" || role === "admin" || role === "owner") landing = "/po";
         } catch {
-          // body wasn't JSON — leave landing as /dashboard so
+          // body wasn't JSON - leave landing as /dashboard so
           // middleware can role-route from there.
         }
-        // Hotfix 70B — force a Supabase session refresh BEFORE
+        // Hotfix 70B - force a Supabase session refresh BEFORE
         // navigating so the user's new JWT carries the up-to-date
         // ``user_metadata.role`` that Hotfix 66B just wrote. Without
         // this, the user's existing session token still claims their
@@ -98,14 +98,14 @@ export default function InviteAcceptPage() {
         // middleware role-routes them to /po even though their
         // Plan2Sprint User row says developer/stakeholder. Best-effort:
         // if the refresh fails (offline, transient Supabase blip), we
-        // still navigate — they'll just need to log out + log in
+        // still navigate - they'll just need to log out + log in
         // manually to pick up the role. The 2s delay below also gives
         // the success card time to render.
         try {
           const supabase = createClient();
           await supabase.auth.refreshSession();
         } catch {
-          // ignore — fallback path is "log out + log in"
+          // ignore - fallback path is "log out + log in"
         }
         setTimeout(() => router.push(landing), 2000);
       } else if (res.status === 401) {
@@ -171,7 +171,7 @@ export default function InviteAcceptPage() {
   }
 
   if (invite.status !== "pending") {
-    // Hotfix 65B — for an already-accepted invitation, show a
+    // Hotfix 65B - for an already-accepted invitation, show a
     // brief loading spinner while the redirect-to-/dashboard effect
     // above kicks the user to the right place. Other terminal states
     // (expired / revoked) keep the explanatory dead-end UI.

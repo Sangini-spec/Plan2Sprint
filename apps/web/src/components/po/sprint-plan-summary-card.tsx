@@ -182,7 +182,7 @@ export function SprintPlanSummaryCard() {
               Total SP
             </p>
             <p className="text-lg font-bold text-[var(--text-primary)] tabular-nums">
-              {plan.totalStoryPoints ?? "—"}
+              {plan.totalStoryPoints ?? "-"}
             </p>
           </div>
           <div className="text-center border-l border-[var(--border-subtle)]">
@@ -190,7 +190,7 @@ export function SprintPlanSummaryCard() {
               Sprints
             </p>
             <p className="text-lg font-bold text-[var(--text-primary)] tabular-nums">
-              {plan.estimatedSprints ?? "—"}
+              {plan.estimatedSprints ?? "-"}
             </p>
           </div>
         </div>

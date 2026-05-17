@@ -18,14 +18,14 @@ export function ForgotPasswordForm() {
     setError(null);
     setLoading(true);
 
-    // Recovery flow design — read this before changing the redirectTo:
+    // Recovery flow design - read this before changing the redirectTo:
     //
     // Previously this pointed at ``/auth/callback?type=recovery``. The
     // intent was for the callback route to detect ``type=recovery`` in
     // the query string and bounce the user to /reset-password. In
     // practice that broke because Supabase's ``/auth/v1/verify``
     // endpoint does not reliably preserve query params on
-    // ``redirect_to`` — it always appends ``?code=XXX`` after
+    // ``redirect_to`` - it always appends ``?code=XXX`` after
     // verifying, and existing query keys can get dropped, duplicated,
     // or mangled depending on Supabase version. When ``type=recovery``
     // wasn't in the final URL, our callback fell through to its
@@ -33,7 +33,7 @@ export function ForgotPasswordForm() {
     // dashboard, signed in via the recovery session (Supabase doesn't
     // mark recovery sessions any differently from normal ones in the
     // JWT), never saw the new-password form, and their actual
-    // password never changed — exactly the bug you reported.
+    // password never changed - exactly the bug you reported.
     //
     // Fix: send the recovery flow STRAIGHT to /reset-password. That
     // page does the ``exchangeCodeForSession`` itself, then renders

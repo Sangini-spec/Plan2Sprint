@@ -94,7 +94,7 @@ export const myStandupReport: StandupReport = {
     ],
   },
   blockers: { items: [] },
-  narrativeText: "Alex completed the shipping address form with full validation and Google Places autocomplete. Currently working on the payment method selection step — PR #301 is awaiting review. The mobile checkout fix (PR #305) is approved and ready to merge.",
+  narrativeText: "Alex completed the shipping address form with full validation and Google Places autocomplete. Currently working on the payment method selection step - PR #301 is awaiting review. The mobile checkout fix (PR #305) is approved and ready to merge.",
   acknowledged: true,
   acknowledgedAt: "2026-02-19T09:45:00Z",
   isInactive: false,

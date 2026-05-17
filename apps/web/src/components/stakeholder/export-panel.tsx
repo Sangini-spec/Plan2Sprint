@@ -47,7 +47,7 @@ export function ExportPanel() {
   const projectParam = projectId ? `?projectId=${projectId}` : "";
 
   // Fetch overview data for preview. Gated on having an actual
-  // selected project — without this guard the panel fires a fetch
+  // selected project - without this guard the panel fires a fetch
   // with no projectId at first mount, the backend returns the
   // org-wide aggregate (which is meaningless for a stakeholder
   // viewing one project), and the values flash to 0 until the
@@ -99,7 +99,7 @@ export function ExportPanel() {
     }
   };
 
-  // Export PDF report (downloads as HTML file — open in browser and Ctrl+P to save as PDF)
+  // Export PDF report (downloads as HTML file - open in browser and Ctrl+P to save as PDF)
   const handleExportPDF = async () => {
     setPdfStatus("loading");
     try {
@@ -264,7 +264,7 @@ export function ExportPanel() {
 function WeeklyReportSection({ projectId }: { projectId: string | undefined }) {
   const [status, setStatus] = useState<ExportStatus>("idle");
 
-  // "Generate Now" triggers a browser download of the one-page weekly PDF —
+  // "Generate Now" triggers a browser download of the one-page weekly PDF -
   // the same PDF that's emailed to stakeholders every Friday at 5:00 PM IST.
   const handleGenerate = async () => {
     if (!projectId) return;

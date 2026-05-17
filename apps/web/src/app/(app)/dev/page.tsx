@@ -10,13 +10,13 @@ import { useSelectedProject } from "@/lib/project/context";
 export default function DevDashboardPage() {
   const { selectedProject, projects } = useSelectedProject();
 
-  // No projects at all — show welcome/connect card
+  // No projects at all - show welcome/connect card
   if (projects !== undefined && projects.length === 0 && !selectedProject) {
     return <EmptyDashboard />;
   }
 
   return (
-    // Hotfix 91 — banner replaces the dashboard with a friendly
+    // Hotfix 91 - banner replaces the dashboard with a friendly
     // "ask your PO to assign you" message when the currently
     // selected project is one the dev can't actually see. Most
     // common path: stale localStorage preference for a project they
@@ -31,10 +31,10 @@ export default function DevDashboardPage() {
           the spotlight occasionally anchor on the dashboard if the
           /dev/sprint route was slow to resolve. */}
       <div className="space-y-4">
-        {/* Project Hero Banner — dark banner with KPIs + timeline */}
+        {/* Project Hero Banner - dark banner with KPIs + timeline */}
         <ProjectHeroBanner />
 
-        {/* Project Overview — Module Status feature cards */}
+        {/* Project Overview - Module Status feature cards */}
         <ProjectOverviewPanel hideKpiRow hideRisks />
 
         {/* Standup summary */}

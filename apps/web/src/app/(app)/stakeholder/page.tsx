@@ -7,7 +7,7 @@ import { useSelectedProject } from "@/lib/project/context";
 export default function StakeholderDashboardPage() {
   const { selectedProject, projects } = useSelectedProject();
 
-  // No projects at all — show welcome/connect card
+  // No projects at all - show welcome/connect card
   if (projects !== undefined && projects.length === 0 && !selectedProject) {
     return <EmptyDashboard />;
   }

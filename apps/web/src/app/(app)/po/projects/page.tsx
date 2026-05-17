@@ -281,7 +281,7 @@ export default function ProjectsPage() {
             fetch("/api/integrations/ado/team-members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectName: project.name }) }),
             fetch("/api/integrations/ado/iterations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectName: project.name }) }),
           ]);
-          // Check for "not connected" 404 specifically — surface reconnection message
+          // Check for "not connected" 404 specifically - surface reconnection message
           if (wiRes.status === 404 || tmRes.status === 404 || itRes.status === 404) {
             throw new Error("Azure DevOps connection not found. Please reconnect ADO from the Integrations page.");
           }
@@ -359,7 +359,7 @@ export default function ProjectsPage() {
         return;
       }
 
-      // Tool not connected — try loading cached data from DB
+      // Tool not connected - try loading cached data from DB
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const cached = (project as any).cachedData as { workItems?: AdoWorkItem[]; teamMembers?: AdoTeamMember[]; iterations?: AdoIteration[] } | undefined;
       if (cached && ((cached.workItems?.length ?? 0) > 0 || (cached.teamMembers?.length ?? 0) > 0)) {
@@ -449,7 +449,7 @@ export default function ProjectsPage() {
 
   return (
     <div className="flex h-[calc(100vh-4rem)] overflow-hidden" data-onboarding="projects-page">
-      {/* Left sidebar — collapsible */}
+      {/* Left sidebar - collapsible */}
       <div className={cn(
         "shrink-0 border-r border-[var(--border-subtle)] bg-[var(--bg-surface)]/50 overflow-y-auto transition-all duration-300 ease-in-out",
         sidebarOpen ? "w-64" : "w-0 border-r-0 overflow-hidden"
@@ -611,7 +611,7 @@ export default function ProjectsPage() {
                                     <p className="text-sm font-medium text-[var(--text-primary)]">{iter.name}</p>
                                     {(iter.startDate || iter.finishDate) && (
                                       <p className="text-[10px] text-[var(--text-tertiary)]">
-                                        {iter.startDate ? new Date(iter.startDate).toLocaleDateString() : "No start"} — {iter.finishDate ? new Date(iter.finishDate).toLocaleDateString() : "No end"}
+                                        {iter.startDate ? new Date(iter.startDate).toLocaleDateString() : "No start"} - {iter.finishDate ? new Date(iter.finishDate).toLocaleDateString() : "No end"}
                                       </p>
                                     )}
                                   </div>
@@ -662,7 +662,7 @@ export default function ProjectsPage() {
                                     <h3 className="text-sm font-semibold text-[var(--text-primary)]">{iter.name}</h3>
                                     {(iter.startDate || iter.finishDate) && (
                                       <span className="text-[10px] text-[var(--text-tertiary)] ml-2">
-                                        {iter.startDate ? new Date(iter.startDate).toLocaleDateString() : "?"} — {iter.finishDate ? new Date(iter.finishDate).toLocaleDateString() : "?"}
+                                        {iter.startDate ? new Date(iter.startDate).toLocaleDateString() : "?"} - {iter.finishDate ? new Date(iter.finishDate).toLocaleDateString() : "?"}
                                       </span>
                                     )}
                                   </div>

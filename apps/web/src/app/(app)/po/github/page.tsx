@@ -119,7 +119,7 @@ interface ActivityFilters {
   timeRange: string; // "7d" default
 }
 
-// ── Hotfix 40 — Sprint overview shape ───────────────────────────────────
+// ── Hotfix 40 - Sprint overview shape ───────────────────────────────────
 interface SprintStoryPR {
   number: number;
   title: string;
@@ -292,7 +292,7 @@ function GitHubEmptyState() {
 }
 
 // ---------------------------------------------------------------------------
-// Connected View — fetches real data from API
+// Connected View - fetches real data from API
 // ---------------------------------------------------------------------------
 
 function GitHubConnectedView() {
@@ -328,7 +328,7 @@ function GitHubConnectedView() {
   }
   const [projectDevs, setProjectDevs] = useState<ProjectDeveloper[]>([]);
 
-  // Hotfix 40 — Sprint overview (story-PR linkage + heatmap + insights)
+  // Hotfix 40 - Sprint overview (story-PR linkage + heatmap + insights)
   const [sprintOverview, setSprintOverview] = useState<SprintOverview | null>(null);
 
   // -- Fetch project developers --
@@ -348,7 +348,7 @@ function GitHubConnectedView() {
     }
   }, [selectedProject]);
 
-  // -- Hotfix 40 — Fetch sprint overview ---------------------------------
+  // -- Hotfix 40 - Fetch sprint overview ---------------------------------
   const fetchSprintOverview = useCallback(async () => {
     try {
       const params = new URLSearchParams();
@@ -488,7 +488,7 @@ function GitHubConnectedView() {
     try {
       await fetch("/api/github/sync", { method: "POST" });
     } catch {
-      // swallow — sync is best-effort
+      // swallow - sync is best-effort
     }
     await Promise.all([
       fetchRepos(),
@@ -519,14 +519,14 @@ function GitHubConnectedView() {
   return (
     <div className="space-y-6">
       {/* ================================================================= */}
-      {/* SECTION 1: Overview Strip — 4 stat cards                          */}
+      {/* SECTION 1: Overview Strip - 4 stat cards                          */}
       {/* ================================================================= */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-[var(--text-primary)]">
           GitHub Overview
           {overview?.sprintName && (
             <span className="ml-2 text-xs font-normal text-[var(--text-tertiary)]">
-              — {overview.sprintName}
+              - {overview.sprintName}
             </span>
           )}
         </h2>
@@ -669,7 +669,7 @@ function GitHubConnectedView() {
           </div>
         </div>
 
-        {/* ── Sprint Tracker — only visible when "Sprint" tab is active ── */}
+        {/* ── Sprint Tracker - only visible when "Sprint" tab is active ── */}
         {activityFilters.timeRange === "sprint" && sprintOverview?.sprint && (
           <div className="mb-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface-raised)]/30 p-4 space-y-5">
             {/* Header */}
@@ -677,7 +677,7 @@ function GitHubConnectedView() {
               <div className="flex items-center gap-2">
                 <GitBranch size={14} className="text-[var(--color-brand-secondary)]" />
                 <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-                  Sprint Tracker — {sprintOverview.sprint.name}
+                  Sprint Tracker - {sprintOverview.sprint.name}
                 </h3>
               </div>
               <span className="text-xs font-medium text-[var(--text-secondary)]">

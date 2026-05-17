@@ -63,7 +63,7 @@ interface AIInsightsPanelProps {
 }
 
 // ---------------------------------------------------------------------------
-// Component — Horizontal full-width overview (collapsible)
+// Component - Horizontal full-width overview (collapsible)
 // ---------------------------------------------------------------------------
 
 export function AIInsightsPanel({
@@ -188,7 +188,7 @@ export function AIInsightsPanel({
         )}
       >
         <div className="px-5 pb-4 pt-1">
-          {/* Row 1 — Project metrics (3 columns) */}
+          {/* Row 1 - Project metrics (3 columns) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {/* ── Card 1: Project Summary ── */}
             <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-sunken)] p-4 min-h-[180px] flex flex-col">
@@ -197,14 +197,14 @@ export function AIInsightsPanel({
                 Project Summary
               </div>
 
-              {/* Metric tiles — larger, cleaner */}
+              {/* Metric tiles - larger, cleaner */}
               <div className="grid grid-cols-2 gap-3 flex-1">
                 <div className="rounded-md bg-[var(--bg-surface)]/60 p-2.5 text-center">
                   <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wide">
                     Sprints
                   </p>
                   <p className="text-lg font-bold tabular-nums text-[var(--text-primary)]">
-                    {estimatedSprints ?? "—"}
+                    {estimatedSprints ?? "-"}
                   </p>
                 </div>
                 <div className="rounded-md bg-[var(--bg-surface)]/60 p-2.5 text-center">
@@ -212,7 +212,7 @@ export function AIInsightsPanel({
                     Weeks
                   </p>
                   <p className="text-lg font-bold tabular-nums text-[var(--text-primary)]">
-                    ~{estimatedWeeksTotal ?? "—"}
+                    ~{estimatedWeeksTotal ?? "-"}
                   </p>
                 </div>
                 <div className="rounded-md bg-[var(--bg-surface)]/60 p-2.5 text-center">
@@ -220,7 +220,7 @@ export function AIInsightsPanel({
                     Total SP
                   </p>
                   <p className="text-lg font-bold tabular-nums text-[var(--text-primary)]">
-                    {totalStoryPoints ?? "—"}
+                    {totalStoryPoints ?? "-"}
                   </p>
                 </div>
                 <div className="rounded-md bg-[var(--bg-surface)]/60 p-2.5 text-center">
@@ -233,7 +233,7 @@ export function AIInsightsPanel({
                           "en-US",
                           { month: "short", day: "numeric" }
                         )
-                      : "—"}
+                      : "-"}
                   </p>
                 </div>
               </div>
@@ -350,8 +350,8 @@ export function AIInsightsPanel({
                 </div>
               )}
 
-              {/* Per-developer bars — pushed to bottom.
-                  Hotfix 33b — when a team grows past ~3 developers the
+              {/* Per-developer bars - pushed to bottom.
+                  Hotfix 33b - when a team grows past ~3 developers the
                   list overflows the card. Cap visible height and let
                   the inner list scroll. Custom scrollbar matches the
                   surrounding theme (bg-surface-sunken). */}
@@ -455,7 +455,7 @@ export function AIInsightsPanel({
                     </div>
                   )}
 
-                  {/* Auto-prioritized items — compact */}
+                  {/* Auto-prioritized items - compact */}
                   {suggestedPriorityCount > 0 && (
                     <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)]">
                       <Zap className="h-3 w-3 text-[var(--color-brand-accent)]" />
@@ -474,7 +474,7 @@ export function AIInsightsPanel({
 
           </div>
 
-          {/* Row 2 — AI cards (2 columns) */}
+          {/* Row 2 - AI cards (2 columns) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
             {/* ── Card 4: AI Summary ── */}
             <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface-sunken)] p-4 min-h-[180px] flex flex-col">
@@ -527,7 +527,7 @@ export function AIInsightsPanel({
                       </span>{" "}
                       capacity ·{" "}
                       <span className="font-semibold text-[var(--text-primary)]">
-                        {estimatedSprints ?? "—"}
+                        {estimatedSprints ?? "-"}
                       </span>{" "}
                       sprints
                     </span>

@@ -184,7 +184,7 @@ export function DeliveryChannelCard({
   const isAdmin = isPORole(role);
 
   async function handleDisconnect() {
-    // Hotfix 73/74 — non-admin callers use /me/disconnect to clear
+    // Hotfix 73/74 - non-admin callers use /me/disconnect to clear
     // their personal Slack/Teams identity link. PO uses /disconnect
     // which removes the org connection (also gated PO-only on the
     // backend, so a non-PO calling it would 403).
@@ -277,11 +277,11 @@ export function DeliveryChannelCard({
             <span className="text-sm text-[var(--text-secondary)]">
               {platform === "slack"
                 ? "Notifications will be delivered to Slack DMs"
-                : "Teams is connected — open chats, meetings & calls directly"}
+                : "Teams is connected - open chats, meetings & calls directly"}
             </span>
           </div>
 
-          {/* Teams quick actions — deeplinks to open Teams directly */}
+          {/* Teams quick actions - deeplinks to open Teams directly */}
           {platform === "teams" && (
             <div className="flex gap-2">
               <a
@@ -494,7 +494,7 @@ function TeamsAdminConsentHint() {
             to a Microsoft tenant admin (Global / Application / Cloud Application
             Administrator). When they open it in any browser and click{" "}
             <span className="font-medium">Accept</span>, consent is granted
-            tenant-wide — every user can then Connect without individual
+            tenant-wide - every user can then Connect without individual
             approval requests.
           </p>
         </div>
@@ -535,7 +535,7 @@ function TeamsAdminConsentHint() {
       <p className="text-[10px] text-[var(--text-tertiary)] leading-relaxed">
         Heads up: Plan2Sprint isn&apos;t Microsoft-verified yet, so the consent
         screen shows an &ldquo;Unverified app&rdquo; banner. That&apos;s a
-        label, not a block — the admin can still click Accept. Only Global /
+        label, not a block - the admin can still click Accept. Only Global /
         Application / Cloud Application Administrators in your tenant can
         grant consent; a regular user clicking this link will be denied by
         Microsoft.

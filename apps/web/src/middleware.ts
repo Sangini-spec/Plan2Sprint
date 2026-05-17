@@ -9,7 +9,7 @@ function _addSecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set("X-XSS-Protection", "1; mode=block");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  // HSTS — only in production (not localhost)
+  // HSTS - only in production (not localhost)
   if (process.env.NODE_ENV === "production") {
     response.headers.set(
       "Strict-Transport-Security",
@@ -71,8 +71,8 @@ export const config = {
   matcher: [
     /*
      * Run middleware on:
-     * 1. API routes — to inject auth token for proxy
-     * 2. Page routes — for auth checks
+     * 1. API routes - to inject auth token for proxy
+     * 2. Page routes - for auth checks
      * Skip: static files, images, favicon, Next.js internals
      */
     "/((?!_next/static|_next/image|favicon.ico|logo.png|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",

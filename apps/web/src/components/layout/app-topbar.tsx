@@ -73,7 +73,7 @@ function UserDropdown() {
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const { appUser, role, loading, signOut } = useAuth();
-  // Hotfix 89 — same auth-flash fix as sidebar. ``role`` falls back to
+  // Hotfix 89 - same auth-flash fix as sidebar. ``role`` falls back to
   // "product_owner" while ``appUser`` is still loading, so on hard
   // refresh the topbar badge would show "Product Owner" briefly for
   // every user. Gate role-dependent text on ``authReady`` so devs /
@@ -234,17 +234,17 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
           {pageTitle}
         </h1>
 
-        {/* Project selector — stakeholder uses assignment-based selector */}
+        {/* Project selector - stakeholder uses assignment-based selector */}
         {isStakeholderRoute && <StakeholderProjectSelector />}
         {isAppRoute && !isStakeholderRoute && <ProjectSelector />}
       </div>
 
       {/* Right: notes + connect tools + notifications + user */}
       <div className="flex items-center gap-2">
-        {/* Smart Notes — PO + dev only, not stakeholders */}
+        {/* Smart Notes - PO + dev only, not stakeholders */}
         {isAppRoute && !isStakeholderRoute && <NotesButton />}
 
-        {/* Connect Tools button — PO routes only, positioned near notifications */}
+        {/* Connect Tools button - PO routes only, positioned near notifications */}
         {showConnectTools && (
           <button
             onClick={openModal}
@@ -266,7 +266,7 @@ export function AppTopbar({ onMenuClick }: AppTopbarProps) {
           </button>
         )}
 
-        {/* Help / Onboarding — opens Settings → Help where the user can
+        {/* Help / Onboarding - opens Settings → Help where the user can
             replay the tour or reset page hints. Soft nav (router.push)
             so we don't re-download the entire app on click. */}
         {isAppRoute && (

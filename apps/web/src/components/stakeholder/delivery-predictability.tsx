@@ -40,12 +40,12 @@ import {
  *
  *   1. Big overall score + RAG colour + one-line narrative
  *   2. Three component cards (Commitment Accuracy / Goal Hit Rate / Stability)
- *   3. Per-sprint audit cards — one per recent sprint showing planned,
+ *   3. Per-sprint audit cards - one per recent sprint showing planned,
  *      delivered, ratio, accuracy, whether the sprint hit its goal, and
  *      the recency weight applied
  *   4. Accuracy-trend line chart (symmetric accuracy, not raw ratio)
  *
- * Deliberately DOES NOT use a tooltip on the score — the product decision
+ * Deliberately DOES NOT use a tooltip on the score - the product decision
  * was that this whole section is the tooltip. Every data point is on screen.
  * ────────────────────────────────────────────────────────────────────────── */
 
@@ -71,7 +71,7 @@ interface PredictabilityV2 {
   sprints: SprintAudit[];
   reasonHidden: string | null;
   narrative: string | null;
-  /* Hotfix 13 — cap explanation. When applied=true, ``capped_at`` is the
+  /* Hotfix 13 - cap explanation. When applied=true, ``capped_at`` is the
    * displayed score and ``raw`` is what the un-capped weighted math
    * gave. We surface the gap so stakeholders understand why their
    * components don't sum to the headline number. */
@@ -88,7 +88,7 @@ interface PredictabilityV2 {
     currentAvgSp: number | null;
     priorAvgSp: number | null;
   };
-  /* Absolute output — useful when the team's commitment is small but
+  /* Absolute output - useful when the team's commitment is small but
    * accurate (perfect 5 SP delivery isn't the same as perfect 50 SP). */
   throughput?: {
     avgCompletedSp: number | null;
@@ -112,7 +112,7 @@ function scoreBg(score: number | null): string {
 }
 
 function formatRatio(r: number): string {
-  if (!Number.isFinite(r)) return "—";
+  if (!Number.isFinite(r)) return "-";
   return r.toFixed(2);
 }
 
@@ -138,7 +138,7 @@ function ComponentCard({
   label: string;
   value: number | null;
   description: string;
-  /** Hotfix 13 — relative weight of this component in the composite
+  /** Hotfix 13 - relative weight of this component in the composite
    * score, surfaced so stakeholders can see how the headline number is
    * built up. Numeric (0-100). */
   weight?: number;
@@ -156,7 +156,7 @@ function ComponentCard({
         )}
       </div>
       <p className={cn("mt-2 text-3xl font-bold tabular-nums", scoreColor(value))}>
-        {value === null ? "—" : `${value}%`}
+        {value === null ? "-" : `${value}%`}
       </p>
       <p className="mt-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
         {description}
@@ -255,7 +255,7 @@ function ThroughputCard({
       <div className="mt-2 flex items-baseline gap-2">
         <Gauge className="h-6 w-6 text-[var(--color-brand-secondary)]" />
         <span className="text-2xl font-bold tabular-nums text-[var(--text-primary)]">
-          {avg === null ? "—" : avg}
+          {avg === null ? "-" : avg}
         </span>
         <span className="text-sm font-semibold text-[var(--text-secondary)]">
           SP / sprint
@@ -436,13 +436,13 @@ export function DeliveryPredictability() {
     );
   }
 
-  // Chart payload — accuracy trend across sprints. We reverse so the chart
+  // Chart payload - accuracy trend across sprints. We reverse so the chart
   // reads left-to-right as time progresses (DB returns most-recent-first).
   const chartRows = [...data.sprints]
     .reverse()
     .map((s) => ({ sprint: s.sprintName, accuracy: s.accuracy }));
 
-  // Hotfix 13.2 — simplified delivery trend. One bar per completed
+  // Hotfix 13.2 - simplified delivery trend. One bar per completed
   // sprint showing the absolute SP delivered. Stakeholders read it as
   // "tall bar = good sprint, short bar = bad sprint", and the
   // chronological order makes the past-vs-present comparison obvious
@@ -472,7 +472,7 @@ export function DeliveryPredictability() {
         <span className="mt-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
           Predictability Score
         </span>
-        {/* Hotfix 13 — when a cap is applied (small sample or realism
+        {/* Hotfix 13 - when a cap is applied (small sample or realism
             ceiling), explain the gap between the components-weighted
             math and the displayed score so it doesn't look broken. */}
         {data.cap?.applied && data.cap.raw !== null && (
@@ -498,7 +498,7 @@ export function DeliveryPredictability() {
         )}
       </div>
 
-      {/* Three components — these drive the predictability composite
+      {/* Three components - these drive the predictability composite
           (weights 65 / 25 / 10). Each card shows its weight so the
           stakeholder can see how the headline score is built up. */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
@@ -506,7 +506,7 @@ export function DeliveryPredictability() {
           label="Commitment Accuracy"
           value={data.breakdown.commitmentAccuracy}
           weight={65}
-          description="How close each sprint landed to its planned story points. Over-delivery is penalised equally to under-delivery — both signal inaccurate planning."
+          description="How close each sprint landed to its planned story points. Over-delivery is penalised equally to under-delivery - both signal inaccurate planning."
         />
         <ComponentCard
           label="Sprint Goal Hit Rate"
@@ -522,7 +522,7 @@ export function DeliveryPredictability() {
         />
       </div>
 
-      {/* Hotfix 13 — additional context metrics. These DON'T feed the
+      {/* Hotfix 13 - additional context metrics. These DON'T feed the
           composite score (so they don't double-count) but give two
           extra dimensions of trust: are we trending the right way,
           and is the absolute output meaningful? */}
@@ -543,7 +543,7 @@ export function DeliveryPredictability() {
         </div>
       </div>
 
-      {/* Hotfix 13.2 — simplified delivery trend. One bar per sprint
+      {/* Hotfix 13.2 - simplified delivery trend. One bar per sprint
           showing absolute delivered SP. Works for 1 sprint or 10 with
           no extra cleverness; chronological order makes "past vs
           present" obvious without artificial split lines. */}

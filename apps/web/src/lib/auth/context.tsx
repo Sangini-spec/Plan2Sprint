@@ -37,7 +37,7 @@ const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
-// Hotfix 88 — point the local ``getSupabase()`` alias at the shared
+// Hotfix 88 - point the local ``getSupabase()`` alias at the shared
 // browser singleton in ``lib/supabase/shared-client.ts``. Was a private
 // module-level singleton; multiple per-file singletons race-condition
 // PKCE on stricter browsers (see shared-client.ts for the postmortem).
@@ -120,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Real Supabase auth — use singleton client
+    // Real Supabase auth - use singleton client
     const supabase = getSupabase();
 
     const getSession = async () => {
@@ -165,7 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Sign-out: clear EVERYTHING so the next user starts clean.
         setAppUser(null);
         _clearUserScopedStorage();
-        // In-memory fetch cache survives a soft sign-out otherwise — flush it.
+        // In-memory fetch cache survives a soft sign-out otherwise - flush it.
         invalidateCache();
         return;
       }
@@ -222,7 +222,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.href = "/login";
   }, []);
 
-  // Hotfix 15 — fallback role when ``appUser`` hasn't populated yet.
+  // Hotfix 15 - fallback role when ``appUser`` hasn't populated yet.
   //
   // Was previously "developer", which combined with a brief race in
   // ``DashboardPage`` (where ``loading`` flips false a tick before
@@ -231,7 +231,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // stakeholders. The URL got locked in and they never moved.
   //
   // Aligned with line 141 which uses "product_owner" as the appUser
-  // default when metadata.role is unset. Two layers, same default —
+  // default when metadata.role is unset. Two layers, same default -
   // no inconsistency.
   const role: UserRole = appUser?.role ?? "product_owner";
 

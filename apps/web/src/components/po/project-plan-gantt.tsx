@@ -277,7 +277,7 @@ interface GanttRowProps {
   draggable?: boolean;
   onEditPlanned?: (row: ProjectPlanRow, startCol: number, spanCols: number) => void;
   scheduleOverride?: ScheduleOverride;
-  /* Sprint E — when wired, the row gets a small icon button on hover that
+  /* Sprint E - when wired, the row gets a small icon button on hover that
    * toggles ``WorkItem.hidden_from_gantt``. Hidden rows show an "unhide"
    * (eye) icon and dim styling so the PO can spot them when toggling
    * "Show hidden". */
@@ -296,7 +296,7 @@ function GanttRow({
 }: GanttRowProps) {
   const [hoveringPlanned, setHoveringPlanned] = useState(false);
 
-  // Determine planned bar position — override takes priority
+  // Determine planned bar position - override takes priority
   let hasPlanned: boolean;
   let startCol: number;
   let spanCols: number;
@@ -321,7 +321,7 @@ function GanttRow({
     durationLabel = "";
   }
 
-  // Determine actual bar position — independent of planned
+  // Determine actual bar position - independent of planned
   let hasActualDates = !!(row.actualStart && row.actualEnd);
   let actualStartCol = startCol;
   let actualSpanCols = spanCols;
@@ -356,7 +356,7 @@ function GanttRow({
 
   return (
     <>
-      {/* Left column — feature name + assignees */}
+      {/* Left column - feature name + assignees */}
       <div
         className={cn(
           "group/row px-3 py-2.5 border-b border-[var(--border-subtle)] flex flex-col justify-center min-h-[72px] relative",
@@ -366,7 +366,7 @@ function GanttRow({
         style={{ gridColumn: "1 / 2" }}
         draggable={draggable}
         onDragStart={(e) => draggable && onDragStart?.(e, row.id)}
-        // Hover diagnostic — show the raw upstream status (ADO/Jira) so
+        // Hover diagnostic - show the raw upstream status (ADO/Jira) so
         // the PO can spot rows whose state didn't normalise to Complete
         // even though the team treats it as terminal.
         title={row.sourceStatus ? `ADO/Jira state: ${row.sourceStatus}` : undefined}
@@ -387,7 +387,7 @@ function GanttRow({
             {row.assignees.join(", ")}
           </span>
         )}
-        {/* Sprint E — hide / unhide chip in the row's right gutter. Visible
+        {/* Sprint E - hide / unhide chip in the row's right gutter. Visible
             on row hover so the dense Gantt header doesn't get noisier; the
             PO sees it the moment they consider acting on a row. */}
         {onToggleHidden && (
@@ -412,7 +412,7 @@ function GanttRow({
         )}
       </div>
 
-      {/* Week cells — we render a single spanning cell for the timeline area */}
+      {/* Week cells - we render a single spanning cell for the timeline area */}
       <div
         className="relative border-b border-[var(--border-subtle)] min-h-[72px]"
         style={{ gridColumn: `2 / ${totalWeeks + 2}` }}
@@ -524,12 +524,12 @@ function GanttRow({
           );
         })()}
 
-        {/* TBD indicator — for features without planned dates.
+        {/* TBD indicator - for features without planned dates.
             Sprint D: this used to be a dead chip, which meant features
             on projects whose AI plan never set planned_start/planned_end
             (e.g. Plan2Sprint itself) had no way to invoke the edit
             modal. Now the chip is clickable when ``onEditPlanned`` is
-            wired — opens the edit modal with sensible defaults (start
+            wired - opens the edit modal with sensible defaults (start
             at week 1, duration 1 week). */}
         {!hasPlanned && (
           <div
@@ -618,7 +618,7 @@ export function ProjectPlanGantt() {
   const [scheduleOverrides, setScheduleOverrides] = useState<Map<string, ScheduleOverride>>(new Map());
   const [editingRow, setEditingRow] = useState<{ row: ProjectPlanRow; startCol: number; spanCols: number } | null>(null);
 
-  // Sprint E — visibility. ``includeHidden`` flips the request to surface
+  // Sprint E - visibility. ``includeHidden`` flips the request to surface
   // hidden rows so the PO can unhide them; ``optimisticHides`` is a local
   // override Map keyed by workItemId → next-state so the row disappears /
   // reappears the moment the PO clicks, without waiting for the network.
@@ -646,7 +646,7 @@ export function ProjectPlanGantt() {
   //   2. Invalidate cachedFetch entries so we don't return the 30s
   //      in-memory snapshot from BEFORE the sync.
   // Without these, hitting Refresh on the project plan returns the same
-  // local snapshot — even though items have moved to DONE in ADO since
+  // local snapshot - even though items have moved to DONE in ADO since
   // last sync, the Gantt keeps showing them as in-progress.
   const fetchData = useCallback(async (force = false) => {
     setLoading(true);
@@ -665,7 +665,7 @@ export function ProjectPlanGantt() {
         invalidateCache(`/api/dashboard/project-plan/optimized${q}`);
         invalidateCache(endpoint);
         // Pull fresh ADO state. Awaited so the subsequent fetch reads
-        // the freshly-synced rows. Failures don't block the read — if
+        // the freshly-synced rows. Failures don't block the read - if
         // ADO is unavailable, we still render whatever the DB has.
         try {
           await fetch("/api/integrations/sync/auto", {
@@ -674,7 +674,7 @@ export function ProjectPlanGantt() {
             body: JSON.stringify({ projectId }),
           });
         } catch {
-          // best effort — fall through to the read
+          // best effort - fall through to the read
         }
       }
 
@@ -743,7 +743,7 @@ export function ProjectPlanGantt() {
     }
   }, [scheduleOverrides]);
 
-  // Sprint D — persist Gantt edits.
+  // Sprint D - persist Gantt edits.
   // The override Map is kept for instant UI feedback while the network
   // round-trip lands, but the source of truth is now WorkItem.planned_start
   // / .planned_end on the backend. After the PATCH succeeds we refetch
@@ -777,7 +777,7 @@ export function ProjectPlanGantt() {
           }),
         });
         if (res.ok) {
-          // Persisted — invalidate the cached project-plan so the next
+          // Persisted - invalidate the cached project-plan so the next
           // render reads the new dates from the backend.
           const q = projectId ? `?projectId=${projectId}` : "";
           invalidateCache(`/api/dashboard/project-plan${q}`);
@@ -788,7 +788,7 @@ export function ProjectPlanGantt() {
         // still sees their edit; the next refetch (sync, websocket event)
         // will reconcile.
       } catch {
-        // Network error — keep the optimistic override.
+        // Network error - keep the optimistic override.
       }
     },
     // gridStart is referenced lexically below; it's not yet declared at
@@ -835,7 +835,7 @@ export function ProjectPlanGantt() {
           await fetchData();
         }
       } catch {
-        // Network error — keep the optimistic flip; next sync reconciles.
+        // Network error - keep the optimistic flip; next sync reconciles.
       }
     },
     [optimisticHides, projectId, fetchData],
@@ -863,7 +863,7 @@ export function ProjectPlanGantt() {
       };
     }
 
-    // Find earliest start and latest end — include actual dates too
+    // Find earliest start and latest end - include actual dates too
     const starts = allFeatures
       .filter((f) => f.plannedStart)
       .map((f) => new Date(f.plannedStart!));
@@ -901,7 +901,7 @@ export function ProjectPlanGantt() {
   }, [allFeatures]);
 
   // Apply optimistic visibility flips on top of the server snapshot. When
-  // the PO clicks Hide we don't want to wait for the network round-trip —
+  // the PO clicks Hide we don't want to wait for the network round-trip -
   // the row should disappear immediately.
   const applyOptimistic = useCallback(
     (row: ProjectPlanRow): ProjectPlanRow => {
@@ -915,7 +915,7 @@ export function ProjectPlanGantt() {
 
   // When ``includeHidden`` is OFF, drop any row that the optimistic map
   // marks hidden (or that the server marked hidden). When ON, keep them
-  // all — the row gets dimmed styling + an "unhide" affordance instead.
+  // all - the row gets dimmed styling + an "unhide" affordance instead.
   const visibilityFilter = useCallback(
     (row: ProjectPlanRow) => {
       if (includeHidden) return true;
@@ -957,7 +957,7 @@ export function ProjectPlanGantt() {
       .map(applyOptimistic);
   }, [data, visibilityFilter, applyOptimistic]);
 
-  // Hotfix 34 — split former "unassigned" into two semantic groups.
+  // Hotfix 34 - split former "unassigned" into two semantic groups.
   // The backend now sends ``completed`` and ``outOfPlan`` separately;
   // we keep ``unassignedRows`` (= completed + outOfPlan) above for
   // back-compat with anything that still references it.
@@ -1035,16 +1035,16 @@ export function ProjectPlanGantt() {
             <p className="text-sm text-[var(--text-secondary)] mt-0.5">
               {isOptimized
                 ? (data?.isRebalanced
-                  ? "Showing Rebalanced Plan — features regrouped by AI rescue strategy"
-                  : "AI-optimized sprint plan — features grouped by sprint")
-                : "Feature timeline — Planned vs Actual progress"}
+                  ? "Showing Rebalanced Plan - features regrouped by AI rescue strategy"
+                  : "AI-optimized sprint plan - features grouped by sprint")
+                : "Feature timeline - Planned vs Actual progress"}
             </p>
           </div>
           <div className="flex items-center gap-2">
             {/* View Mode Toggle */}
             <ViewModeToggle viewMode={viewMode} onChange={setViewMode} />
 
-            {/* Sprint E — Show / Hide hidden features. Only renders when
+            {/* Sprint E - Show / Hide hidden features. Only renders when
                 the project actually has hidden rows (or when toggle is
                 already on, so the PO can flip back). Tucked next to the
                 refresh/phase-manager group so it's discoverable but
@@ -1075,7 +1075,7 @@ export function ProjectPlanGantt() {
               </button>
             )}
 
-            {/* Phase Manager — only in fetched mode */}
+            {/* Phase Manager - only in fetched mode */}
             {!isOptimized && (
               <button
                 onClick={() => {
@@ -1090,7 +1090,7 @@ export function ProjectPlanGantt() {
             <button
               onClick={() => fetchData(true)}
               className="p-1.5 rounded-lg hover:bg-[var(--bg-surface-raised)] transition-colors"
-              title="Refresh — pulls fresh data from ADO/Jira"
+              title="Refresh - pulls fresh data from ADO/Jira"
             >
               <RefreshCw
                 className={cn(
@@ -1160,7 +1160,7 @@ export function ProjectPlanGantt() {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-brand-secondary)] opacity-75" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-brand-secondary)]" />
           </span>
-          Live — updates automatically from GitHub activity and developer progress
+          Live - updates automatically from GitHub activity and developer progress
         </div>
       )}
 
@@ -1283,7 +1283,7 @@ export function ProjectPlanGantt() {
                       >
                         {isOptimized
                           ? "No features assigned to this sprint"
-                          : "No features assigned — drag features here or set up assignment rules"}
+                          : "No features assigned - drag features here or set up assignment rules"}
                       </div>
                     )}
                     {!isCollapsed &&
@@ -1341,7 +1341,7 @@ export function ProjectPlanGantt() {
 
               {/* ── Out of Plan section (Hotfix 34) ──
                   Features with open stories that aren't in the current
-                  sprint plan — usually means the plan is stale because
+                  sprint plan - usually means the plan is stale because
                   features were added after the last regeneration.
                   When ``newSincePlan.count > 0`` we show a thin banner
                   above the section pointing at the stale-plan cause and
@@ -1442,7 +1442,7 @@ export function ProjectPlanGantt() {
         </>
       )}
 
-      {/* Phase Manager Sheet — only in fetched mode */}
+      {/* Phase Manager Sheet - only in fetched mode */}
       {!isOptimized && (
         <PhaseManagerSheet
           open={phaseManagerOpen}

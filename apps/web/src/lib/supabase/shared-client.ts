@@ -16,7 +16,7 @@
  * default config; Chrome with strict third-party cookie blocking) the
  * race between `signInWithOAuth` setting the verifier on one instance
  * and the page hydrating with another instance manifested as
- * "have to login twice — first attempt bounces back to /login
+ * "have to login twice - first attempt bounces back to /login
  * silently".
  *
  * Single shared instance closes that race. Every call site imports

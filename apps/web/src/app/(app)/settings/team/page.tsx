@@ -101,7 +101,7 @@ export default function TeamSettingsPage() {
     fetchData();
   }, [fetchData]);
 
-  // Hotfix 62A — auto-refresh so accepted invitations move into the
+  // Hotfix 62A - auto-refresh so accepted invitations move into the
   // Members list (and disappear from "Pending Invitations") without the
   // PO ever needing to hit refresh.
   //
@@ -112,7 +112,7 @@ export default function TeamSettingsPage() {
   //     where the PO leaves the tab open in the foreground while the
   //     invitee accepts.
   //
-  // We deliberately do NOT toggle the loading spinner here — fetchData
+  // We deliberately do NOT toggle the loading spinner here - fetchData
   // only ever sets loading=false at the end, so background refetches
   // update silently and the page doesn't flash on every poll.
   useEffect(() => {
@@ -417,7 +417,7 @@ export default function TeamSettingsPage() {
         </div>
       </DashboardPanel>
 
-      {/* Hotfix 86 — pending org-join requests (founder-only). Component
+      {/* Hotfix 86 - pending org-join requests (founder-only). Component
           renders nothing for non-founders or when there are no requests. */}
       {canManage && <JoinRequestsSection />}
 
@@ -458,7 +458,7 @@ export default function TeamSettingsPage() {
                   <Badge variant="brand">{roleLabel}</Badge>
                   <span className="text-xs text-[var(--text-secondary)] flex items-center gap-1">
                     <Clock className="h-3 w-3" />
-                    {daysLeft !== null ? `${daysLeft}d left` : "—"}
+                    {daysLeft !== null ? `${daysLeft}d left` : "-"}
                   </span>
                   <div className="flex gap-1 justify-end">
                     <Button
@@ -538,7 +538,7 @@ export default function TeamSettingsPage() {
                   Assign Projects
                 </h2>
                 <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-                  {assignTarget?.displayName} — Stakeholder
+                  {assignTarget?.displayName} - Stakeholder
                 </p>
               </div>
               <button

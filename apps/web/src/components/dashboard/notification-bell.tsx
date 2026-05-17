@@ -101,7 +101,7 @@ export function NotificationBell() {
         setNotifications(data.notifications ?? []);
       }
     } catch {
-      // API unavailable — keep existing state
+      // API unavailable - keep existing state
     }
   }, []);
 

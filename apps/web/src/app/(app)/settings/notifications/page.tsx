@@ -8,13 +8,13 @@ import { Button } from "@/components/ui";
 import { useAuth } from "@/lib/auth/context";
 
 // ─────────────────────────────────────────────────────────────────────
-//  Notification Center — Settings → Notifications
+//  Notification Center - Settings → Notifications
 //
 //  Two sections:
-//    1. Digest Schedule (NEW)  — controls WHEN morning / evening
+//    1. Digest Schedule (NEW)  - controls WHEN morning / evening
 //       digest notifications fire for this user. Backed by
 //       /api/notifications/schedule.
-//    2. Notification Channels  — controls WHERE each notification type
+//    2. Notification Channels  - controls WHERE each notification type
 //       gets routed (Slack / Teams / Email / In-App). Existing UI;
 //       client-side state only for now (not yet wired to a backend).
 // ─────────────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ const INITIAL_PREFERENCES: NotificationPreference[] = [
   {
     id: "weekly-report",
     label: "Weekly Project Report",
-    description: "Automated weekly summary of project progress, delivery metrics, and epic status — delivered every Monday",
+    description: "Automated weekly summary of project progress, delivery metrics, and epic status - delivered every Monday",
     channels: { slack: false, teams: false, email: true, inApp: true },
     roles: ["stakeholder", "owner", "admin", "product_owner", "engineering_manager"],
   },
@@ -78,7 +78,7 @@ const CHANNEL_LABELS: { key: Channel; label: string }[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────
-//  Digest schedule types — match the API's camelCase contract.
+//  Digest schedule types - match the API's camelCase contract.
 // ─────────────────────────────────────────────────────────────────────
 
 type ScheduleMode = "every_weekday" | "alternate_days" | "weekly" | "custom";
@@ -275,7 +275,7 @@ function DigestScheduleSection({ role }: { role: string }) {
     setSchedule((s) => {
       if (!dayPickerEnabled) return s;
       if (weeklyMode) {
-        // Only one day in weekly mode — clicking another picks it.
+        // Only one day in weekly mode - clicking another picks it.
         return { ...s, selectedDays: [d] };
       }
       // Custom mode: toggle multi-select.
@@ -319,8 +319,8 @@ function DigestScheduleSection({ role }: { role: string }) {
       <div className="space-y-5">
         <p className="text-sm text-[var(--text-secondary)]">
           Choose when the morning (9 AM) and evening (5 PM) project digest
-          notifications fire for you. Other notifications — blockers, sprint
-          alerts, plan ready — always fire instantly regardless of this
+          notifications fire for you. Other notifications - blockers, sprint
+          alerts, plan ready - always fire instantly regardless of this
           schedule.
         </p>
 
@@ -418,7 +418,7 @@ function DigestScheduleSection({ role }: { role: string }) {
                   Morning digest
                 </p>
                 <p className="text-xs text-[var(--text-secondary)]">
-                  9:00 AM IST — start-of-day status across your projects
+                  9:00 AM IST - start-of-day status across your projects
                 </p>
               </div>
               <ToggleSwitch
@@ -434,7 +434,7 @@ function DigestScheduleSection({ role }: { role: string }) {
                   Evening summary
                 </p>
                 <p className="text-xs text-[var(--text-secondary)]">
-                  5:00 PM IST — end-of-day completion + flags
+                  5:00 PM IST - end-of-day completion + flags
                 </p>
               </div>
               <ToggleSwitch
@@ -447,7 +447,7 @@ function DigestScheduleSection({ role }: { role: string }) {
           </div>
           {bothSlotsOff && (
             <p className="mt-2 text-xs text-[var(--color-rag-amber)]">
-              Both slots are off — you&apos;ll receive no digests at all. Event
+              Both slots are off - you&apos;ll receive no digests at all. Event
               alerts (blockers, plan-ready, sprint health) still fire normally.
             </p>
           )}
@@ -518,7 +518,7 @@ export default function NotificationsSettingsPage() {
         </p>
       </div>
 
-      {/* Schedule control (NEW — backed by /api/notifications/schedule) */}
+      {/* Schedule control (NEW - backed by /api/notifications/schedule) */}
       <DigestScheduleSection role={role} />
 
       {/* Existing channel-routing UI. Note: still client-side state only;

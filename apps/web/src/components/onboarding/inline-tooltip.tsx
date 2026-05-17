@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * InlineTooltip — small contextual popover that appears next to a
+ * InlineTooltip - small contextual popover that appears next to a
  * specific UI element during a tour step.
  *
  * Different from the main banner: it points at one control, has its
@@ -197,7 +197,7 @@ export function InlineTooltips() {
     return currentStep.tooltips ?? [];
   }, [currentStep, isActive]);
 
-  // Reset dismissed list when the step changes — each step's tooltips
+  // Reset dismissed list when the step changes - each step's tooltips
   // are independent.
   useEffect(() => {
     setDismissed(new Set());

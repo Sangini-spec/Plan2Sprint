@@ -66,7 +66,7 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
   const [syncStatuses, setSyncStatuses] = useState<Map<ToolType, SyncStatus>>(new Map());
   const [modalOpen, setModalOpen] = useState(false);
 
-  // Check Jira OAuth status from backend — merge with existing connection to preserve selectedProjects
+  // Check Jira OAuth status from backend - merge with existing connection to preserve selectedProjects
   const refreshJiraStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/integrations/jira/status");
@@ -98,7 +98,7 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
             ];
           });
         } else {
-          // Backend says Jira is NOT connected — remove stale localStorage entry
+          // Backend says Jira is NOT connected - remove stale localStorage entry
           setConnections((prev) => {
             const hadJira = prev.some((c) => c.tool === "jira");
             if (hadJira) {
@@ -111,11 +111,11 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch {
-      // Ignore — Jira status check is optional
+      // Ignore - Jira status check is optional
     }
   }, []);
 
-  // Check ADO OAuth status from backend — merge with existing connection to preserve selectedProjects
+  // Check ADO OAuth status from backend - merge with existing connection to preserve selectedProjects
   const refreshAdoStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/integrations/ado/status");
@@ -147,7 +147,7 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
             ];
           });
         } else {
-          // Backend says ADO is NOT connected — remove stale localStorage entry
+          // Backend says ADO is NOT connected - remove stale localStorage entry
           setConnections((prev) => {
             const hadAdo = prev.some((c) => c.tool === "ado");
             if (hadAdo) {
@@ -160,11 +160,11 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch {
-      // Ignore — ADO status check is optional
+      // Ignore - ADO status check is optional
     }
   }, []);
 
-  // Check GitHub token status from backend — a developer may have persisted their token
+  // Check GitHub token status from backend - a developer may have persisted their token
   const refreshGithubStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/integrations/github/status");
@@ -193,7 +193,7 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch {
-      // Ignore — GitHub status check is optional
+      // Ignore - GitHub status check is optional
     }
   }, []);
 
@@ -464,10 +464,10 @@ export function IntegrationProvider({ children }: { children: ReactNode }) {
         let res: Response;
 
         if (tool === "jira") {
-          // Jira uses OAuth — backend has stored tokens, just GET
+          // Jira uses OAuth - backend has stored tokens, just GET
           res = await fetch("/api/integrations/jira/projects");
         } else if (tool === "ado") {
-          // ADO uses OAuth — backend has stored tokens, just GET
+          // ADO uses OAuth - backend has stored tokens, just GET
           res = await fetch("/api/integrations/ado/projects");
         } else {
           return [];

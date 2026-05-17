@@ -49,7 +49,7 @@ function DevOrgCheckPanel({ platform, orgConnected, onClose }: DevOrgCheckProps)
   }
 
   if (orgConnected) {
-    // Scenario A: Org is connected — map this developer
+    // Scenario A: Org is connected - map this developer
     return (
       <motion.div
         initial={{ opacity: 0, height: 0 }}
@@ -69,7 +69,7 @@ function DevOrgCheckPanel({ platform, orgConnected, onClose }: DevOrgCheckProps)
               </p>
               <p className="text-xs text-[var(--text-secondary)] mt-1 leading-relaxed">
                 {platformName} was set up by your admin. We&apos;re matching
-                your account now — your standup reports will arrive in your{" "}
+                your account now - your standup reports will arrive in your{" "}
                 {platform === "slack" ? "Slack DMs" : "Teams chats"} once
                 complete.
               </p>
@@ -89,7 +89,7 @@ function DevOrgCheckPanel({ platform, orgConnected, onClose }: DevOrgCheckProps)
     );
   }
 
-  // Scenario B: Org NOT connected — tell developer to ask admin
+  // Scenario B: Org NOT connected - tell developer to ask admin
   return (
     <motion.div
       initial={{ opacity: 0, height: 0 }}
@@ -153,7 +153,7 @@ export function DeliveryChannelsSection() {
   const { role } = useAuth();
   const isAdmin = isPORole(role);
 
-  // Hotfix 73/74 — non-PO callers use /me/status (per-user link state).
+  // Hotfix 73/74 - non-PO callers use /me/status (per-user link state).
   // PO callers keep the org-level /status.
   const { slack, teams, refreshStatus } = useChannelStatus(
     isAdmin ? "org" : "me"
@@ -169,8 +169,8 @@ export function DeliveryChannelsSection() {
       // PO/Admin: show preflight transparency modal before workspace OAuth
       setPreflightPlatform(platform);
     } else {
-      // Hotfix 73/74 — Developer/Stakeholder: directly initiate per-user
-      // OAuth. The DevOrgCheckPanel email-match flow is gone — we now do
+      // Hotfix 73/74 - Developer/Stakeholder: directly initiate per-user
+      // OAuth. The DevOrgCheckPanel email-match flow is gone - we now do
       // proper OAuth so the user picks (and consents to) which Slack /
       // Teams identity gets linked.
       const endpoint =
@@ -215,12 +215,12 @@ export function DeliveryChannelsSection() {
           </p>
         </div>
 
-        {/* Hotfix 73/74 — DevOrgCheckPanel removed. Non-PO callers now go
+        {/* Hotfix 73/74 - DevOrgCheckPanel removed. Non-PO callers now go
             through proper per-user OAuth via /me/connect, which gives them
             consent + identity selection for free. The card itself shows
             their per-user link state via useChannelStatus("me"). */}
 
-        {/* Platform cards — side by side on sm+, stacked on mobile */}
+        {/* Platform cards - side by side on sm+, stacked on mobile */}
         <div className="grid gap-4 sm:grid-cols-2">
           <DeliveryChannelCard
             platform="slack"

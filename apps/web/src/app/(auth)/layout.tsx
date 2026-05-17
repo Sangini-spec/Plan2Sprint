@@ -26,7 +26,7 @@ export default function AuthLayout({
           </Link>
         </div>
 
-        {/* Form area — vertically centered, compact */}
+        {/* Form area - vertically centered, compact */}
         <div className="flex-1 flex items-center justify-center px-6 py-4 overflow-y-auto">
           <div className="w-full max-w-md">
             {children}

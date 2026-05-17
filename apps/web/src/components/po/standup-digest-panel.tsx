@@ -181,7 +181,7 @@ export function StandupDigestPanel() {
   // `force=true` makes the backend (a) trigger an ADO/Jira sync first
   // so DB statuses are fresh, and (b) regenerate the StandupReport rows
   // from the now-fresh data. Without it, a Refresh click just re-pulls
-  // whatever the local DB happens to think is current — which can mean
+  // whatever the local DB happens to think is current - which can mean
   // showing items as IN_PROGRESS that the dev already closed in ADO
   // hours ago.
   const fetchDigest = useCallback(async (force = false) => {
@@ -295,7 +295,7 @@ export function StandupDigestPanel() {
         {/* Weekend fallback notice */}
         {digest?.isWeekendFallback && digest.effectiveDate && (
           <div className="rounded-lg border border-[var(--color-brand-secondary)]/30 bg-[var(--color-brand-secondary)]/5 px-3 py-2 text-xs text-[var(--text-secondary)]">
-            It&apos;s the weekend — no new standups are generated. Showing the most recent weekday&apos;s data ({new Date(digest.effectiveDate).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}).
+            It&apos;s the weekend - no new standups are generated. Showing the most recent weekday&apos;s data ({new Date(digest.effectiveDate).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}).
           </div>
         )}
 
@@ -449,7 +449,7 @@ export function StandupDigestPanel() {
                           </p>
                         )}
 
-                        {/* AI-generated commit summary — same data the dev's
+                        {/* AI-generated commit summary - same data the dev's
                             own /dev/standup view renders. Shown as a
                             bordered paragraph block instead of a long row
                             of commit titles. Only renders when the
@@ -604,7 +604,7 @@ export function StandupDigestPanel() {
                           </div>
                         )}
 
-                        {/* Empty state — fully inactive */}
+                        {/* Empty state - fully inactive */}
                         {report.recentActivity.length === 0 &&
                           report.inFlight.length === 0 &&
                           report.blockers.length === 0 &&
@@ -618,7 +618,7 @@ export function StandupDigestPanel() {
                             </div>
                           )}
 
-                        {/* Sprint contributions expander — Hotfix 42: always
+                        {/* Sprint contributions expander - Hotfix 42: always
                             rendered so the PO can pull up the sprint-wide
                             picture for any developer, even when the recent
                             window is empty. Loaded lazily on first open. */}

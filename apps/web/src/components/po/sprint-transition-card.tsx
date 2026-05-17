@@ -33,7 +33,7 @@ interface SprintCompletionData {
 }
 
 /**
- * Sprint Transition Card — appears on the PO dashboard when the platform
+ * Sprint Transition Card - appears on the PO dashboard when the platform
  * has auto-completed a sprint. Shows completion summary, spillover info,
  * and links to retrospective & next sprint planning.
  *
@@ -130,7 +130,7 @@ export function SprintTransitionCard() {
         }
       }
     } catch {
-      // Silent fail — card just won't show
+      // Silent fail - card just won't show
     }
     setLoading(false);
   }, [projectId]);
@@ -152,7 +152,7 @@ export function SprintTransitionCard() {
 
   return (
     <DashboardPanel
-      title={isSuccess ? "Sprint Completed — All Items Done!" : "Sprint Completed"}
+      title={isSuccess ? "Sprint Completed - All Items Done!" : "Sprint Completed"}
       icon={CheckCircle2}
       actions={
         <div className="flex items-center gap-2">
@@ -178,8 +178,8 @@ export function SprintTransitionCard() {
             </h3>
             <p className="text-sm text-[var(--text-secondary)]">
               {isSuccess
-                ? "All work items completed — sprint auto-closed by Plan2Sprint"
-                : "Sprint deadline reached — auto-closed by Plan2Sprint"}
+                ? "All work items completed - sprint auto-closed by Plan2Sprint"
+                : "Sprint deadline reached - auto-closed by Plan2Sprint"}
             </p>
           </div>
           <div className="text-right">

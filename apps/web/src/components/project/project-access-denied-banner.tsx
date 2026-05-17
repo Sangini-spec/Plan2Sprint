@@ -4,7 +4,7 @@
  * ProjectAccessDeniedBanner (Hotfix 91).
  *
  * Shown above the dashboard content when the selected project is
- * something the caller can't actually see — so they get a clear
+ * something the caller can't actually see - so they get a clear
  * "you don't have access" message instead of misleading 0s.
  *
  * Decides via a single ``GET /api/projects/{id}/access`` call. That
@@ -85,7 +85,7 @@ export function ProjectAccessDeniedBanner({
   }
 
   // Project name comes from the API response in priority order:
-  //   1. ``access.projectName`` (server-authoritative — set on both
+  //   1. ``access.projectName`` (server-authoritative - set on both
   //      success and denial responses, so it survives a stale
   //      frontend selected-project context or a URL-only navigation)
   //   2. ``selectedProject?.name`` (frontend context fallback)

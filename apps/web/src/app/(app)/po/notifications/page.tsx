@@ -176,7 +176,7 @@ export default function PONotificationsPage() {
         setNotifications(data.notifications ?? []);
       }
     } catch {
-      // API unavailable — keep existing state
+      // API unavailable - keep existing state
     } finally {
       setLoading(false);
     }
@@ -720,7 +720,7 @@ function ProjectChannelManager({ platform }: { platform: Platform }) {
         setCreateError(err.detail || "Failed to create channel");
       }
     } catch (e) {
-      setCreateError("Network error — please try again");
+      setCreateError("Network error - please try again");
     }
     setCreating(null);
   };

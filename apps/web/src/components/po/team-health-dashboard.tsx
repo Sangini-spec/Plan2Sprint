@@ -324,12 +324,12 @@ function TrendArrow({ trend }: { trend: "up" | "down" | "stable" }) {
 }
 
 // ---------------------------------------------------------------------------
-// VelocityCell — inline progress bar for sprint completion rate
+// VelocityCell - inline progress bar for sprint completion rate
 // ---------------------------------------------------------------------------
 
 function VelocityCell({ velocity }: { velocity?: DeveloperVelocity }) {
   if (!velocity || velocity.committedSp <= 0) {
-    return <span className="text-xs text-[var(--text-tertiary)]">—</span>;
+    return <span className="text-xs text-[var(--text-tertiary)]">-</span>;
   }
 
   const pct = velocity.completionPct;
@@ -1163,7 +1163,7 @@ export function TeamHealthDashboard() {
               className="text-[var(--color-rag-green)]"
             />
             <p className="text-sm font-medium text-[var(--color-rag-green)]">
-              No recommendations — team is healthy!
+              No recommendations - team is healthy!
             </p>
           </div>
         )}

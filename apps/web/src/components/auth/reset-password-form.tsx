@@ -24,7 +24,7 @@ import { Lock, AlertCircle, CheckCircle2, Eye, EyeOff, Loader2 } from "lucide-re
 //      We then explicitly sign the user out (so the recovery session
 //      doesn't linger) and redirect to /login with a success banner.
 //
-// The previous version of this file skipped step 2 — it assumed the
+// The previous version of this file skipped step 2 - it assumed the
 // /auth/callback route had already exchanged the code. It hadn't, in
 // the cases where the ``type=recovery`` query param got lost in the
 // Supabase /auth/v1/verify redirect chain. Without the exchange, the
@@ -34,14 +34,14 @@ import { Lock, AlertCircle, CheckCircle2, Eye, EyeOff, Loader2 } from "lucide-re
 // entirely. Doing the exchange here removes that whole class of bug.
 //
 // States this component handles:
-//   - "exchanging" — running exchangeCodeForSession on mount
-//   - "form"       — showing the new-password form (after exchange OK,
+//   - "exchanging" - running exchangeCodeForSession on mount
+//   - "form"       - showing the new-password form (after exchange OK,
 //                    OR when the user navigated here without ?code while
-//                    already signed in — e.g. clicking "Change password"
+//                    already signed in - e.g. clicking "Change password"
 //                    from settings)
-//   - "exchange_failed" — the code is invalid / expired / already used;
+//   - "exchange_failed" - the code is invalid / expired / already used;
 //                    show a clear message and a link back to /forgot-password
-//   - "success"    — password updated; auto-redirect to /login
+//   - "success"    - password updated; auto-redirect to /login
 
 type Phase = "exchanging" | "form" | "exchange_failed" | "success";
 
@@ -70,7 +70,7 @@ export function ResetPasswordForm() {
       (async () => {
         const { error: ex } = await supabase.auth.exchangeCodeForSession(code);
         if (ex) {
-          // The most common cause of failure is "code already used" —
+          // The most common cause of failure is "code already used" -
           // the user clicked the email link from a previewer (Outlook,
           // some corporate spam scanners pre-fetch links to scan them),
           // burning the one-time code before the human got to it. Show
@@ -91,7 +91,7 @@ export function ResetPasswordForm() {
     // Case B: no ``code`` query param. Either the user navigated here
     //         directly while already signed in (legitimate change-
     //         password flow), or someone bookmarked the page. Probe
-    //         the session — if signed in, show the form; otherwise
+    //         the session - if signed in, show the form; otherwise
     //         redirect to /forgot-password so they can start over.
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -130,7 +130,7 @@ export function ResetPasswordForm() {
 
     // Sign the user out so the recovery session doesn't linger as a
     // valid auth session (would let them stay signed in without ever
-    // typing the new password back in — confusing UX, plus it makes
+    // typing the new password back in - confusing UX, plus it makes
     // session-revocation-on-password-change weaker). They re-log with
     // the password they just chose, fresh JWT, clean state.
     await supabase.auth.signOut();

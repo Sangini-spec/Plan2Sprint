@@ -1,24 +1,24 @@
 "use client";
 
 /**
- * EmptyDashboard — fallback shown on any role's dashboard when the
+ * EmptyDashboard - fallback shown on any role's dashboard when the
  * user has no project selected.
  *
  * Three states it can render based on the user + load state:
  *
- *   1. LOADING — show "Your dashboard is loading…" while the project
+ *   1. LOADING - show "Your dashboard is loading…" while the project
  *      list is still being fetched. Without this gate the empty
  *      state flashes for ~300ms during every login before real data
  *      arrives, which made the dashboard feel broken.
  *
- *   2. NEW USER — first-time visit, no projects ever connected to
+ *   2. NEW USER - first-time visit, no projects ever connected to
  *      this account / org. Show the "Welcome to Plan2Sprint" card
  *      with role-appropriate CTA. Detected via
  *      ``appUser.onboarding_completed=false``.
  *
- *   3. RETURNING USER, NO PROJECTS — they've been around (completed
+ *   3. RETURNING USER, NO PROJECTS - they've been around (completed
  *      or dismissed onboarding before) but currently have nothing.
- *      Skip the Welcome framing — show a quieter "no projects" card
+ *      Skip the Welcome framing - show a quieter "no projects" card
  *      with role-appropriate guidance. Non-privileged users get
  *      "ask your PO to add you"; privileged ones get a direct
  *      Connect Tools CTA.
@@ -37,7 +37,7 @@ export function EmptyDashboard() {
   const { loading } = useSelectedProject();
   const isPrivileged = PO_DASHBOARD_ROLES.includes(role);
   // "Returning user" if any of:
-  //   - they've ever connected a project tool (hasAnyConnection) —
+  //   - they've ever connected a project tool (hasAnyConnection) -
   //     the primary signal: once you've connected Jira/ADO/GitHub
   //     you're not "new to Plan2Sprint" anymore
   //   - they've stamped onboarding_completed=true (took the tour
@@ -85,7 +85,7 @@ export function EmptyDashboard() {
               Your Product Owner hasn&apos;t added you to any projects in
               Plan2Sprint. Once they assign you to a project, you&apos;ll see
               live portfolio health, delivery predictability, and weekly reports
-              here automatically — no tool setup needed on your end.
+              here automatically - no tool setup needed on your end.
             </>
           ) : (
             <>
@@ -135,7 +135,7 @@ export function EmptyDashboard() {
   }
 
   // -------------------- Privileged + RETURNING USER (no projects right now) --------------------
-  // Quieter card — they've been here before so no "Welcome to Plan2Sprint"
+  // Quieter card - they've been here before so no "Welcome to Plan2Sprint"
   // framing. Just nudge them to reconnect tools.
   if (isReturningUser) {
     return (

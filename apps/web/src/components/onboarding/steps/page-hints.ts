@@ -20,7 +20,7 @@ export const PAGE_HINTS: PageHint[] = [
     pathname: "/po/retro",
     title: "Retrospectives",
     body:
-      "AI-driven failure analysis runs after each sprint — what went well, what didn't, and action items that carry forward. Projects past their target launch get a 'Project Cycle Concluded' card here.",
+      "AI-driven failure analysis runs after each sprint - what went well, what didn't, and action items that carry forward. Projects past their target launch get a 'Project Cycle Concluded' card here.",
   },
   {
     pathname: "/po/health",
@@ -60,7 +60,7 @@ export const PAGE_HINTS: PageHint[] = [
     pathname: "/stakeholder/epics",
     title: "Epics & Milestones",
     body:
-      "Track the work items you actually care about — high-level epics and their milestones — without drowning in ticket-level detail.",
+      "Track the work items you actually care about - high-level epics and their milestones - without drowning in ticket-level detail.",
   },
   {
     pathname: "/stakeholder/health",

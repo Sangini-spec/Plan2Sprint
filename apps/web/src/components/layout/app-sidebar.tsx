@@ -152,7 +152,7 @@ interface AppSidebarProps {
 export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarProps) {
   const pathname = usePathname();
   const { appUser, role, loading } = useAuth();
-  // Hotfix 89 — don't render role-specific nav until auth has actually
+  // Hotfix 89 - don't render role-specific nav until auth has actually
   // resolved a user. Was previously computing ``navItems`` from the
   // ``role`` fallback ("product_owner"), which on a hard refresh gave
   // every user a brief flash of the PO menu before the Supabase
@@ -160,7 +160,7 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
   // with the correct role's items. That flash is both a UX bug and a
   // role-leak (devs / stakeholders briefly see PO-only links like
   // ``/po/planning``). The fallback role is kept for routing safety
-  // (see auth/context.tsx line ~236) — we just refuse to render
+  // (see auth/context.tsx line ~236) - we just refuse to render
   // nav based on it.
   const authReady = !loading && !!appUser;
   const navItems = authReady ? getNavForRole(role) : [];
@@ -181,7 +181,7 @@ export function AppSidebar({ collapsed, onToggle, onMobileClose }: AppSidebarPro
         const teamsConnected = teamsRes.status === "fulfilled" && teamsRes.value?.connected;
         setHasChannelConnected(slackConnected || teamsConnected);
       } catch {
-        // Ignore — dot just won't show
+        // Ignore - dot just won't show
       }
     }
     checkChannels();

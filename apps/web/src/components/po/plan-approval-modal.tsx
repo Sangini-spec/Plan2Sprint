@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { Button, Textarea } from "@/components/ui";
 
 // ---------------------------------------------------------------------------
-// Slim confirmation dialog — the full plan view is the workspace now.
+// Slim confirmation dialog - the full plan view is the workspace now.
 // ---------------------------------------------------------------------------
 
 interface PlanApprovalModalProps {
@@ -46,7 +46,7 @@ export function PlanApprovalModal({
       } else {
         body.status = "REJECTED";
         body.rejectionFeedback =
-          feedback.trim() || "Rejected by PO — regenerate with adjustments";
+          feedback.trim() || "Rejected by PO - regenerate with adjustments";
       }
 
       const res = await fetch("/api/sprints", {

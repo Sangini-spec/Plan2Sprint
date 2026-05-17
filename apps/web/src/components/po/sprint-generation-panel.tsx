@@ -37,7 +37,7 @@ interface PlanData {
   successProbability: number | null;
 }
 
-// Hotfix 32 — Step E: in-flight stub returned alongside the READY plan
+// Hotfix 32 - Step E: in-flight stub returned alongside the READY plan
 // so the badge stays correct while the data continues to display.
 interface InflightStub {
   id: string;
@@ -72,7 +72,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
       const res = await cachedFetch(`/api/sprints${params}`);
       if (res.ok) {
         const data = res.data as { plan?: PlanData; inflight?: InflightStub | null };
-        // Hotfix 32 — Step E: read inflight stub if present (GENERATING / FAILED).
+        // Hotfix 32 - Step E: read inflight stub if present (GENERATING / FAILED).
         setInflight(data.inflight ?? null);
         if (data.plan) {
           setPlan(data.plan);
@@ -80,10 +80,10 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
         }
       }
     } catch {
-      // API unavailable — leave plan as null so "Optimize" button shows
+      // API unavailable - leave plan as null so "Optimize" button shows
     }
 
-    // No real plan exists — show the generate prompt
+    // No real plan exists - show the generate prompt
     setPlan(null);
   }, [projectId]);
 
@@ -94,7 +94,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
 
   // ---------- Generate / Optimize sprint plan ----------
 
-  // Hotfix 24 — backend now accepts the request and runs generation in
+  // Hotfix 24 - backend now accepts the request and runs generation in
   // the background, returning 202 immediately. We poll the existing
   // ``/api/sprints/plan`` endpoint until the latest plan flips out of
   // GENERATING. This avoids the 30-60s proxy connection drop that used
@@ -103,7 +103,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
   const POLL_INTERVAL_MS = 3000;
   const POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 min hard cap
 
-  // Hotfix 27 — poll a SPECIFIC plan id returned by the POST handler.
+  // Hotfix 27 - poll a SPECIFIC plan id returned by the POST handler.
   // Previously we waited for "any new plan id different from the one
   // we knew about", which falsely matched stale FAILED rows from earlier
   // attempts and killed the spinner before the new generation began.
@@ -141,7 +141,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
           return;
         }
       } catch {
-        // network blip — keep polling until timeout
+        // network blip - keep polling until timeout
       }
     }
     onFailure(
@@ -164,14 +164,14 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
         }),
       });
 
-      // Backend returns 202 Accepted (Hotfix 24) — kick off polling.
+      // Backend returns 202 Accepted (Hotfix 24) - kick off polling.
       if (res.ok) {
         const acceptedBody = (await res.json().catch(() => null)) as
           | { planId?: string }
           | null;
         const targetPlanId = acceptedBody?.planId;
         if (!targetPlanId) {
-          // Defensive — shouldn't happen post-Hotfix-27, but if backend
+          // Defensive - shouldn't happen post-Hotfix-27, but if backend
           // didn't return a planId, fall back to refresh-only behaviour.
           invalidateCache("/api/sprints");
           await fetchSprintData();
@@ -258,7 +258,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
     );
   }
 
-  // No plan exists yet — show optimize button. Hotfix 32 — Step E:
+  // No plan exists yet - show optimize button. Hotfix 32 - Step E:
   // surface inflight state so the user sees "Generating..." instead of
   // "Optimize" while the first plan is being created.
   if (!plan) {
@@ -327,7 +327,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
     );
   }
 
-  // Plan exists — show details
+  // Plan exists - show details
   // Normalize: API should return 0-1 but guard against old seed data (e.g. 82 instead of 0.82)
   const rawConfidence = plan.confidenceScore ?? 0;
   const normalizedConfidence = rawConfidence > 1 ? rawConfidence / 100 : rawConfidence;
@@ -353,7 +353,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
           <Badge variant={statusBadgeVariant[plan.status]}>
             {plan.status.replace(/_/g, " ")}
           </Badge>
-          {/* Hotfix 32 (revised) — subtle inline inflight indicator,
+          {/* Hotfix 32 (revised) - subtle inline inflight indicator,
               does NOT override the plan status badge */}
           {inflight?.status === "GENERATING" && (
             <span className="flex items-center gap-1 text-[10px] text-[var(--color-brand-secondary)]">
@@ -427,7 +427,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
               Total SP
             </p>
             <p className="text-lg font-bold text-[var(--text-primary)] tabular-nums">
-              {plan.totalStoryPoints ?? "—"}
+              {plan.totalStoryPoints ?? "-"}
             </p>
           </div>
           <div className="text-center border-x border-[var(--border-subtle)]">
@@ -435,7 +435,7 @@ export function SprintGenerationPanel({ onViewPlan }: SprintGenerationPanelProps
               AI Model
             </p>
             <p className="text-xs font-semibold text-[var(--text-primary)] truncate px-1">
-              {plan.aiModelUsed ?? "—"}
+              {plan.aiModelUsed ?? "-"}
             </p>
           </div>
           <div className="text-center">

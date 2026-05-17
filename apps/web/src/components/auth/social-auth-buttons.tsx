@@ -10,7 +10,7 @@ interface SocialAuthButtonsProps {
 export function SocialAuthButtons({ className }: SocialAuthButtonsProps) {
   const handleGoogleLogin = async () => {
     const supabase = getSupabase();
-    // Hotfix 14 — force the Google account picker.
+    // Hotfix 14 - force the Google account picker.
     //
     // Without ``prompt=select_account``, Google's default OAuth flow
     // remembers which account a user previously consented to and
@@ -22,7 +22,7 @@ export function SocialAuthButtons({ className }: SocialAuthButtonsProps) {
     // browser without manually clearing Google's session.
     //
     // ``prompt=select_account`` makes Google show the picker every time
-    // — the user explicitly chooses which Google account to use, and
+    // - the user explicitly chooses which Google account to use, and
     // can cancel out without auto-signing in. Standard OAuth 2.0 spec
     // parameter, supported by every provider that follows OIDC.
     await supabase.auth.signInWithOAuth({
@@ -38,7 +38,7 @@ export function SocialAuthButtons({ className }: SocialAuthButtonsProps) {
 
   const handleMicrosoftLogin = async () => {
     const supabase = getSupabase();
-    // Same picker-always behaviour for Microsoft / Azure AD — the
+    // Same picker-always behaviour for Microsoft / Azure AD - the
     // ``prompt=select_account`` value is in the OIDC spec so Azure
     // honours it too.
     await supabase.auth.signInWithOAuth({

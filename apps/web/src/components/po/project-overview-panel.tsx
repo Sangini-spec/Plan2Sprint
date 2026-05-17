@@ -147,7 +147,7 @@ function FeatureCard({ feature }: { feature: FeatureProgressCard }) {
         </span>
       </div>
 
-      {/* 4-column breakdown — keep all four columns even on phones since
+      {/* 4-column breakdown - keep all four columns even on phones since
           this is a status mini-strip (Done/InProgress/Review/Todo); the
           digits are short enough to fit. */}
       <div className="grid grid-cols-4 gap-1 text-center">
@@ -213,7 +213,7 @@ export function ProjectOverviewPanel({ hideKpiRow, hideRisks }: { hideKpiRow?: b
         setData(res.data);
       }
     } catch {
-      // fail silently — panel will show empty state
+      // fail silently - panel will show empty state
     } finally {
       setLoading(false);
     }
@@ -321,7 +321,7 @@ export function ProjectOverviewPanel({ hideKpiRow, hideRisks }: { hideKpiRow?: b
                       </span>
                       <span className="text-sm text-[var(--text-secondary)]">
                         {" "}
-                        — {r.description}
+                        - {r.description}
                       </span>
                     </div>
                   </div>
@@ -350,7 +350,7 @@ export function ProjectOverviewPanel({ hideKpiRow, hideRisks }: { hideKpiRow?: b
                       {d.to}
                     </span>
                     <span className="text-[var(--text-secondary)] text-xs">
-                      — {d.description}
+                      - {d.description}
                     </span>
                   </div>
                 ))}

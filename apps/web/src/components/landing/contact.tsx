@@ -128,7 +128,7 @@ interface FloatingFieldProps {
   children: React.ReactNode;
   /** When true, render the label as a non-form-bound caption (used for
    * radio groups, where ``<label htmlFor>`` referencing a single id is
-   * incorrect — there is no single form control to point at). */
+   * incorrect - there is no single form control to point at). */
   asGroup?: boolean;
 }
 
@@ -310,7 +310,7 @@ function ContactForm() {
           </select>
         </FieldWrapper>
 
-        {/* Interest — radio group, rendered as <fieldset><legend> so the
+        {/* Interest - radio group, rendered as <fieldset><legend> so the
             label isn't dangling on a non-existent ``id``. */}
         <FieldWrapper
           id="interest"

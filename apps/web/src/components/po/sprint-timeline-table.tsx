@@ -215,7 +215,7 @@ export function SprintTimelineTable({
                   >
                     <td className="py-2 px-4">
                       <span className="font-mono text-xs text-[var(--color-brand-secondary)]">
-                        {wi?.externalId?.slice(-6) || "—"}
+                        {wi?.externalId?.slice(-6) || "-"}
                       </span>
                     </td>
                     <td className="py-2 px-4">
@@ -279,7 +279,7 @@ export function SprintTimelineTable({
                         <AlertTriangle className="h-3.5 w-3.5 text-[var(--color-rag-amber)] mx-auto" />
                       ) : (
                         <span className="text-xs text-[var(--text-secondary)]">
-                          —
+                          -
                         </span>
                       )}
                     </td>

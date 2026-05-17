@@ -179,7 +179,7 @@ export const todayDigest: TeamStandupDigest = {
     ],
   },
   blockerCount: 1,
-  summaryText: "Sprint 24 is tracking well at 62% completion with 65% of time elapsed. 5 of 6 developers acknowledged. One blocker flagged on PROJ-206 (Stripe webhook handler) — waiting for API key provisioning.",
+  summaryText: "Sprint 24 is tracking well at 62% completion with 65% of time elapsed. 5 of 6 developers acknowledged. One blocker flagged on PROJ-206 (Stripe webhook handler) - waiting for API key provisioning.",
 };
 
 export const standupReports: StandupReport[] = teamMembers.map((tm, i) => ({
@@ -217,7 +217,7 @@ export const blockerFlags: BlockerFlag[] = [
   {
     id: "bf-1",
     standupReportId: "sr-2",
-    description: "Waiting for Stripe API key provisioning from IT — blocking webhook integration",
+    description: "Waiting for Stripe API key provisioning from IT - blocking webhook integration",
     ticketReference: "PROJ-206",
     status: "OPEN",
     flaggedAt: "2026-02-18T10:30:00Z",
@@ -274,7 +274,7 @@ export const latestRetrospective: Retrospective = {
   iterationId: "iter-0",
   whatWentWell: {
     items: [
-      "Sprint goal achieved at 95% — all checkout UI stories completed",
+      "Sprint goal achieved at 95% - all checkout UI stories completed",
       "Code review turnaround improved to under 12 hours average",
       "Zero production incidents during the sprint",
     ],

@@ -6,10 +6,10 @@ import { cn } from "@/lib/utils";
 import { Badge, Button } from "@/components/ui";
 import type { SprintPlanStatus } from "@/lib/types/models";
 
-// Hotfix 33c — countdown timer next to the "Generating new plan…"
+// Hotfix 33c - countdown timer next to the "Generating new plan…"
 // indicator. Counts DOWN from an ETA budget so the user sees how much
 // time is expected to remain (per user feedback). Once it hits 0 it
-// keeps showing "0:00" — by that point the polling loop should have
+// keeps showing "0:00" - by that point the polling loop should have
 // detected completion and cleared ``startedAtMs`` anyway, so the
 // component unmounts. ETA budget defaults to 3 minutes (180s) which
 // matches the observed typical max for sprint plan generation
@@ -46,12 +46,12 @@ const statusBadgeVariant: Record<SprintPlanStatus, "rag-green" | "rag-amber" | "
 
 interface SprintWorkspaceToolbarProps {
   status: SprintPlanStatus | null;
-  /** Hotfix 32 — Step E: separate in-flight signal so the badge can show
+  /** Hotfix 32 - Step E: separate in-flight signal so the badge can show
    *  GENERATING/FAILED while the underlying ``status`` still reflects
    *  the previous READY plan (whose data fills the rest of the page). */
   inflightStatus?: "GENERATING" | "FAILED" | null;
   inflightRiskSummary?: string | null;
-  /** Hotfix 33b — when generation started (ms epoch). Used to drive the
+  /** Hotfix 33b - when generation started (ms epoch). Used to drive the
    *  live "MM:SS" timer in the inline indicator. */
   inflightStartedAtMs?: number | null;
   generating: boolean;
@@ -77,7 +77,7 @@ export function SprintWorkspaceToolbar({
   const [showPrompt, setShowPrompt] = useState(false);
   const [feedback, setFeedback] = useState("");
 
-  // Hotfix 32 (revised) — keep the badge showing the READY plan's
+  // Hotfix 32 (revised) - keep the badge showing the READY plan's
   // status (PENDING_REVIEW / APPROVED / etc.) like it always did. The
   // user wanted the simple spinner-on-button UX from before, not a
   // "GENERATING" tag overriding the badge. We still surface the FAILED
@@ -120,8 +120,8 @@ export function SprintWorkspaceToolbar({
               {projectName}
             </span>
           )}
-          {/* Subtle inline indicator — does NOT replace the status badge.
-              Hotfix 33c — countdown from estimated 3 min so the wait
+          {/* Subtle inline indicator - does NOT replace the status badge.
+              Hotfix 33c - countdown from estimated 3 min so the wait
               feels finite. */}
           {isInflightGenerating && (
             <span className="flex items-center gap-1.5 text-xs text-[var(--color-brand-secondary)]">

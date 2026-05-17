@@ -74,8 +74,8 @@ export function SprintOverviewBar() {
   const doneSP = sprint?.completedStoryPoints ?? summary?.storyPoints?.completed ?? 0;
 
   let daysLeft = 0;
-  let startStr = "—";
-  let endStr = "—";
+  let startStr = "-";
+  let endStr = "-";
   if (sprint?.startDate && sprint?.endDate) {
     const end = new Date(sprint.endDate);
     daysLeft = Math.max(0, Math.ceil((end.getTime() - Date.now()) / 86400000));
@@ -125,7 +125,7 @@ export function SprintOverviewBar() {
           <StatCard label="Completed SP" value={doneSP} icon={TrendingUp} />
         </div>
 
-        {/* Sprint Health — derived from success probability + pacing */}
+        {/* Sprint Health - derived from success probability + pacing */}
         {successProbability !== null && (() => {
           const healthScore = Math.round(
             successProbability * 0.6 + pacingPct * 0.4

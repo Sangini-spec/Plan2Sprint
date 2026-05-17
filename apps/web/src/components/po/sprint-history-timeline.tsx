@@ -127,7 +127,7 @@ export function SprintHistoryTimeline() {
                 {retro.startDate && retro.endDate && (
                   <span className="flex items-center gap-1 text-[10px] text-[var(--text-tertiary)] mt-0.5">
                     <Calendar className="h-2.5 w-2.5" />
-                    {formatDate(retro.startDate)} — {formatDate(retro.endDate)}
+                    {formatDate(retro.startDate)} - {formatDate(retro.endDate)}
                   </span>
                 )}
               </div>

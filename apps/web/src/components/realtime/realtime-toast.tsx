@@ -51,7 +51,7 @@ function eventToToast(event: RealtimeEvent): Toast | null {
         id,
         icon: <RefreshCw size={16} className="text-blue-500" />,
         title: "Sync Complete",
-        description: `${(data.sourceTool as string) || "Tool"} data synced — ${
+        description: `${(data.sourceTool as string) || "Tool"} data synced - ${
           JSON.stringify(data.synced || {})
             .replace(/[{}\"]/g, "")
             .replace(/,/g, ", ")

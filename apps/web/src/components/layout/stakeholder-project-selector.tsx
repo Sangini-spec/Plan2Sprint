@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * StakeholderProjectSelector — dropdown for stakeholders to pick from
+ * StakeholderProjectSelector - dropdown for stakeholders to pick from
  * projects assigned to them by PO/admin. Does NOT use integrations context.
  */
 
@@ -31,7 +31,7 @@ export function StakeholderProjectSelector() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Fetch assigned projects — pass email so backend can identify user
+  // Fetch assigned projects - pass email so backend can identify user
   const fetchProjects = useCallback(async () => {
     if (!appUser?.email) return;
     setLoading(true);
@@ -151,7 +151,7 @@ export function StakeholderProjectSelector() {
               </div>
             ) : (
               <>
-                {/* "All Assigned Projects" option removed — stakeholder
+                {/* "All Assigned Projects" option removed - stakeholder
                     dashboards aren't meaningful in aggregate mode (export
                     totals zero out, predictability averages across
                     unrelated teams, etc). Users always operate on one

@@ -1,5 +1,5 @@
 /**
- * Onboarding API client — wraps /api/onboarding/* with typed helpers.
+ * Onboarding API client - wraps /api/onboarding/* with typed helpers.
  */
 
 import type { OnboardingProgress, OnboardingStatus } from "./types";

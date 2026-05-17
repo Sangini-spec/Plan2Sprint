@@ -1,7 +1,7 @@
 "use client";
 
 /* -------------------------------------------------------------------------- */
-/*  NOTES BUTTON — top bar trigger                                             */
+/*  NOTES BUTTON - top bar trigger                                             */
 /*                                                                             */
 /*  Gradient-animated pill next to Connect Tools. Opens the Notes drawer.     */
 /*  Available to every role (PO, dev, stakeholder, admin).                    */
@@ -16,7 +16,7 @@ export function NotesButton() {
   const [open, setOpen] = useState(false);
   const [count, setCount] = useState<number | null>(null);
 
-  // Lightweight count fetch — just for the badge
+  // Lightweight count fetch - just for the badge
   useEffect(() => {
     let cancelled = false;
     const fetchCount = async () => {

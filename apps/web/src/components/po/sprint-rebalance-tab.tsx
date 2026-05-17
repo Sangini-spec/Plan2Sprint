@@ -238,7 +238,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
         setError(err.detail || "Failed to generate rebalancing plan");
       }
     } catch {
-      setError("Network error — please try again");
+      setError("Network error - please try again");
     }
     setGenerating(false);
   }, [planId, mode, targetDate, poGuidance]);
@@ -259,7 +259,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
         // Reload page to reflect new plan across all tabs
         setTimeout(() => window.location.reload(), 1500);
       } else {
-        setError("Approval failed — please try again");
+        setError("Approval failed - please try again");
       }
     } catch {
       setError("Network error");
@@ -271,7 +271,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
   if (!proposal || (proposal.status === "APPROVED" && !viewingApproved)) {
     return (
       <div className="space-y-6">
-        {/* Status banner — rebalanced or at-risk */}
+        {/* Status banner - rebalanced or at-risk */}
         {isRebalanced ? (
           <div className="flex items-center gap-3 p-4 rounded-lg bg-orange-500/5 border border-orange-500/20">
             <CheckCircle2 className="h-5 w-5 text-orange-400 shrink-0" />
@@ -306,7 +306,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
             <AlertTriangle className="h-5 w-5 text-[var(--color-rag-red)] shrink-0" />
             <div>
               <p className="text-sm font-medium text-[var(--text-primary)]">
-                Sprint at risk — {successProbability}% success probability
+                Sprint at risk - {successProbability}% success probability
               </p>
               <p className="text-xs text-[var(--text-secondary)] mt-0.5">
                 AI analysis indicates the sprint will likely fail without rebalancing.
@@ -440,7 +440,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
             )}
           </div>
 
-          {/* Countdown toast — fixed top-right */}
+          {/* Countdown toast - fixed top-right */}
           {generating && (
             <div className="fixed top-20 right-6 z-50 flex items-center gap-3 px-5 py-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--color-brand-secondary)]/30 shadow-lg shadow-[var(--color-brand-secondary)]/10 animate-in slide-in-from-right">
               <div className="flex items-center justify-center h-10 w-10 rounded-full bg-[var(--color-brand-secondary)]/10">
@@ -516,7 +516,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
         </div>
       </DashboardPanel>
 
-      {/* Sprint Allocation — full list */}
+      {/* Sprint Allocation - full list */}
       {(proposal.sprints || []).map((sprint) => {
         const isExpanded = expandedSprints.has(sprint.number);
         const changedCount = sprint.stories.filter(s => s.action !== "KEEP").length;
@@ -602,7 +602,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
               // Generate a human-readable description
               let description = "";
               if (isUnchanged) {
-                description = "No change — this sprint is unaffected by the rebalancing.";
+                description = "No change - this sprint is unaffected by the rebalancing.";
               } else if (isReduced && cap <= 70) {
                 description = `Load reduced by ${Math.abs(spNum)} SP. Sprint now has comfortable capacity for unexpected work.`;
               } else if (isReduced && cap <= 85) {
@@ -610,9 +610,9 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
               } else if (isReduced) {
                 description = `Load reduced by ${Math.abs(spNum)} SP, but sprint is still near capacity. Monitor closely.`;
               } else if (isIncreased && cap >= 100) {
-                description = `Deferred items added ${spNum} SP. Sprint is at full capacity — risk of spillover if blockers arise.`;
+                description = `Deferred items added ${spNum} SP. Sprint is at full capacity - risk of spillover if blockers arise.`;
               } else if (isIncreased && cap >= 85) {
-                description = `Deferred items added ${spNum} SP. Sprint is running heavy — keep an eye on velocity.`;
+                description = `Deferred items added ${spNum} SP. Sprint is running heavy - keep an eye on velocity.`;
               } else {
                 description = `${spNum > 0 ? "+" : ""}${spNum} SP moved here. Sprint has healthy capacity remaining.`;
               }
@@ -688,7 +688,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
       {/* Action buttons */}
       <div className="flex items-center justify-center gap-4 py-4">
         {viewingApproved ? (
-          /* Read-only mode — viewing the previously approved plan */
+          /* Read-only mode - viewing the previously approved plan */
           <Button
             variant="secondary"
             onClick={() => { setProposal(null); setViewingApproved(false); }}
@@ -697,7 +697,7 @@ export function SprintRebalanceTab({ planId, rebalancingRecommended, successProb
             Back to Rebalance Options
           </Button>
         ) : (
-          /* Normal mode — new proposal ready for approval */
+          /* Normal mode - new proposal ready for approval */
           <>
             <Button
               onClick={handleApprove}

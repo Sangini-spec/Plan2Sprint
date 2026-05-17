@@ -104,9 +104,9 @@ export default function PlanningPage() {
     "sync_complete",
   ]);
 
-  // Tab state — initialised from the ``?tab=`` query param so the
+  // Tab state - initialised from the ``?tab=`` query param so the
   // onboarding tour can navigate to a specific tab via URL. Custom
-  // DOM events would race the page mount (router.push is async — by
+  // DOM events would race the page mount (router.push is async - by
   // the time the page registers a listener, the event has fired into
   // the void). URL params survive the mount.
   const searchParams = useSearchParams();
@@ -130,7 +130,7 @@ export default function PlanningPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [plan, setPlan] = useState<PlanOverview | null>(null);
-  // Hotfix 32 — Step E: separate "inflight" state for the GENERATING /
+  // Hotfix 32 - Step E: separate "inflight" state for the GENERATING /
   // FAILED stub. ``plan`` always holds the most recent READY plan so
   // the dashboard data (SP, sprints, rebalance flag, insights) stays
   // visible during regeneration. ``inflight`` drives the status badge
@@ -141,7 +141,7 @@ export default function PlanningPage() {
     riskSummary: string | null;
     createdAt: string | null;
   } | null>(null);
-  // Hotfix 33b — when the user kicked off the current generation
+  // Hotfix 33b - when the user kicked off the current generation
   // (millis epoch). Drives the live MM:SS timer in the toolbar.
   // Cleared when generation completes (success or failure).
   const [generationStartedAtMs, setGenerationStartedAtMs] = useState<number | null>(null);
@@ -188,7 +188,7 @@ export default function PlanningPage() {
         return;
       }
       const overviewData = await overviewRes.json();
-      // Hotfix 32 — Step E: capture the GENERATING/FAILED stub if any.
+      // Hotfix 32 - Step E: capture the GENERATING/FAILED stub if any.
       // The backend now sends ``inflight`` separately so the previous
       // READY plan stays visible during regeneration.
       setInflight(overviewData?.inflight ?? null);
@@ -209,7 +209,7 @@ export default function PlanningPage() {
       const detailRes = await fetch(`/api/sprints/plan?projectId=${projectId}`);
       if (detailRes.ok) {
         const data = await detailRes.json();
-        // Detail endpoint returns inflight too — prefer it (more recent)
+        // Detail endpoint returns inflight too - prefer it (more recent)
         if (data.inflight !== undefined) {
           setInflight(data.inflight);
         }
@@ -226,7 +226,7 @@ export default function PlanningPage() {
         }
       }
     } catch {
-      // API unavailable — preserve any prior plan/inflight state to
+      // API unavailable - preserve any prior plan/inflight state to
       // avoid blank-flickering between fetches when the API is
       // mid-coldstart. The retry logic in project context handles
       // genuine outages.
@@ -250,17 +250,17 @@ export default function PlanningPage() {
 
       const available: TeamMemberData[] = [];
 
-      // Hotfix 33h — dedupe by display name. The user has multiple
+      // Hotfix 33h - dedupe by display name. The user has multiple
       // accounts under the same display name (one per email/role) and
       // doesn't want to see them all separately. Priority:
-      //   1. Excluded TeamMember for THIS project — re-including this
+      //   1. Excluded TeamMember for THIS project - re-including this
       //      one is preferable because it preserves the existing row's
       //      email/avatar/skills history rather than creating a new
       //      one with a different email.
-      //   2. Org member with role='developer' — only fallback when no
+      //   2. Org member with role='developer' - only fallback when no
       //      excluded row exists for the same display name.
       // Anything not 'developer' (PO, stakeholder, owner, admin) is
-      // dropped entirely — they're not assignable in sprint planning.
+      // dropped entirely - they're not assignable in sprint planning.
       const seenNames = new Set<string>();
       const planMemberNames = new Set(
         teamMembers.map((tm) => (tm.displayName || "").toLowerCase()),
@@ -336,7 +336,7 @@ export default function PlanningPage() {
       ? process.env.NEXT_PUBLIC_API_URL
       : "";
 
-  // Hotfix 33 — shared poller for in-flight generation. Watches the
+  // Hotfix 33 - shared poller for in-flight generation. Watches the
   // ``inflight`` field returned by GET /api/sprints?projectId=… and
   // returns when it clears (success) or transitions to FAILED.
   // Caller is responsible for setGenerating + fetchPlanData refresh.
@@ -355,24 +355,24 @@ export default function PlanningPage() {
         const inflightStub = body?.inflight ?? null;
         if (!inflightStub) {
           await fetchPlanData();
-          setGenerationStartedAtMs(null);  // Hotfix 33b — stop timer
+          setGenerationStartedAtMs(null);  // Hotfix 33b - stop timer
           return;
         }
         if (inflightStub?.status === "FAILED") {
           await fetchPlanData();
-          setGenerationStartedAtMs(null);  // Hotfix 33b — stop timer
+          setGenerationStartedAtMs(null);  // Hotfix 33b - stop timer
           return;
         }
       } catch { /* network blip, keep polling */ }
     }
     await fetchPlanData();
-    setGenerationStartedAtMs(null);  // Hotfix 33b — timed out, clear timer
+    setGenerationStartedAtMs(null);  // Hotfix 33b - timed out, clear timer
   }, [projectId, fetchPlanData]);
 
   const handleGenerate = async () => {
     if (!projectId) return;
     setGenerating(true);
-    setGenerationStartedAtMs(Date.now());  // Hotfix 33b — start timer
+    setGenerationStartedAtMs(Date.now());  // Hotfix 33b - start timer
     try {
       // apiFetch auto-attaches the Supabase token so we can hit the API
       // directly (bypassing Next.js proxy whose 50-60s rewrite timeout
@@ -388,7 +388,7 @@ export default function PlanningPage() {
         invalidateCache(`/api/sprints?projectId=${projectId}`);
         invalidateCache(`/api/sprints/plan?projectId=${projectId}`);
         await fetchPlanData();
-        // Hotfix 33 — POLL until the BG task actually finishes; the
+        // Hotfix 33 - POLL until the BG task actually finishes; the
         // POST returned 202 in <1s but the AI call runs for 60-180s.
         await pollUntilInflightClears();
       } else {
@@ -405,16 +405,16 @@ export default function PlanningPage() {
   const handleRegenerate = async (feedback?: string) => {
     if (!projectId) return;
     setGenerating(true);
-    setGenerationStartedAtMs(Date.now());  // Hotfix 33b — start timer
+    setGenerationStartedAtMs(Date.now());  // Hotfix 33b - start timer
     try {
       // Default optimization: pack 2-3 features per sprint to minimize total sprints
       const defaultFeedback = feedback ||
         "CRITICAL: Pack 2-3 features/epics into EACH sprint. Do NOT put only 1 feature per sprint. " +
         "Group related features together (e.g., registration + onboarding in Sprint 1, booking + consultation in Sprint 2). " +
         "Each sprint must contain ALL stories from its assigned features. " +
-        "Target the minimum number of sprints possible — aim for half the number of features.";
+        "Target the minimum number of sprints possible - aim for half the number of features.";
 
-      // apiFetch — same reason as handleGenerate above.
+      // apiFetch - same reason as handleGenerate above.
       const res = await apiFetch(`${sprintApiBase}/api/sprints`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -440,7 +440,7 @@ export default function PlanningPage() {
       invalidateCache("/api/sprints/plan");
       await fetchPlanData();
 
-      // Hotfix 33 — POLL until the BG task finishes. POST returned 202
+      // Hotfix 33 - POLL until the BG task finishes. POST returned 202
       // in <1s but the AI call runs for 60-180s.
       await pollUntilInflightClears();
     } catch (e) {
@@ -471,7 +471,7 @@ export default function PlanningPage() {
 
   const handleIncludeMember = async (memberId: string, displayName: string) => {
     try {
-      // Hotfix 33c — pass projectId so the backend can create a
+      // Hotfix 33c - pass projectId so the backend can create a
       // project-bound team_member row when the candidate came from the
       // org-members list (i.e. has no TeamMember row for this project
       // yet). Without projectId the backend can only toggle existing
@@ -598,7 +598,7 @@ export default function PlanningPage() {
     );
   }
 
-  // No plan exists — empty state. Hotfix 32 — Step E: if a generation
+  // No plan exists - empty state. Hotfix 32 - Step E: if a generation
   // is in flight (project's first plan being created right now, or a
   // FAILED stub awaiting retry), surface that here so the user isn't
   // looking at "Generate" while a job is already running.
@@ -641,10 +641,10 @@ export default function PlanningPage() {
     );
   }
 
-  // Plan exists — full workspace layout with tabs
+  // Plan exists - full workspace layout with tabs
   return (
     <div className="space-y-4">
-      {/* Tab bar — same pattern as PO Dashboard */}
+      {/* Tab bar - same pattern as PO Dashboard */}
       <Tabs
         items={TAB_ITEMS}
         activeId={activeTab}
@@ -698,7 +698,7 @@ export default function PlanningPage() {
             </div>
           )}
 
-          {/* AI Insights — full-width collapsible overview */}
+          {/* AI Insights - full-width collapsible overview */}
           <AIInsightsPanel
             estimatedSprints={plan.estimatedSprints}
             estimatedWeeksTotal={plan.estimatedWeeksTotal}
@@ -715,7 +715,7 @@ export default function PlanningPage() {
             onIncludeMember={handleIncludeMember}
           />
 
-          {/* Sprint Timeline Table — full width */}
+          {/* Sprint Timeline Table - full width */}
           <div className="flex-1 min-h-0">
             <SprintTimelineTable
               assignments={assignments}
@@ -726,7 +726,7 @@ export default function PlanningPage() {
             />
           </div>
 
-          {/* Writeback status — always visible when plan exists */}
+          {/* Writeback status - always visible when plan exists */}
           <div className="border-t border-[var(--border-subtle)]">
             <WritebackConfirmationPanel />
           </div>

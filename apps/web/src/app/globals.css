@@ -56,18 +56,18 @@
     radial-gradient(ellipse at 80% 20%, rgba(15, 42, 72, 0.06) 0%, transparent 50%),
     #F8F8FC;
 
-  /* Onboarding (product tour) — purple + teal palette.
+  /* Onboarding (product tour) - purple + teal palette.
      These tokens are deliberately scoped to the onboarding feature so
      it stands out from the brand blue. Audited for WCAG AA contrast
      in both light and dark modes.  */
   --onboarding-primary: #7c3aed;        /* purple-600 */
   --onboarding-primary-hover: #6d28d9;  /* purple-700 */
   --onboarding-accent: #14b8a6;         /* teal-500 */
-  --onboarding-accent-soft: #ccfbf1;    /* teal-100 — tag/chip bg */
+  --onboarding-accent-soft: #ccfbf1;    /* teal-100 - tag/chip bg */
   --onboarding-card-bg: #FFFFFF;
   --onboarding-card-text: #0F0F18;
   --onboarding-card-text-muted: #5A5A72;
-  /* Backdrop dim — kept light so the rest of the dashboard is still
+  /* Backdrop dim - kept light so the rest of the dashboard is still
      legible and the page doesn't feel "locked". The spotlight ring
      + pulse handles the actual attention-grabbing. */
   --onboarding-backdrop: rgba(15, 23, 42, 0.32);
@@ -93,7 +93,7 @@
     radial-gradient(ellipse at 80% 20%, rgba(15, 42, 72, 0.10) 0%, transparent 50%),
     #0A0A0F;
 
-  /* Onboarding — dark variant. Lighter accent shades so text + glow
+  /* Onboarding - dark variant. Lighter accent shades so text + glow
      stay readable on the deeper background. */
   --onboarding-primary: #a78bfa;        /* purple-400 */
   --onboarding-primary-hover: #c4b5fd;  /* purple-300 */
@@ -102,7 +102,7 @@
   --onboarding-card-bg: #1A1A28;        /* deeper than --bg-surface so card pops */
   --onboarding-card-text: #F0F0F5;
   --onboarding-card-text-muted: #B0B0C5;
-  /* Lighter backdrop than the initial 0.72 — dark mode page is
+  /* Lighter backdrop than the initial 0.72 - dark mode page is
      already dim, so 0.50 is enough to focus attention without
      making everything outside the anchor look unusable. */
   --onboarding-backdrop: rgba(0, 0, 0, 0.48);
@@ -115,7 +115,7 @@
                               rgba(94, 234, 212, 0.10) 100%);
 }
 
-/* Onboarding utilities — used by spotlight-card, welcome-modal,
+/* Onboarding utilities - used by spotlight-card, welcome-modal,
    checklist-widget, page-hint-card. Keep these here (not in a
    component file) so light/dark switching is automatic. */
 .onb-card {
@@ -363,7 +363,7 @@ body {
   to   { background-position: 350% 50%, 350% 50%; }
 }
 
-/* Aurora background — light mode (default) */
+/* Aurora background - light mode (default) */
 .aurora-bg {
   background-color: #fafafa;
 }
@@ -394,7 +394,7 @@ body {
   mask-image: radial-gradient(ellipse at 100% 0%, black 10%, transparent 70%);
 }
 
-/* Aurora background — dark mode */
+/* Aurora background - dark mode */
 :root.dark .aurora-bg {
   background-color: #18181b;
 }

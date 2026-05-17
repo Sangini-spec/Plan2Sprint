@@ -1,10 +1,10 @@
 "use client";
 
 /* ========================================================================= */
-/*  STAKEHOLDER OVERVIEW — Executive dashboard (colorful, dense, gradient)   */
+/*  STAKEHOLDER OVERVIEW - Executive dashboard (colorful, dense, gradient)   */
 /*                                                                            */
 /*  Four rows:                                                                */
-/*    1. Sprint Completion hero — Actual vs Expected vs Delta                 */
+/*    1. Sprint Completion hero - Actual vs Expected vs Delta                 */
 /*    2. Section summaries: Delivery · Epics · Team Health (with conclusions) */
 /*    3. Velocity trend (full width)                                          */
 /*    4. Top risks + Upcoming milestones                                      */
@@ -38,7 +38,7 @@ import { useAutoRefresh } from "@/lib/ws/context";
       that trigger. SYNC_SCHEDULER_ENABLED is false in production, so if no
       PO opened the dashboard recently, ADO/Jira changes (new iterations,
       story-point updates, etc.) don't propagate to Plan2Sprint's DB. A
-      stakeholder visiting the page sees whatever was last synced — which
+      stakeholder visiting the page sees whatever was last synced - which
       is why Iteration 1 (oldest, ended 21d ago) was being shown instead
       of the current Iteration 3.
 
@@ -83,11 +83,11 @@ interface TeamHealthPillar {
 }
 
 interface VelocitySprint {
-  // Backend returns `name`, not `sprint` — fixed here.
+  // Backend returns `name`, not `sprint` - fixed here.
   name: string;
   planned: number;
   completed: number;
-  // Hotfix 93 — track which unit this entry's numbers are in.
+  // Hotfix 93 - track which unit this entry's numbers are in.
   // Velocity Δ only makes sense when comparing two sprints in the
   // SAME unit. Without this flag, a sprint reporting in "items"
   // could get compared against one in "SP" and produce nonsense
@@ -195,7 +195,7 @@ export function PortfolioHealthSummary() {
   const [projectPlan, setProjectPlan] = useState<ProjectPlan | null>(null);
   const [blockerCount, setBlockerCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  // v2 composite predictability from /api/analytics — authoritative value
+  // v2 composite predictability from /api/analytics - authoritative value
   // computed by services.predictability_engine. We track the full block so
   // we can distinguish:
   //   - v2 was returned with a numeric score  -> use it
@@ -259,7 +259,7 @@ export function PortfolioHealthSummary() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const v2 = (analyticsRes.data as any)?.predictability?.v2;
         if (v2 && typeof v2 === "object") {
-          // v2 was returned (even if score is null) — capture the whole
+          // v2 was returned (even if score is null) - capture the whole
           // block so downstream can distinguish "authoritative null" from
           // "no response".
           setPredictabilityV2({
@@ -278,7 +278,7 @@ export function PortfolioHealthSummary() {
       // consider the data stale when:
       //   (a) there are zero sprints in the DB, OR
       //   (b) the most recent sprint already ended (its end_date is in
-      //       the past) — meaning the project has likely advanced to a
+      //       the past) - meaning the project has likely advanced to a
       //       newer iteration that hasn't been synced yet.
       if (projectId && autoSyncAttempted.current !== projectId && sprintsData) {
         const now = Date.now();
@@ -348,7 +348,7 @@ export function PortfolioHealthSummary() {
 
   // -------------- Derived metrics --------------
 
-  // Active sprint detection — prefer the iteration that ACTUALLY has work.
+  // Active sprint detection - prefer the iteration that ACTUALLY has work.
   //
   // Real-world ADO setups do not always keep `timeFrame=current` on the
   // sprint where the team is actually working. We've observed projects
@@ -397,10 +397,10 @@ export function PortfolioHealthSummary() {
     (s) => (s.totalItems || 0) > 0,
   );
 
-  // Resolution order — designed to be stable across project shapes:
+  // Resolution order - designed to be stable across project shapes:
   //
   //   1. Today is inside [startDate, endDate]. Most authoritative answer
-  //      to "what sprint are we in right now?" — works for healthy
+  //      to "what sprint are we in right now?" - works for healthy
   //      projects with proper iteration date ranges, AND covers the
   //      brand-new-sprint case where today is in window but no work
   //      has been assigned yet (we still want to show that sprint).
@@ -413,7 +413,7 @@ export function PortfolioHealthSummary() {
   //
   //   3. Items-based fallback for teams that don't track SP.
   //
-  //   4. ADO's state=active marker — only trusted last because we've
+  //   4. ADO's state=active marker - only trusted last because we've
   //      seen it pinned to empty stub iterations.
   //
   //   5. sprints[0] (backend orders by start_date desc).
@@ -462,7 +462,7 @@ export function PortfolioHealthSummary() {
     .filter((t) => t.planned > 0 || t.completed > 0);
 
   // Last-resort: if sprints have absolutely no data, fall back to the backend
-  // sustainability trend (may also be empty — in which case chart hides).
+  // sustainability trend (may also be empty - in which case chart hides).
   const finalVelocityTrend =
     velocityTrend.length > 0
       ? velocityTrend
@@ -471,11 +471,11 @@ export function PortfolioHealthSummary() {
         );
 
   // ===== PREDICTABILITY =====
-  // Preferred: the v2 composite score from /api/analytics — symmetric
+  // Preferred: the v2 composite score from /api/analytics - symmetric
   // (over-delivery penalised), recency-weighted, variance-aware. Single
   // source of truth shared with the Delivery page and the weekly PDF.
   //
-  // When v2 has been returned we honour its answer verbatim — including a
+  // When v2 has been returned we honour its answer verbatim - including a
   // null score meaning "no completed sprints yet". Historically the UI
   // silently fell back to a local capped-at-1 avg which produced a
   // meaningless 100% for any project whose sole sprint over-delivered by
@@ -488,13 +488,13 @@ export function PortfolioHealthSummary() {
   //       measurable yet
   let predictability: number | null;
   if (!predictabilityLoaded) {
-    // First fetch hasn't resolved yet. Don't compute a local fallback —
+    // First fetch hasn't resolved yet. Don't compute a local fallback -
     // doing so produces a number that gets immediately overwritten when
     // the authoritative v2 response lands a tick later, which is the
     // flicker the user reported.
     predictability = null;
   } else if (predictabilityV2 !== null) {
-    // Authoritative — even if the score is null, the product answer is
+    // Authoritative - even if the score is null, the product answer is
     // "not enough sprint history". Don't paper over it.
     predictability = predictabilityV2.score;
   } else {
@@ -519,7 +519,7 @@ export function PortfolioHealthSummary() {
 
   // ===== UPCOMING MILESTONES =====
   // Stakeholder definition: upcoming timeline states + features not yet complete.
-  // Hotfix 37 — loosened the filters so projects whose dates are stale
+  // Hotfix 37 - loosened the filters so projects whose dates are stale
   // (e.g. all sprint end dates in the past, features lacking plannedEnd
   // because they haven't been included in a plan yet) still surface as
   // legitimate upcoming work. The previous strict ``plannedEnd > now``
@@ -659,7 +659,7 @@ export function PortfolioHealthSummary() {
 }
 
 /* ========================================================================= */
-/*  SPRINT COMPLETION HERO — Actual vs Expected vs Delta (colorful gradient) */
+/*  SPRINT COMPLETION HERO - Actual vs Expected vs Delta (colorful gradient) */
 /* ========================================================================= */
 
 function SprintCompletionHero({
@@ -729,14 +729,14 @@ function SprintCompletionHero({
   // Sprint Result". Reasoning: the activeSprint resolver picks the
   // iteration the team is actually working on. When ADO's calendar
   // dates have lapsed but no new sprint has started, the team is
-  // still conceptually in that sprint — calling it "last sprint"
+  // still conceptually in that sprint - calling it "last sprint"
   // implies a fresh one has begun, which it hasn't.
   const eyebrow =
     phase === "ended" ? "Current Sprint"
     : phase === "future" ? "Upcoming Sprint"
     : "Sprint Progress";
 
-  // Story point unit fallback — some projects have items but no SP.
+  // Story point unit fallback - some projects have items but no SP.
   const planned = totalSP > 0 ? totalSP : totalItems;
   const delivered = totalSP > 0 ? completedSP : completedItems;
   const unit = totalSP > 0 ? "SP" : "items";
@@ -781,7 +781,7 @@ function SprintCompletionHero({
         </div>
       </div>
 
-      {/* 3 tiles — content depends on sprint phase */}
+      {/* 3 tiles - content depends on sprint phase */}
       <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-4">
         {phase === "active" && (
           <>
@@ -1027,19 +1027,19 @@ function DeliveryCard({
   const predColor = severityColor(predSeverity);
   const overallPct = totalSP > 0 ? Math.round((completedSP / totalSP) * 100) : 0;
 
-  // Hotfix 93 — Velocity Δ guards.
+  // Hotfix 93 - Velocity Δ guards.
   //
   // The original ((last - prev) / prev) × 100 produced absurd
   // numbers ("+33,200%") in two failure modes:
   //
-  //   1) Unit mismatch — the velocityTrend builder picks SP per
+  //   1) Unit mismatch - the velocityTrend builder picks SP per
   //      sprint when SP > 0, else items. So a "stub" sprint with
   //      1 item completed could sit next to a real sprint with
   //      333 SP completed, and the formula treated 1 and 333 as
   //      the same unit. Now we require last.unit === prev.unit
   //      before computing anything.
   //
-  //   2) Tiny baseline — even with matching units, dividing 333
+  //   2) Tiny baseline - even with matching units, dividing 333
   //      by 1 produces 33,200%. We require prev.completed to
   //      meet a minimum (5 SP or 3 items) before reporting a
   //      meaningful percentage.
@@ -1060,7 +1060,7 @@ function DeliveryCard({
     if (prev.completed >= minBaseline) {
       velDelta = Math.round(((last.completed - prev.completed) / prev.completed) * 100);
     } else {
-      velDeltaTooltip = `Previous sprint completed only ${prev.completed} ${prev.unit ?? ""} — too small a baseline to compute a meaningful velocity change.`;
+      velDeltaTooltip = `Previous sprint completed only ${prev.completed} ${prev.unit ?? ""} - too small a baseline to compute a meaningful velocity change.`;
     }
   } else if (last && prev && last.unit !== prev.unit) {
     velDeltaTooltip = `The previous sprint was measured in ${prev.unit}, this one in ${last.unit}. Need two sprints in the same unit to compute Δ.`;
@@ -1083,7 +1083,7 @@ function DeliveryCard({
     velDeltaLabel = `${velDelta >= 0 ? "+" : ""}${velDelta}%`;
   }
   if (velDeltaIsCapped) {
-    velDeltaTooltip = `Raw value is ${velDelta}% — capped at ±${DISPLAY_CAP_PCT}% for readability.`;
+    velDeltaTooltip = `Raw value is ${velDelta}% - capped at ±${DISPLAY_CAP_PCT}% for readability.`;
   }
 
   return (
@@ -1106,7 +1106,7 @@ function DeliveryCard({
             <span className="text-xl font-light" style={{ color: predColor }}>%</span>
           </>
         ) : (
-          <span className="text-5xl font-bold leading-none text-[var(--text-tertiary)]">—</span>
+          <span className="text-5xl font-bold leading-none text-[var(--text-tertiary)]">-</span>
         )}
       </div>
       {!hasData && (
@@ -1254,7 +1254,7 @@ function MiniStat({
   label: string;
   value: string;
   emphasis?: string;
-  /** Hover tooltip — used by Velocity Δ to explain "N/A" / capped values. */
+  /** Hover tooltip - used by Velocity Δ to explain "N/A" / capped values. */
   title?: string;
 }) {
   return (
@@ -1323,7 +1323,7 @@ function VelocityTrendStrip({
   const last = trend[trend.length - 1];
   const prev = trend[trend.length - 2];
   // Cap delta so mixed-unit sprints (e.g. one using items, another using SP)
-  // don't display absurd % swings like +19200%. Above ±500%, show "—".
+  // don't display absurd % swings like +19200%. Above ±500%, show "-".
   const rawDelta = prev && prev.completed > 0
     ? Math.round(((last.completed - prev.completed) / prev.completed) * 100)
     : 0;
@@ -1360,7 +1360,7 @@ function VelocityTrendStrip({
               style={{ color: trendColor }}
             >
               {deltaOutOfRange ? (
-                <span className="text-[var(--text-tertiary)]">—</span>
+                <span className="text-[var(--text-tertiary)]">-</span>
               ) : (
                 <>
                   <TrendIcon size={12} />
@@ -1372,7 +1372,7 @@ function VelocityTrendStrip({
         </div>
       </div>
 
-      {/* Bars row — explicit fixed height so percentage heights resolve */}
+      {/* Bars row - explicit fixed height so percentage heights resolve */}
       <div className="flex items-end gap-3" style={{ height: "120px" }}>
         {trend.map((t, idx) => {
           const completedH = Math.max((t.completed / maxValue) * 100, 2);
@@ -1405,7 +1405,7 @@ function VelocityTrendStrip({
           );
         })}
       </div>
-      {/* Labels row — separate, no height interplay with bars */}
+      {/* Labels row - separate, no height interplay with bars */}
       <div className="flex gap-3 mt-2">
         {trend.map((t, idx) => (
           <span
@@ -1460,7 +1460,7 @@ function computeTopRisks(args: {
     risks.push({
       severity: "AMBER",
       title: `Sprint pace ${Math.abs(args.deltaPct)}% below expected`,
-      detail: "Early warning — catch up in the next 2–3 days or rebalance scope.",
+      detail: "Early warning - catch up in the next 2–3 days or rebalance scope.",
     });
   }
 
@@ -1468,7 +1468,7 @@ function computeTopRisks(args: {
     risks.push({
       severity: "RED",
       title: `${args.blockerCount} blockers open`,
-      detail: "Multiple active blockers — review with engineering leads.",
+      detail: "Multiple active blockers - review with engineering leads.",
     });
   } else if (args.blockerCount > 0) {
     risks.push({
@@ -1578,7 +1578,7 @@ function UpcomingMilestonesPanel({ milestones }: { milestones: MilestoneRow[] })
                 "var(--color-rag-green)";
               const dateLabel = m.plannedEndDate
                 ? new Date(m.plannedEndDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-                : "—";
+                : "-";
               // Humanize the day delta
               const dayLabel =
                 days == null ? "" :
@@ -1629,12 +1629,12 @@ function makeDeliveryConclusion(
 ): string {
   if (predictability === null) {
     if (trend.length === 0) {
-      return "No completed sprints yet — syncing the project will unlock delivery analytics.";
+      return "No completed sprints yet - syncing the project will unlock delivery analytics.";
     }
     return "Not enough sprint history with story points to compute predictability.";
   }
   if (predictability >= 85) {
-    return "Team is delivering what it commits to. Healthy cadence — safe to plan ambitious sprints.";
+    return "Team is delivering what it commits to. Healthy cadence - safe to plan ambitious sprints.";
   }
   if (predictability >= 60) {
     return "Team delivers most commitments but frequently runs over. Consider slightly lighter sprints or tighter scoping.";
@@ -1652,7 +1652,7 @@ function makeEpicsConclusion(
   }
   if (atRisk > 0) {
     const next = upcoming[0]?.name;
-    return `${atRisk} milestone${atRisk > 1 ? "s" : ""} at risk — soonest is ${next || "upcoming"}.`;
+    return `${atRisk} milestone${atRisk > 1 ? "s" : ""} at risk - soonest is ${next || "upcoming"}.`;
   }
   if (active > 0) {
     return `${active} milestone${active > 1 ? "s" : ""} in progress. No imminent risks flagged.`;

@@ -27,7 +27,7 @@ export default function PODashboardPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const { selectedProject, projects } = useSelectedProject();
 
-  // No projects at all — show welcome/connect card
+  // No projects at all - show welcome/connect card
   if (projects !== undefined && projects.length === 0 && !selectedProject) {
     return <EmptyDashboard />;
   }
@@ -45,10 +45,10 @@ export default function PODashboardPage() {
       {/* ── Dashboard Tab ── */}
       {activeTab === "dashboard" && (
         <div className="space-y-4">
-          {/* Project Hero Banner — dark banner with KPIs + timeline */}
+          {/* Project Hero Banner - dark banner with KPIs + timeline */}
           <ProjectHeroBanner />
 
-          {/* Project Overview — Module Status feature cards */}
+          {/* Project Overview - Module Status feature cards */}
           <ProjectOverviewPanel hideKpiRow />
         </div>
       )}

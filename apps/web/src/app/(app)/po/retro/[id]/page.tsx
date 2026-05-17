@@ -354,7 +354,7 @@ export default function RetroDetailPage() {
           {retro.iterationStartDate && retro.iterationEndDate && (
             <span className="flex items-center gap-1">
               <Calendar className="h-3 w-3" />
-              {formatDate(retro.iterationStartDate)} &mdash; {formatDate(retro.iterationEndDate)}
+              {formatDate(retro.iterationStartDate)} - {formatDate(retro.iterationEndDate)}
               {sprintDays && <span className="text-[var(--text-tertiary)]">({sprintDays} days)</span>}
             </span>
           )}
@@ -406,7 +406,7 @@ export default function RetroDetailPage() {
         />
       </div>
 
-      {/* ── What Went Well / Didn't Go Well — side by side ── */}
+      {/* ── What Went Well / Didn't Go Well - side by side ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* What Went Well */}
         <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 p-5">
@@ -578,7 +578,7 @@ export default function RetroDetailPage() {
         </div>
       </div>
 
-      {/* ── AI Diagnostics (combined card — only renders if failure data exists) ── */}
+      {/* ── AI Diagnostics (combined card - only renders if failure data exists) ── */}
       {(retro.failureClassification || overloadedDevs.length > 0) && (
         <div className="rounded-xl border border-[var(--color-rag-amber)]/30 bg-[var(--bg-surface)]/80 p-5 space-y-5">
           {/* Sprint Failure Analysis */}

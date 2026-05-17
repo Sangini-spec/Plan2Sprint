@@ -5,7 +5,7 @@
  * (Hotfix 86).
  *
  * Renders a card with one row per pending request, each with Approve
- * and Reject buttons. Founder-only — the API decides who's the
+ * and Reject buttons. Founder-only - the API decides who's the
  * founder; for non-founders the API returns isFounder=false and we
  * render nothing.
  *
@@ -73,7 +73,7 @@ export function JoinRequestsSection() {
         body: kind === "reject" ? JSON.stringify({}) : "{}",
       });
       if (res.ok) {
-        setFeedback({ kind: "ok", msg: kind === "approve" ? "Approved — user has been moved into your organisation." : "Rejected." });
+        setFeedback({ kind: "ok", msg: kind === "approve" ? "Approved - user has been moved into your organisation." : "Rejected." });
         setRequests((rs) => rs.filter((r) => r.id !== id));
       } else {
         const err = await res.json().catch(() => ({}));
@@ -87,7 +87,7 @@ export function JoinRequestsSection() {
   };
 
   // Hide the entire card for non-founders OR when there are no requests
-  // (avoids visual noise — founders without pending requests don't need
+  // (avoids visual noise - founders without pending requests don't need
   // an empty section either).
   if (loading) return null;
   if (!isFounder) return null;

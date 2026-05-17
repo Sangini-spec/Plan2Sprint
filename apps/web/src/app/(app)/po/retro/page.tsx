@@ -13,7 +13,7 @@ const SprintHistoryTimeline = dynamic(
   { ssr: false }
 );
 
-// Hotfix 83 — Project Cycle Concluded card. Renders only when the
+// Hotfix 83 - Project Cycle Concluded card. Renders only when the
 // selected project has passed its target launch date; renders nothing
 // for healthy projects so it has no visual effect on the regular
 // retrospective flow.

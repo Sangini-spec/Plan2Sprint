@@ -17,9 +17,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Plan2Sprint — AI Sprint Planning & Async Standups for Engineering Teams",
+  title: "Plan2Sprint - AI Sprint Planning & Async Standups for Engineering Teams",
   description:
-    "Plan2Sprint is the AI planning brain for engineering teams — generating sprint plans, daily standups, and retrospectives automatically. From Jira. From GitHub. From real data.",
+    "Plan2Sprint is the AI planning brain for engineering teams - generating sprint plans, daily standups, and retrospectives automatically. From Jira. From GitHub. From real data.",
   keywords: [
     "sprint planning",
     "async standup",
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     "agile",
   ],
   openGraph: {
-    title: "Plan2Sprint — AI Sprint Planning & Async Standups",
+    title: "Plan2Sprint - AI Sprint Planning & Async Standups",
     description:
       "Generate sprint plans and daily standups automatically from Jira, GitHub, and real data.",
     type: "website",

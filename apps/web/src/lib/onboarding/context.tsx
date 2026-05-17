@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * OnboardingProvider — central state for the product tour.
+ * OnboardingProvider - central state for the product tour.
  *
  * Owns:
  *  - the current ``OnboardingProgress`` fetched from /api/onboarding/progress
@@ -10,7 +10,7 @@
  *  - the queue of unseen page hints
  *  - all transition helpers (next, back, skip, completeTour, dismiss, replay)
  *
- * Does NOT render any UI — ``OnboardingTour`` (mounted by (app)/layout)
+ * Does NOT render any UI - ``OnboardingTour`` (mounted by (app)/layout)
  * subscribes via ``useOnboarding`` and renders the appropriate primitive.
  */
 
@@ -65,7 +65,7 @@ interface OnboardingContextValue {
   /** True while the user is between welcome and completion (UI should render). */
   isActive: boolean;
 
-  /** True if the tour is fresh (status=not_started) — shows welcome modal. */
+  /** True if the tour is fresh (status=not_started) - shows welcome modal. */
   shouldShowWelcome: boolean;
 
   /** True if we should show the re-engagement banner. */
@@ -77,9 +77,9 @@ interface OnboardingContextValue {
   back: () => Promise<void>;
   /** Skip the current step (records it under skipped_steps). */
   skipCurrent: () => Promise<void>;
-  /** Skip everything — marks status=dismissed. */
+  /** Skip everything - marks status=dismissed. */
   skipTour: () => Promise<void>;
-  /** Mark tour completed — shows confetti modal. */
+  /** Mark tour completed - shows confetti modal. */
   completeTour: () => Promise<void>;
   /** Start the tour from the welcome step (replay or first-time-take). */
   startTour: () => Promise<void>;
@@ -90,11 +90,11 @@ interface OnboardingContextValue {
   /** Jump to an arbitrary step by id (used by Settings → Jump to step). */
   jumpToStep: (stepId: string) => Promise<void>;
 
-  /** First-visit page hint queue — null when no hint is pending. */
+  /** First-visit page hint queue - null when no hint is pending. */
   activePageHint: PageHint | null;
   /** Dismiss the current page hint (records pathname to seen list). */
   dismissPageHint: () => Promise<void>;
-  /** Wipe all page hints — Settings → Reset all page hints. */
+  /** Wipe all page hints - Settings → Reset all page hints. */
   resetPageHints: () => Promise<void>;
 }
 
@@ -121,7 +121,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   /** Tracks whether we've done the one-shot "resume the tour on the
    *  right page" navigation. Without this guard the effect below would
-   *  loop forever — pathname changes after we navigate, the effect
+   *  loop forever - pathname changes after we navigate, the effect
    *  re-fires, sees a mismatch again (since the step state is
    *  cached), and pushes again. */
   const resumedNavRef = useRef(false);
@@ -144,14 +144,14 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [authLoading, appUser?.id]);
 
-  /** One-shot resume nav — if the user closed the browser mid-tour and
+  /** One-shot resume nav - if the user closed the browser mid-tour and
    *  comes back to their dashboard home, send them to the page their
    *  current step points at. Only fires once per provider mount; if the
    *  user manually navigates away mid-tour, we don't yank them back. */
   useEffect(() => {
     if (loading || resumedNavRef.current) return;
     if (!progress || progress.status !== "in_progress") return;
-    // Only resume from the role's home — if they're already deep in
+    // Only resume from the role's home - if they're already deep in
     // the app on a non-home page, treat that as intentional navigation
     // and respect it.
     const home =
@@ -193,7 +193,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const isActive = progress?.status === "in_progress";
 
   // The product tour welcome modal should only fire on dashboard
-  // routes — never on /onboarding (the org-setup wizard, a totally
+  // routes - never on /onboarding (the org-setup wizard, a totally
   // separate onboarding concept that pre-dates the product tour),
   // /settings/*, /login, /signup, /auth/*, etc. Stacking two
   // onboardings on top of each other would confuse new users.
@@ -209,8 +209,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     pathname === "/dashboard";
 
   // The welcome modal fires in two cases:
-  //   1. Brand-new user — status=not_started + !banner_dismissed
-  //   2. Replay — backend's ``/replay`` endpoint sets
+  //   1. Brand-new user - status=not_started + !banner_dismissed
+  //   2. Replay - backend's ``/replay`` endpoint sets
   //      status=in_progress + current_step="welcome". Without this
   //      branch the modal would never re-fire on replay and the user
   //      would land on a blank dashboard (the spotlight variant check
@@ -258,7 +258,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (!progress || currentStepIndex < 0) return;
     const nextIdx = currentStepIndex + 1;
     if (nextIdx >= allSteps.length) {
-      // Already at completion — close out.
+      // Already at completion - close out.
       const updated = await patchProgress({ status: "completed" });
       setProgress(updated);
       return;
@@ -305,7 +305,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const completeTour = useCallback(async () => {
     const updated = await patchProgress({ status: "completed" });
     setProgress(updated);
-    // Navigate to the role's home dashboard — the "Go to my dashboard"
+    // Navigate to the role's home dashboard - the "Go to my dashboard"
     // button on the completion modal expects to actually take the user
     // there. Without this push, they're left on whichever sub-page the
     // last step ended on (e.g. /dev/standup), which is confusing.
@@ -361,7 +361,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (progress.status === "not_started") {
-      // Don't show page hints to brand-new users — they should see the welcome modal first.
+      // Don't show page hints to brand-new users - they should see the welcome modal first.
       setActivePageHint(null);
       return;
     }

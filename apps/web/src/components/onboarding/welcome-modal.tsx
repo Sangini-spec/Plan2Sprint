@@ -1,18 +1,18 @@
 "use client";
 
 /**
- * WelcomeModal — first card a user sees.
+ * WelcomeModal - first card a user sees.
  *
  * Big centered modal with backdrop. Two CTAs:
  *   - "Take the tour" → starts the spotlight tour
- *   - "Skip — I'll explore on my own" → marks status=dismissed
+ *   - "Skip - I'll explore on my own" → marks status=dismissed
  *
  * Per design: text-only (no video). Tour automatically begins on
  * the user's dashboard route after they click "Take the tour".
  */
 
 import { motion } from "framer-motion";
-// Compass over Sparkles for the onboarding hero — the sparkle look
+// Compass over Sparkles for the onboarding hero - the sparkle look
 // reads as the generic "AI vibe-coded" badge that every starter
 // landing page ships with. A compass signals "guided tour /
 // orientation", which is what the welcome modal actually is, and
@@ -27,7 +27,7 @@ const ROLE_COPY = {
   product_owner: {
     title: "Welcome to Plan2Sprint",
     body:
-      "You're the captain. We'll walk you through how to connect your project tool, import projects, invite your team, run sprint planning, and orchestrate Slack or Microsoft Teams — about 4 minutes.",
+      "You're the captain. We'll walk you through how to connect your project tool, import projects, invite your team, run sprint planning, and orchestrate Slack or Microsoft Teams - about 4 minutes.",
   },
   developer: {
     title: "Welcome, Developer",
@@ -37,7 +37,7 @@ const ROLE_COPY = {
   stakeholder: {
     title: "Welcome, Stakeholder",
     body:
-      "You get a read-only view across the portfolio — no edits required. A 60-second tour will show you where the signals live.",
+      "You get a read-only view across the portfolio - no edits required. A 60-second tour will show you where the signals live.",
   },
 } as const;
 
@@ -96,7 +96,7 @@ export function WelcomeModal() {
               onClick={() => skipTour()}
               className="onb-cta-secondary w-full"
             >
-              Skip — I&apos;ll explore on my own
+              Skip - I&apos;ll explore on my own
             </button>
           </div>
           <p

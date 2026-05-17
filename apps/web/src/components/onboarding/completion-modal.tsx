@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * CompletionModal — confetti card shown after the last tour step.
+ * CompletionModal - confetti card shown after the last tour step.
  *
- * Small corner-burst confetti — ~14 particles fan outward from the
+ * Small corner-burst confetti - ~14 particles fan outward from the
  * top-right of the viewport in a quick "bang" rather than raining
  * down across the entire page. Fires once on mount and is done in
  * about 1.4 seconds.
@@ -41,7 +41,7 @@ export function CompletionModal() {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center onb-backdrop p-4">
-      {/* Confetti — small burst fanning outward from the top-right
+      {/* Confetti - small burst fanning outward from the top-right
           viewport corner. Each particle gets a unique outward
           trajectory via polar coordinates so the cluster looks like
           a quick "bang" rather than a uniform rain. */}

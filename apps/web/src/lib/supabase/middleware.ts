@@ -5,7 +5,7 @@ const isDemoMode =
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL === "https://your-project.supabase.co";
 
-/** Routes that require authentication — only these call getUser() */
+/** Routes that require authentication - only these call getUser() */
 const PROTECTED_PREFIXES = [
   "/dashboard",
   "/po",
@@ -19,12 +19,12 @@ function isProtectedRoute(pathname: string) {
   return PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
-// Hotfix 58 (HIGH-11) — role-based route segregation.
+// Hotfix 58 (HIGH-11) - role-based route segregation.
 //
 // Each role has a set of route prefixes it's allowed to render. If a
 // caller tries to navigate to a prefix outside their allowlist, we
 // redirect them to their default landing page. This is a UX-grade
-// defence-in-depth check — server-side endpoints already gate
+// defence-in-depth check - server-side endpoints already gate
 // mutations via require_po / require_write_role (Hotfixes 51 / 55 /
 // 56), so a sneaky user bypassing this client-side guard still can't
 // actually mutate data they shouldn't.
@@ -57,7 +57,7 @@ function isAllowedForRole(role: string | undefined, pathname: string): boolean {
 }
 
 export async function updateSession(request: NextRequest) {
-  // Demo mode — skip everything
+  // Demo mode - skip everything
   if (isDemoMode) {
     return NextResponse.next({ request });
   }
@@ -97,14 +97,14 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Not authenticated — redirect to login
+  // Not authenticated - redirect to login
   if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  // Hotfix 58 (HIGH-11) — role-gate the protected routes. Roles come
+  // Hotfix 58 (HIGH-11) - role-gate the protected routes. Roles come
   // from Supabase user_metadata (set at signup / by admin). This is a
   // soft check; the API still enforces role on every mutation.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

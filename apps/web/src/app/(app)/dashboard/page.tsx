@@ -9,7 +9,7 @@ export default function DashboardPage() {
   const { appUser, loading } = useAuth();
   const router = useRouter();
 
-  // Hotfix 15 — wait for ``appUser`` to actually populate before
+  // Hotfix 15 - wait for ``appUser`` to actually populate before
   // routing. Previously this read the ``role`` from useAuth which
   // returns a default ("developer" then "product_owner" since this
   // hotfix) when appUser is still null. There was a brief window
@@ -20,7 +20,7 @@ export default function DashboardPage() {
   //
   // Now we wait for ``appUser`` to be set (or for ``loading`` to be
   // explicitly false AND appUser still null, which means there's no
-  // session — bounce to login rather than guess a role).
+  // session - bounce to login rather than guess a role).
   useEffect(() => {
     if (loading) return;
     if (!appUser) {

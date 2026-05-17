@@ -14,7 +14,7 @@ import type {
   ConfidenceBlock,
 } from "@/lib/types/models";
 
-// Hotfix 16 — added "also_active" state. A phase is "also_active" when the
+// Hotfix 16 - added "also_active" state. A phase is "also_active" when the
 // project's frontier has advanced past it (a later phase has been touched)
 // but it still has in-flight work. Rendered cyan-glowing alongside the
 // orange "current" pill so stakeholders see "we've reached Deployment, but
@@ -51,14 +51,14 @@ function LiveDataBadge({ source }: { source: string }) {
 
 // ── Plan Source Badge ──
 //
-// Hotfix 83 — when the project has passed its target launch date the
+// Hotfix 83 - when the project has passed its target launch date the
 // badge slot swaps to a lifecycle indicator instead, since the
 // rebalance/optimised label is misleading once the rebalanced date
 // itself has slipped. Three terminal states on top of the original
 // three:
 //
-//   overdue        → red "PLAN OVERDUE" — date passed, work unfinished
-//   delivered_late → amber "DELIVERED LATE" — shipped but past the date
+//   overdue        → red "PLAN OVERDUE" - date passed, work unfinished
+//   delivered_late → amber "DELIVERED LATE" - shipped but past the date
 //   on_track       → fall through to the original Rebalanced/AI/Raw set
 function PlanSourceBadge({
   isOptimized,
@@ -120,7 +120,7 @@ function KpiCard({
   label: string;
   value: string | number;
   highlight?: boolean;
-  /** Hotfix 83 — "alert" flips the tile to a red tone (used by EST. WEEKS
+  /** Hotfix 83 - "alert" flips the tile to a red tone (used by EST. WEEKS
    *  when the project is past its target launch). "warn" is amber for
    *  the delivered-late case. Falls through to the default white tile
    *  when omitted, so no existing call site is affected. */
@@ -211,7 +211,7 @@ function ConfidenceKpiCard({
   return (
     <div className="relative group">
       <KpiCard label="Confidence" value={`${Math.round(value)}%`} />
-      {/* Hover tooltip — Tailwind-only, no portal, so it disappears instantly
+      {/* Hover tooltip - Tailwind-only, no portal, so it disappears instantly
           when the user moves away. */}
       <div
         role="tooltip"
@@ -240,7 +240,7 @@ function ConfidenceKpiCard({
         </ul>
         {rows.length < 5 && (
           <p className="mt-2 text-[10px] italic text-[var(--text-tertiary)]">
-            Some factors unavailable — weights rescaled across the rest.
+            Some factors unavailable - weights rescaled across the rest.
           </p>
         )}
       </div>
@@ -266,7 +266,7 @@ function ProjectTimelineStepper({
             {/* Node + Label */}
             <div className="flex flex-col items-center min-w-[80px]">
               {/* Circle. Hotfix 16 adds the "also_active" state (cyan
-                  glow) — a phase the project has moved past but which
+                  glow) - a phase the project has moved past but which
                   still has in-flight work. */}
               <div
                 className={cn(
@@ -324,7 +324,7 @@ function ProjectTimelineStepper({
             {/* Connecting line. ``also_active`` phases share the
                 "we passed through here" semantics with ``complete``,
                 so the line still shows green up to and including
-                them — they just have a cyan ring on the node itself
+                them - they just have a cyan ring on the node itself
                 to flag the loose-ends warning. */}
             {!isLast && (
               <div className="flex-1 flex items-center pt-[18px] px-1 min-w-[20px]">
@@ -447,7 +447,7 @@ function deriveMilestones(
   // per-phase dates derived from the right source for the project's mode
   // (Raw / AI-Optimised / Rebalanced) and an authoritative currentPhaseSlug
   // driven by the real-time ADO + GitHub reconciliation layer. When this
-  // block is present the UI does NO date math of its own — we just map.
+  // block is present the UI does NO date math of its own - we just map.
   // ------------------------------------------------------------------
   const timeline = planData?.timeline;
   if (timeline && timeline.phases && timeline.phases.length > 0) {
@@ -456,7 +456,7 @@ function deriveMilestones(
     const currentIdx = currentSlug
       ? timeline.phases.findIndex((p) => p.slug === currentSlug)
       : -1;
-    // Hotfix 16 — earlier phases that still have in-flight work get
+    // Hotfix 16 - earlier phases that still have in-flight work get
     // the cyan "also_active" state instead of green "complete". The
     // backend computes this list (``alsoActivePhaseSlugs``); empty/
     // missing means no loose ends and earlier phases all read complete.
@@ -466,10 +466,10 @@ function deriveMilestones(
     return timeline.phases.map((p, i) => {
       let state: MilestoneState;
       if (currentIdx === -1) {
-        // No current phase yet — everything future.
+        // No current phase yet - everything future.
         state = "future";
       } else if (i < currentIdx) {
-        // Phases before the current frontier — usually "complete",
+        // Phases before the current frontier - usually "complete",
         // but if the backend says this phase still has loose ends,
         // mark it "also_active" so the cyan glow surfaces it.
         state = alsoActiveSet.has(p.slug) ? "also_active" : "complete";
@@ -488,7 +488,7 @@ function deriveMilestones(
   }
 
   // ------------------------------------------------------------------
-  // Legacy fallback — kept alive in case the timeline block is ever null
+  // Legacy fallback - kept alive in case the timeline block is ever null
   // (old backend revision, failed engine call, etc.). Same behaviour as
   // before the Sprint 6 wiring: derive phase states from overall %.
   // ------------------------------------------------------------------
@@ -595,7 +595,7 @@ function deriveMilestones(
   // Map 0-100% across all phases. E.g., 56% complete with 7 phases → phase index ~3.9
   const totalPhases = phases.length;
   const estimatedPhaseFloat = (overallPct / 100) * totalPhases;
-  // The current phase is the one we're "in" — clamp to valid range
+  // The current phase is the one we're "in" - clamp to valid range
   let currentPhaseIndex = Math.min(
     Math.floor(estimatedPhaseFloat),
     totalPhases - 1
@@ -625,12 +625,12 @@ function deriveMilestones(
   return results;
 }
 
-// ── Target Launch — hover-to-edit block ──
+// ── Target Launch - hover-to-edit block ──
 //
 // Renders the "TARGET LAUNCH  Apr 30" block on the hero banner. Hovering
 // reveals a pencil. Clicking the pencil swaps in a native date input; Enter
 // or the check button commits, Escape / X cancels. Save hits the backend's
-// PATCH /api/projects/{id}/target-launch — which flips the source to MANUAL
+// PATCH /api/projects/{id}/target-launch - which flips the source to MANUAL
 // so subsequent plan-approval cycles don't clobber the override.
 //
 // Parent supplies the read-only view (formatted label, source, date) and a
@@ -661,7 +661,7 @@ function TargetLaunchEditable({
   const openEditor = () => {
     if (!projectId) return;
     // Pre-fill the picker with today if no current value so the input is
-    // never empty — otherwise the browser clears and the PO has to type a
+    // never empty - otherwise the browser clears and the PO has to type a
     // full date from scratch.
     const iso = value ? isoDateOnly(value) : isoDateOnly(new Date());
     setDraft(iso);
@@ -745,7 +745,7 @@ function TargetLaunchEditable({
   }
 
   // ---- Read-only view with hover-reveal pencil ----
-  // Hotfix 83 — color flip when overdue / delivered late.
+  // Hotfix 83 - color flip when overdue / delivered late.
   const isOverdue = lifecycleStatus === "overdue";
   const isDeliveredLate = lifecycleStatus === "delivered_late";
   const dateColor = isOverdue
@@ -783,7 +783,7 @@ function TargetLaunchEditable({
           )}
         />
       </div>
-      {/* Overdue subline — sits where the "Edited" pill normally would */}
+      {/* Overdue subline - sits where the "Edited" pill normally would */}
       {isOverdue && typeof daysPastTarget === "number" && daysPastTarget > 0 && (
         <span
           className="mt-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-rag-red)]"
@@ -812,7 +812,7 @@ function TargetLaunchEditable({
   );
 }
 
-/** YYYY-MM-DD (UTC) — what <input type="date"> expects.
+/** YYYY-MM-DD (UTC) - what <input type="date"> expects.
  *
  * We deliberately use the UTC calendar day, not the local one. The stored
  * target_launch_date is anchored at noon UTC, which means the intended
@@ -945,7 +945,7 @@ export function ProjectHeroBanner() {
       return;
     }
     // If project exists but has no internalId yet (auto-import in progress),
-    // wait briefly — the context will update internalId once saved to DB.
+    // wait briefly - the context will update internalId once saved to DB.
     if (!projectId) {
       const timer = setTimeout(() => setLoading(false), 5000);
       return () => clearTimeout(timer);
@@ -958,7 +958,7 @@ export function ProjectHeroBanner() {
   const weeksLeft = deriveWeeksLeft(targetLaunch.date);
   const milestones = deriveMilestones(planData, progressData);
 
-  // Hotfix 83 — lifecycle indicators (red Target Launch tile, badge swap,
+  // Hotfix 83 - lifecycle indicators (red Target Launch tile, badge swap,
   // overdue EST. WEEKS replacement). All three derive from the backend's
   // single source of truth in the timeline block; the frontend never
   // computes "is it overdue" itself, so the in-app banner and the
@@ -986,7 +986,7 @@ export function ProjectHeroBanner() {
   // set, so the card updates the moment the PO rescales the timeline.
   const estWeeks = targetLaunch.date ? weeksLeft : planEstWeeks;
 
-  // CONFIDENCE: composite score from confidence_engine.py — blends velocity,
+  // CONFIDENCE: composite score from confidence_engine.py - blends velocity,
   // CI/CD throughput, AI plan baseline, target-launch feasibility, and
   // recent sprint reliability. See services/confidence_engine.py for the
   // formula. When the backend hasn't computed one (no approved plan yet,
@@ -1049,7 +1049,7 @@ export function ProjectHeroBanner() {
             </div>
           </div>
 
-          {/* Target Launch — hover-editable (Sprint 8). Clicking the
+          {/* Target Launch - hover-editable (Sprint 8). Clicking the
               block opens an inline date picker. Saving writes to
               /api/projects/{id}/target-launch and we refetch. */}
           <TargetLaunchEditable
@@ -1076,7 +1076,7 @@ export function ProjectHeroBanner() {
         {hasPendingPlan && (
           <div className="flex items-center gap-2 rounded-lg bg-[var(--color-rag-amber)]/15 border border-[var(--color-rag-amber)]/30 px-4 py-2.5 text-sm text-[var(--color-rag-amber)]">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            Sprint plan pending review — approve to see AI-optimized timeline
+            Sprint plan pending review - approve to see AI-optimized timeline
           </div>
         )}
 
@@ -1094,7 +1094,7 @@ export function ProjectHeroBanner() {
           ) : (
             <KpiCard label="Ready for Test" value={readyForTest} />
           )}
-          {/* Hotfix 83 — when the project is overdue, replace the
+          {/* Hotfix 83 - when the project is overdue, replace the
               meaningless "0 EST. WEEKS" tile with a red "Overdue Nd"
               indicator. When delivered late, amber "Late +Nd". */}
           {isOverdue && daysPastTarget > 0 ? (
@@ -1123,19 +1123,19 @@ export function ProjectHeroBanner() {
           <h3 className="text-xs font-bold uppercase tracking-[0.15em] text-[var(--text-secondary)]">
             Project Timeline
           </h3>
-          {/* Target-violation warning — only appears in AI/Rebalanced modes
+          {/* Target-violation warning - only appears in AI/Rebalanced modes
               when at least one phase ends after the committed launch date. */}
           {planData?.timeline?.targetViolated && (
             <span className="inline-flex items-center gap-2 rounded-full bg-[var(--color-rag-amber)]/15 border border-[var(--color-rag-amber)]/40 px-3 py-1 text-[11px] font-semibold text-[var(--color-rag-amber)]">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Plan ends {planData.timeline.targetViolatedDays} day{planData.timeline.targetViolatedDays === 1 ? "" : "s"} past Target Launch &mdash; rebalance to resolve
+              Plan ends {planData.timeline.targetViolatedDays} day{planData.timeline.targetViolatedDays === 1 ? "" : "s"} past Target Launch - rebalance to resolve
             </span>
           )}
-          {/* Current-phase source tooltip — lets the PO know when GitHub
+          {/* Current-phase source tooltip - lets the PO know when GitHub
               commits have pulled the current phase ahead of the ADO board. */}
           {planData?.timeline?.currentPhaseSource === "GITHUB" && (
             <span
-              title="GitHub commits indicate this is the most advanced phase. ADO cards may be lagging — update them when you can."
+              title="GitHub commits indicate this is the most advanced phase. ADO cards may be lagging - update them when you can."
               className="inline-flex items-center gap-1.5 rounded-full bg-white/5 border border-white/10 px-2.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)]"
             >
               via GitHub

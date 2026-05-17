@@ -165,7 +165,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       clearTimeout(heartbeatTimerRef.current);
     }
     heartbeatTimerRef.current = setTimeout(() => {
-      console.warn("[WS] No heartbeat received — closing connection");
+      console.warn("[WS] No heartbeat received - closing connection");
       wsRef.current?.close();
     }, HEARTBEAT_TIMEOUT_MS);
   }, []);
@@ -183,7 +183,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     try {
       const stored = localStorage.getItem("plan2sprint_demo_user");
       if (stored) {
-        // Demo mode — no token needed (server accepts without)
+        // Demo mode - no token needed (server accepts without)
         tokenParam = "";
       } else {
         // Try to get Supabase token from cookie/storage
@@ -243,7 +243,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
       // Don't reconnect if closed with 4001 (auth failure)
       if (event.code === 4001) {
-        console.error("[WS] Authentication failed — not reconnecting");
+        console.error("[WS] Authentication failed - not reconnecting");
         return;
       }
 
@@ -259,7 +259,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     };
 
     ws.onerror = () => {
-      // onclose will fire after this — reconnect logic handled there
+      // onclose will fire after this - reconnect logic handled there
     };
   }, [dispatch, resetHeartbeatTimer]);
 
@@ -357,7 +357,7 @@ export function useRealtimeAll(handler: EventHandler) {
 }
 
 /**
- * Auto-refresh hook — triggers a callback whenever specific event types arrive.
+ * Auto-refresh hook - triggers a callback whenever specific event types arrive.
  * Useful for dashboard panels that should refetch data on real-time events.
  *
  * Performance features:
@@ -390,11 +390,11 @@ export function useAutoRefresh(eventTypes: string[]): number {
           const elapsed = now - lastRefreshRef.current;
 
           if (elapsed >= AUTO_REFRESH_MIN_INTERVAL_MS) {
-            // Enough time has passed — refresh immediately
+            // Enough time has passed - refresh immediately
             lastRefreshRef.current = now;
             setRefreshKey((k) => k + 1);
           }
-          // Otherwise skip — too soon since last refresh
+          // Otherwise skip - too soon since last refresh
         }, AUTO_REFRESH_DEBOUNCE_MS);
       })
     );

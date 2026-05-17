@@ -96,7 +96,7 @@ export function MyNotificationInbox() {
         setNotifications(data.notifications ?? []);
       }
     } catch {
-      // API unavailable — keep existing state
+      // API unavailable - keep existing state
     } finally {
       setLoading(false);
     }

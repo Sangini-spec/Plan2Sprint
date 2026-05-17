@@ -53,7 +53,7 @@ export async function cachedFetch<T = unknown>(
     return { ok: true, status: 200, data: cached.data as T };
   }
 
-  // Deduplicate inflight requests — if the same URL is already being fetched,
+  // Deduplicate inflight requests - if the same URL is already being fetched,
   // reuse the pending *parsed result* promise instead of firing another request.
   // We store the parsed result (not raw Response) so multiple callers can share it
   // without body-stream conflicts.

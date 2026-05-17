@@ -33,7 +33,7 @@ export default function NotificationsPage() {
   const [teamsConnected, setTeamsConnected] = useState(false);
   const { selectedProject } = useSelectedProject();
 
-  // Hotfix 76 — gate DevPlatformSections (blockers / message composers /
+  // Hotfix 76 - gate DevPlatformSections (blockers / message composers /
   // channel-membership pane) on the per-user link state, not org-level
   // status. The previous /status call returned ``connected: false`` for
   // every non-PO caller (Hotfix 72), so the entire section below the
@@ -168,7 +168,7 @@ function DevPlatformSections({
 /*  DEVELOPER QUICK ACTIONS                                                    */
 /* -------------------------------------------------------------------------- */
 
-// Hotfix 78 — curated list of blocker categories common in
+// Hotfix 78 - curated list of blocker categories common in
 // engineering team standups. Order roughly by frequency.
 const BLOCKER_TYPES = [
   "Waiting on code review",
@@ -187,11 +187,11 @@ function DevQuickActions({ project, platform }: { project: ProjectInfo; platform
   const base = platform === "slack" ? "/api/integrations/slack" : "/api/integrations/teams";
   const prefix = platform === "slack" ? "#" : "";
   const platformLabel = platform === "slack" ? "Slack" : "Microsoft Teams";
-  // Hotfix 78 — replace freeform "Ticket reference" input with a
+  // Hotfix 78 - replace freeform "Ticket reference" input with a
   // structured "Type of blocker" dropdown. The Slack/Teams message
   // template still renders the value, just labelled "Type" instead
   // of "Ticket". Curated list of categories engineering teams hit
-  // most often during sprint work — the last option is "Other" so
+  // most often during sprint work - the last option is "Other" so
   // nothing gets shoehorned.
   const [blockerType, setBlockerType] = useState("");
   const [blockerDesc, setBlockerDesc] = useState("");
@@ -282,7 +282,7 @@ function DevQuickActions({ project, platform }: { project: ProjectInfo; platform
                   await postToChannel("blocker_to_channel", {
                     blockerType: blockerType,
                     // Keep ``ticket`` for backwards-compat with older API
-                    // builds — the new templates read blockerType first.
+                    // builds - the new templates read blockerType first.
                     ticket: blockerType,
                     description: blockerDesc,
                   });

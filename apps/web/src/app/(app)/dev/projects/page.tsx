@@ -337,7 +337,7 @@ export default function DevProjectsPage() {
         return;
       }
 
-      // Tool not connected — try loading cached data from DB
+      // Tool not connected - try loading cached data from DB
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const cached = (project as any).cachedData as { workItems?: AdoWorkItem[]; teamMembers?: AdoTeamMember[]; iterations?: AdoIteration[] } | undefined;
       if (cached && ((cached.workItems?.length ?? 0) > 0 || (cached.teamMembers?.length ?? 0) > 0)) {
@@ -426,7 +426,7 @@ export default function DevProjectsPage() {
 
   return (
     <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
-      {/* Left sidebar — collapsible */}
+      {/* Left sidebar - collapsible */}
       <div className={cn(
         "shrink-0 border-r border-[var(--border-subtle)] bg-[var(--bg-surface)]/50 overflow-y-auto transition-all duration-300 ease-in-out",
         sidebarOpen ? "w-64" : "w-0 border-r-0 overflow-hidden"
@@ -579,7 +579,7 @@ export default function DevProjectsPage() {
                                     <p className="text-sm font-medium text-[var(--text-primary)]">{iter.name}</p>
                                     {(iter.startDate || iter.finishDate) && (
                                       <p className="text-[10px] text-[var(--text-tertiary)]">
-                                        {iter.startDate ? new Date(iter.startDate).toLocaleDateString() : "No start"} — {iter.finishDate ? new Date(iter.finishDate).toLocaleDateString() : "No end"}
+                                        {iter.startDate ? new Date(iter.startDate).toLocaleDateString() : "No start"} - {iter.finishDate ? new Date(iter.finishDate).toLocaleDateString() : "No end"}
                                       </p>
                                     )}
                                   </div>
@@ -630,7 +630,7 @@ export default function DevProjectsPage() {
                                     <h3 className="text-sm font-semibold text-[var(--text-primary)]">{iter.name}</h3>
                                     {(iter.startDate || iter.finishDate) && (
                                       <span className="text-[10px] text-[var(--text-tertiary)] ml-2">
-                                        {iter.startDate ? new Date(iter.startDate).toLocaleDateString() : "?"} — {iter.finishDate ? new Date(iter.finishDate).toLocaleDateString() : "?"}
+                                        {iter.startDate ? new Date(iter.startDate).toLocaleDateString() : "?"} - {iter.finishDate ? new Date(iter.finishDate).toLocaleDateString() : "?"}
                                       </span>
                                     )}
                                   </div>

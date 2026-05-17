@@ -270,7 +270,7 @@ export function RetrospectiveHubPanel() {
             {retro.iterationStartDate && retro.iterationEndDate && (
               <span className="flex items-center gap-1 text-xs text-[var(--text-secondary)] mb-3">
                 <Calendar className="h-3 w-3" />
-                {formatDate(retro.iterationStartDate)} &mdash; {formatDate(retro.iterationEndDate)}
+                {formatDate(retro.iterationStartDate)} - {formatDate(retro.iterationEndDate)}
               </span>
             )}
             <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
@@ -329,7 +329,7 @@ export function RetrospectiveHubPanel() {
             {retro.iterationStartDate && retro.iterationEndDate && (
               <span className="flex items-center gap-1">
                 <Calendar className="h-3 w-3" />
-                {formatDate(retro.iterationStartDate)} &mdash; {formatDate(retro.iterationEndDate)}
+                {formatDate(retro.iterationStartDate)} - {formatDate(retro.iterationEndDate)}
               </span>
             )}
           </div>

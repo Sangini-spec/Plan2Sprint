@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { ResetPasswordForm } from "@/components/auth/reset-password-form";
 
 export const metadata = {
-  title: "Set New Password — Plan2Sprint",
+  title: "Set New Password - Plan2Sprint",
 };
 
 // ResetPasswordForm uses ``useSearchParams()`` to read the recovery
@@ -10,7 +10,7 @@ export const metadata = {
 // requires any component that calls useSearchParams during render to
 // be wrapped in a Suspense boundary, otherwise the route bails out of
 // static generation with the missing-suspense-with-csr-bailout error
-// (which is exactly how we found this — the production build refused
+// (which is exactly how we found this - the production build refused
 // to compile until we added this boundary).
 //
 // The fallback renders a near-identical loader to the one the form

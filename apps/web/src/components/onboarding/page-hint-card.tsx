@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * PageHintCard — first-visit one-shot card.
+ * PageHintCard - first-visit one-shot card.
  *
  * Pops up 600ms after a user lands on a page that has a registered hint
- * AND that the user hasn't dismissed before. Non-blocking — anchors to
+ * AND that the user hasn't dismissed before. Non-blocking - anchors to
  * the top-right of the viewport so the page remains interactive.
  */
 

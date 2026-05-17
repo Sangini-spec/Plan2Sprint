@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * SpotlightCard — anchored tour card with dim backdrop + spotlight ring.
+ * SpotlightCard - anchored tour card with dim backdrop + spotlight ring.
  *
  * Looks for the step's CSS anchor in the DOM, measures it, dims the rest
  * of the page, draws a glowing ring around the anchor, and positions the
@@ -123,7 +123,7 @@ function pickPosition(
       break;
   }
 
-  // Final clamp to viewport — never let a card end up off-screen.
+  // Final clamp to viewport - never let a card end up off-screen.
   top = Math.max(VIEWPORT_PADDING, Math.min(vh - cardHeight - VIEWPORT_PADDING, top));
   left = Math.max(VIEWPORT_PADDING, Math.min(vw - CARD_WIDTH - VIEWPORT_PADDING, left));
 
@@ -164,7 +164,7 @@ export function SpotlightCard() {
     }
     let raf: number | null = null;
     let retries = 0;
-    const MAX_RETRIES = 30; // ~1s at 60fps — gives the route time to mount
+    const MAX_RETRIES = 30; // ~1s at 60fps - gives the route time to mount
 
     function measure() {
       const el = document.querySelector(currentStep!.anchor!) as HTMLElement | null;
@@ -187,7 +187,7 @@ export function SpotlightCard() {
       });
       // Bring the anchor into view if it's off-screen. Use ``start``
       // alignment (anchor lands near the top of the viewport) so the
-      // card has the full lower half to occupy — ``center`` was
+      // card has the full lower half to occupy - ``center`` was
       // pushing the card below the anchor's centered position, often
       // off the bottom edge or into the checklist-widget area.
       // Instant scroll so the captured anchorRect immediately matches
@@ -228,7 +228,7 @@ export function SpotlightCard() {
   if (currentStep.variant !== "spotlight") return null;
 
   // Count only spotlight steps for the user-facing "Step X of Y"
-  // display. The welcome modal and completion modal are bookends —
+  // display. The welcome modal and completion modal are bookends -
   // showing them in the count would mean "Step 2 of 13" on the first
   // real step, which is confusing. With this filter, the first real
   // step becomes "Step 1 of 11".
@@ -248,10 +248,10 @@ export function SpotlightCard() {
       {/* Backdrop with a real cutout over the anchor.
           The trick: a transparent box at the anchor's position with a
           MASSIVE box-shadow (9999px spread) acts as both the dim
-          backdrop AND the cutout — the shadow extends outward to
+          backdrop AND the cutout - the shadow extends outward to
           cover the whole viewport, but the box itself stays clear so
           the anchored element shines through at its natural colour.
-          A full-screen dim div with a "ring on top" can't do this —
+          A full-screen dim div with a "ring on top" can't do this -
           the underlying element is always dimmed by the backdrop. */}
       {anchorRect ? (
         <motion.div
@@ -269,11 +269,11 @@ export function SpotlightCard() {
           }}
         />
       ) : (
-        /* Fallback path — no anchor found, dim the whole viewport */
+        /* Fallback path - no anchor found, dim the whole viewport */
         <div className="fixed inset-0 z-[95] pointer-events-none onb-backdrop" />
       )}
 
-      {/* Spotlight ring with pulse — pulls the eye to the anchor. */}
+      {/* Spotlight ring with pulse - pulls the eye to the anchor. */}
       {anchorRect && (
         <motion.div
           initial={{ opacity: 0, scale: 0.96 }}
@@ -380,7 +380,7 @@ export function SpotlightCard() {
       >
         <div className="onb-card-header-stripe" />
         <div className="p-5">
-          {/* Header — step number + dots + skip */}
+          {/* Header - step number + dots + skip */}
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2.5">
               <span
@@ -399,7 +399,7 @@ export function SpotlightCard() {
             </button>
           </div>
 
-          {/* Progress dots — one per spotlight step. Skip the welcome
+          {/* Progress dots - one per spotlight step. Skip the welcome
               and completion bookends so the dot count matches the
               "Step X of Y" header. */}
           <div className="flex items-center gap-1.5 mb-4 flex-wrap">

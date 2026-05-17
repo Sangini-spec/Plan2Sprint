@@ -8,7 +8,7 @@ export async function GET(request: Request) {
 
   // Prevent open redirect: only allow internal paths starting with /
   // Block protocol-relative URLs (//evil.com) and absolute URLs.
-  // Hotfix 61 — also allow ``/invite/<token>`` so OAuth-based invitees
+  // Hotfix 61 - also allow ``/invite/<token>`` so OAuth-based invitees
   // (Google / Microsoft sign-in) land back on the invite-accept screen
   // after auth completes, matching the password-login path.
   const SAFE_PREFIXES = [
@@ -42,7 +42,7 @@ export async function GET(request: Request) {
       // doesn't preserve query params on ``redirect_to``, so the
       // ``type=recovery`` hint that drove this branch was getting
       // lost in transit and users were silently bounced to
-      // /dashboard with a recovery session — never seeing the
+      // /dashboard with a recovery session - never seeing the
       // password form, never actually changing their password.
       //
       // This callback is now only for the OAuth (Google/Microsoft)
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
       // user to land on their role's default route.
       return NextResponse.redirect(`${origin}${next}`);
     }
-    // Hotfix 15 — surface the actual failure reason in the URL so we
+    // Hotfix 15 - surface the actual failure reason in the URL so we
     // can diagnose "had to pick twice" race conditions. Common values
     // we've seen: "invalid_grant" (PKCE verifier missing because the
     // user hit back during the redirect), "invalid_request" (code
@@ -62,7 +62,7 @@ export async function GET(request: Request) {
       status: (error as { status?: number }).status,
     });
     const reason = encodeURIComponent(error.message || "exchange_failed");
-    // Hotfix 88 — best-effort hint about which provider the user picked,
+    // Hotfix 88 - best-effort hint about which provider the user picked,
     // so the /login page's auto-retry can re-trigger the right OAuth
     // round-trip without making the user pick again. Supabase tags the
     // referer-style hint inconsistently, so we sniff the error message

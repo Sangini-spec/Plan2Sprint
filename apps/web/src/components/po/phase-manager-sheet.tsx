@@ -185,7 +185,7 @@ function PhaseCard({ phase, onDelete, onUpdate, onAddRule, onDeleteRule, project
               </div>
             ) : (
               <p className="text-xs text-[var(--text-secondary)] italic">
-                No rules — features won't auto-assign to this phase
+                No rules - features won't auto-assign to this phase
               </p>
             )}
 
@@ -259,7 +259,7 @@ function DeleteAllDialog({ open, onClose, onCreateOwn, onImportFromBoard }: Dele
           <Sparkles className="h-4 w-4 text-[var(--color-brand-secondary)]" />
           <div>
             <div className="text-sm font-medium text-[var(--text-primary)]">Create Your Own</div>
-            <div className="text-[10px] text-[var(--text-secondary)]">Blank slate — add custom phases manually</div>
+            <div className="text-[10px] text-[var(--text-secondary)]">Blank slate - add custom phases manually</div>
           </div>
         </button>
         <button
@@ -399,10 +399,10 @@ export function PhaseManagerSheet({ open, onClose, onPhasesChanged }: PhaseManag
     onPhasesChanged?.();
   };
 
-  // Sprint C — Import from Board is now two clicks:
+  // Sprint C - Import from Board is now two clicks:
   //   1) handleStartImport(): fetch the columns from ADO/Jira and show
   //      them in a confirmation panel inside this sheet (no DB writes).
-  //   2) handleConfirmImport(): commit — wipe existing phases, create
+  //   2) handleConfirmImport(): commit - wipe existing phases, create
   //      one phase per column verbatim. The board_column rule attached
   //      to each phase matches the source_status by exact name (case-
   //      insensitive), so no keyword guessing happens. Items that don't
@@ -500,7 +500,7 @@ export function PhaseManagerSheet({ open, onClose, onPhasesChanged }: PhaseManag
           </div>
         )}
 
-        {/* Preview & confirm panel — shown after the user clicks
+        {/* Preview & confirm panel - shown after the user clicks
             "Import from ADO/Jira Board" and the columns have been
             fetched successfully. NO DB writes have happened yet. */}
         {preview && (

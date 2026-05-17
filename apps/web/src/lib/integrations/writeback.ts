@@ -1,14 +1,14 @@
 /**
  * Write-back configuration.
  *
- * Sprint plan sync now uses comment-only mode — AI recommendations are posted
+ * Sprint plan sync now uses comment-only mode - AI recommendations are posted
  * as comments to each work item in Jira/ADO. No fields are modified.
  *
  * Board status write-back (drag-and-drop column changes) still updates
  * the status field directly via the board writeback endpoint.
  */
 
-// GitHub remains read-only — no write-back of any kind
+// GitHub remains read-only - no write-back of any kind
 export const GITHUB_WRITEBACK_ALLOWLIST = Object.freeze([] as const);
 
 /**

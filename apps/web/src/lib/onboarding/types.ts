@@ -1,5 +1,5 @@
 /**
- * Onboarding feature — TypeScript types.
+ * Onboarding feature - TypeScript types.
  *
  * Mirrors the JSON shape stored in ``users.onboarding_progress`` and
  * exchanged with ``/api/onboarding/*``. Keep this in sync with
@@ -46,7 +46,7 @@ export interface OnboardingStep {
    * Additional selectors to outline alongside the primary anchor.
    * Used when a single step is about two related controls (e.g. the
    * developer "find your projects" step which highlights both the
-   * Connect Tools button and the Project Picker — they sit next to
+   * Connect Tools button and the Project Picker - they sit next to
    * each other in the topbar and the dev needs to know about both).
    */
   extraAnchors?: string[];
@@ -85,7 +85,7 @@ export interface OnboardingStep {
   }>;
 
   /**
-   * Optional predicate — if it returns true at engine evaluation time,
+   * Optional predicate - if it returns true at engine evaluation time,
    * the step is automatically skipped and recorded under ``skipped_steps``.
    * Used for smart skipping (e.g. "Connect a tool" when a tool is already
    * connected).
@@ -99,7 +99,7 @@ export interface PageHint {
   title: string;
   body: string;
   icon?: LucideIcon;
-  /** Anchor element selector — if omitted, hint floats top-right of viewport */
+  /** Anchor element selector - if omitted, hint floats top-right of viewport */
   anchor?: string;
 }
 
