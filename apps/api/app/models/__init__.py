@@ -46,6 +46,14 @@ from .org_join_request import (
     STATUS_REJECTED as JOIN_REQ_REJECTED,
     STATUS_CANCELLED as JOIN_REQ_CANCELLED,
 )
+from .digest_schedule import (
+    DigestSchedule,
+    SCHEDULE_MODE_EVERY_WEEKDAY,
+    SCHEDULE_MODE_ALTERNATE_DAYS,
+    SCHEDULE_MODE_WEEKLY,
+    SCHEDULE_MODE_CUSTOM,
+    VALID_SCHEDULE_MODES,
+)
 
 __all__ = [
     "Base",
@@ -96,4 +104,10 @@ __all__ = [
     "Invitation",
     "Note",
     "OrgJoinRequest",
+    "DigestSchedule",
+    "SCHEDULE_MODE_EVERY_WEEKDAY",
+    "SCHEDULE_MODE_ALTERNATE_DAYS",
+    "SCHEDULE_MODE_WEEKLY",
+    "SCHEDULE_MODE_CUSTOM",
+    "VALID_SCHEDULE_MODES",
 ]

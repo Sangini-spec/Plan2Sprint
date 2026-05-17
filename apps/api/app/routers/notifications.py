@@ -531,3 +531,184 @@ async def test_daily_digest(
     except Exception as e:
         logger.exception("Test digest failed")
         return {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Digest schedule preferences (per-user)
+#
+# Backs the "Digest Schedule" section in Settings → Notifications. One
+# row per user; default-on-read so the UI never has to deal with a
+# missing row. See models/digest_schedule.py and
+# services/digest_schedule_helper.py for how the scheduler consumes it.
+# ---------------------------------------------------------------------------
+
+_VALID_MODES = {
+    "every_weekday", "alternate_days", "weekly", "custom",
+}
+# Roles allowed to view/edit a digest schedule. Devs and stakeholders
+# don't receive the morning/evening PO digest, so we don't surface the
+# UI to them. (The check is also enforced in the frontend; double-gate
+# at the API for defence-in-depth.)
+_DIGEST_AUDIENCE_ROLES = {
+    "product_owner", "owner", "admin", "engineering_manager",
+}
+
+_DEFAULT_SCHEDULE = {
+    "scheduleMode": "every_weekday",
+    "selectedDays": [],
+    "sendMorning": True,
+    "sendEvening": True,
+}
+
+
+def _row_to_dict(row) -> dict:
+    """Serialise a ``DigestSchedule`` row to the API shape (camelCase)."""
+    return {
+        "scheduleMode": row.schedule_mode,
+        "selectedDays": list(row.selected_days or []),
+        "sendMorning": bool(row.send_morning),
+        "sendEvening": bool(row.send_evening),
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@router.get("/notifications/schedule")
+async def get_digest_schedule(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the current user's digest schedule.
+
+    If no row exists the user has never touched the preferences UI —
+    we return the default (every_weekday + both slots on) WITHOUT
+    persisting. The scheduler also treats "no row" as default, so a
+    user who reads + closes the page without saving incurs zero DB
+    writes.
+    """
+    role = (current_user.get("role") or "").lower()
+    if role not in _DIGEST_AUDIENCE_ROLES:
+        # Not an audience role — answer with default + a hint flag so
+        # the UI can render a read-only "not applicable" message rather
+        # than a save form. Doesn't error: GET should be safe for any
+        # logged-in user.
+        return {**_DEFAULT_SCHEDULE, "applies": False}
+
+    from ..models.digest_schedule import DigestSchedule
+    user_id = current_user.get("id") or current_user.get("user_id") or ""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="missing user id on JWT")
+
+    row = (await db.execute(
+        select(DigestSchedule).where(DigestSchedule.user_id == user_id)
+    )).scalar_one_or_none()
+
+    if row is None:
+        return {**_DEFAULT_SCHEDULE, "applies": True}
+    return {**_row_to_dict(row), "applies": True}
+
+
+@router.patch("/notifications/schedule")
+async def update_digest_schedule(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upsert the current user's digest schedule.
+
+    Expected body (camelCase):
+        {
+          "scheduleMode": "every_weekday" | "alternate_days" | "weekly" | "custom",
+          "selectedDays": [0..6]  -- ignored unless mode is weekly|custom,
+          "sendMorning": bool,
+          "sendEvening": bool,
+        }
+
+    Validation:
+      * scheduleMode must be one of the four supported values.
+      * selectedDays entries must be ints 0..6 (Mon..Sun). Duplicates
+        are de-duped server-side. Out-of-range values are rejected
+        because silently dropping them would let a buggy client claim
+        a save succeeded while the schedule meant nothing.
+      * For 'weekly' mode, exactly one day is expected; if zero days
+        are sent, default to Monday. If multiple, take the first
+        (rather than rejecting — UX should never silently lose data
+        when the user picked something).
+      * For 'custom' mode, at least one day is required; if none, we
+        treat it like "both toggles off" — clear opt-out, no rows
+        every fire for this user.
+    """
+    role = (current_user.get("role") or "").lower()
+    if role not in _DIGEST_AUDIENCE_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="Digest schedule preferences are only for PO / owner / admin / EM roles",
+        )
+
+    user_id = current_user.get("id") or current_user.get("user_id") or ""
+    org_id = current_user.get("organization_id") or ""
+    if not user_id or not org_id:
+        raise HTTPException(status_code=400, detail="missing user_id or organization_id on JWT")
+
+    mode = (body.get("scheduleMode") or "").strip()
+    if mode not in _VALID_MODES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"scheduleMode must be one of {sorted(_VALID_MODES)}",
+        )
+
+    raw_days = body.get("selectedDays") or []
+    if not isinstance(raw_days, list):
+        raise HTTPException(status_code=422, detail="selectedDays must be a list")
+    days: list[int] = []
+    for d in raw_days:
+        if not isinstance(d, int) or d < 0 or d > 6:
+            raise HTTPException(
+                status_code=422,
+                detail=f"selectedDays[]: {d!r} is not an int in 0..6 (Mon..Sun)",
+            )
+        if d not in days:
+            days.append(d)
+
+    if mode == "weekly":
+        # Default Monday if no day picked.
+        if not days:
+            days = [0]
+        elif len(days) > 1:
+            days = days[:1]
+    elif mode == "custom":
+        # An empty custom list is a legitimate "off" signal. Keep [].
+        pass
+    else:
+        # every_weekday / alternate_days don't use selected_days.
+        days = []
+
+    send_morning = bool(body.get("sendMorning", True))
+    send_evening = bool(body.get("sendEvening", True))
+
+    from ..models.digest_schedule import DigestSchedule
+    from datetime import datetime as _dt, timezone as _tz
+    row = (await db.execute(
+        select(DigestSchedule).where(DigestSchedule.user_id == user_id)
+    )).scalar_one_or_none()
+
+    if row is None:
+        row = DigestSchedule(
+            user_id=user_id,
+            organization_id=org_id,
+            schedule_mode=mode,
+            selected_days=days if days else None,
+            send_morning=send_morning,
+            send_evening=send_evening,
+        )
+        db.add(row)
+    else:
+        row.schedule_mode = mode
+        row.selected_days = days if days else None
+        row.send_morning = send_morning
+        row.send_evening = send_evening
+        row.updated_at = _dt.now(_tz.utc)
+
+    await db.commit()
+    await db.refresh(row)
+
+    return {**_row_to_dict(row), "applies": True}

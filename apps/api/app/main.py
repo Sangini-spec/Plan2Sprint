@@ -208,6 +208,30 @@ async def lifespan(app: FastAPI):
                     WHERE pp.project_id = ip.id AND pp.slug = 'ready'
                 )
             """))
+            # ── digest_schedules: per-user opt-out of morning/evening
+            # notification digests. See models/digest_schedule.py.
+            # Default row is NOT seeded here — the helper falls back
+            # to backward-compatible defaults (every_weekday, both
+            # times) when no row exists, so existing users keep their
+            # current behaviour until they explicitly change it.
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS digest_schedules (
+                    id VARCHAR(25) PRIMARY KEY,
+                    user_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                    schedule_mode VARCHAR(32) NOT NULL DEFAULT 'every_weekday',
+                    selected_days INTEGER[] DEFAULT NULL,
+                    send_morning BOOLEAN NOT NULL DEFAULT TRUE,
+                    send_evening BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT uq_digest_schedule_user UNIQUE (user_id)
+                )
+            """))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_digest_schedule_org "
+                "ON digest_schedules(organization_id)"
+            ))
         print("Auto-migration complete.")
     except Exception as e:
         print(f"WARNING: DB migration skipped (DB unreachable): {e}")

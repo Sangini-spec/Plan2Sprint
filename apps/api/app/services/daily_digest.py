@@ -442,6 +442,47 @@ async def get_org_projects(db: AsyncSession, org_id: str) -> list[dict]:
     return [{"id": p.id, "name": p.name} for p in result.scalars().all()]
 
 
+async def get_po_recipients_for_org(
+    db: AsyncSession, org_id: str
+) -> list[tuple[str, str]]:
+    """Return EVERY product-owner-class user in this org as
+    ``(user_id, email)`` tuples.
+
+    Sibling to ``get_po_email`` — that helper returns a single email
+    (used by legacy callers that send to "the PO"). This one returns
+    the full set so the notification scheduler can apply each PO's
+    personal digest schedule individually. The schedule lives on
+    ``digest_schedules.user_id``, hence the need for the user id, not
+    just the email.
+
+    Roles included: product_owner, admin, owner. Engineering managers
+    are NOT included by default — their cadence preference can be added
+    later if requested. Result is de-duplicated by user_id (a user with
+    matching ``team_members`` + ``users`` rows is one person).
+    """
+    PO_ROLES = (
+        "PRODUCT_OWNER", "product_owner",
+        "ADMIN", "admin",
+        "OWNER", "owner",
+    )
+    # Primary source: ``users`` table (the authoritative role column
+    # in Plan2Sprint per the existing get_po_email comment block).
+    result = await db.execute(
+        select(User.id, User.email).where(
+            User.organization_id == org_id,
+            User.role.in_(PO_ROLES),
+            User.email.isnot(None),
+        )
+    )
+    seen_ids: set[str] = set()
+    recipients: list[tuple[str, str]] = []
+    for uid, email in result.all():
+        if uid and email and uid not in seen_ids:
+            seen_ids.add(uid)
+            recipients.append((uid, email))
+    return recipients
+
+
 async def get_connected_orgs(db: AsyncSession) -> list[str]:
     """Get all org IDs that have Slack or Teams connected."""
     result = await db.execute(

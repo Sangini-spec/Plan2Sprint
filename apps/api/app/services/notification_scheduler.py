@@ -51,58 +51,103 @@ async def _reset_daily_tracker():
 
 
 async def _send_morning_digests():
-    """Send morning digest to all connected orgs."""
+    """Send morning digest to every PO whose personal schedule says
+    "yes, morning, today is a send day".
+
+    Changed from the legacy "one PO per org" loop. The previous
+    implementation picked ``get_po_email(org)`` (singular) and sent to
+    that one address; a PO who wanted to dial back to weekly digests
+    had no way to express that preference. We now iterate every PO in
+    the org via ``get_po_recipients_for_org`` and gate each delivery
+    on ``digest_schedule_helper.should_send_for_user``. Defaults
+    (no row → every weekday, both slots on) preserve the old behaviour
+    for orgs that haven't opened the new preferences UI.
+    """
     from .daily_digest import (
-        get_connected_orgs, get_org_projects, get_po_email,
+        get_connected_orgs, get_org_projects, get_po_recipients_for_org,
         generate_morning_digest,
     )
     from .card_builders import slack_morning_digest, teams_morning_digest
     from .delivery_queue import enqueue_notification
+    from .digest_schedule_helper import should_send_for_user
+
+    now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as db:
         org_ids = await get_connected_orgs(db)
 
         for org_id in org_ids:
             if org_id in _sent_today.get("morning", set()):
-                continue  # Already sent today
+                continue  # Already processed this org's morning slot today
 
             try:
-                po_email = await get_po_email(db, org_id)
-                if not po_email:
+                po_recipients = await get_po_recipients_for_org(db, org_id)
+                if not po_recipients:
+                    continue
+
+                # Filter recipients to those whose personal schedule
+                # allows a morning digest today. Skip the (potentially
+                # expensive) project-data generation if nobody wants it.
+                allowed: list[tuple[str, str]] = []
+                for user_id, email in po_recipients:
+                    if await should_send_for_user(db, user_id, "morning", now):
+                        allowed.append((user_id, email))
+                if not allowed:
+                    logger.info(
+                        f"Morning digest: org {org_id} has no PO wanting "
+                        f"morning today; skipping generation."
+                    )
+                    _sent_today.setdefault("morning", set()).add(org_id)
                     continue
 
                 projects = await get_org_projects(db, org_id)
                 for proj in projects:
+                    # Generate the AI digest ONCE per project, fan out
+                    # to all qualifying POs. Keeps AI cost flat regardless
+                    # of how many POs the org has.
                     data = await generate_morning_digest(db, org_id, proj["id"], proj["name"])
-
-                    await enqueue_notification(
-                        org_id=org_id,
-                        recipient_email=po_email,
-                        notification_type="daily_digest",
-                        slack_payload=slack_morning_digest(data),
-                        teams_payload=teams_morning_digest(data),
-                        in_app_payload={
-                            "title": f"📋 {proj['name']} — Morning Status",
-                            "body": f"{data['completionPct']}% complete, {data['riskLabel']}",
-                            "type": "daily_digest",
-                        },
-                    )
+                    slack_card = slack_morning_digest(data)
+                    teams_card = teams_morning_digest(data)
+                    in_app = {
+                        "title": f"📋 {proj['name']} — Morning Status",
+                        "body": f"{data['completionPct']}% complete, {data['riskLabel']}",
+                        "type": "daily_digest",
+                    }
+                    for _user_id, email in allowed:
+                        await enqueue_notification(
+                            org_id=org_id,
+                            recipient_email=email,
+                            notification_type="daily_digest",
+                            slack_payload=slack_card,
+                            teams_payload=teams_card,
+                            in_app_payload=in_app,
+                        )
 
                 _sent_today.setdefault("morning", set()).add(org_id)
-                logger.info(f"Morning digest sent for org {org_id} ({len(projects)} projects)")
+                logger.info(
+                    f"Morning digest sent for org {org_id}: {len(allowed)} PO(s) "
+                    f"× {len(projects)} project(s)"
+                )
 
             except Exception as e:
                 logger.warning(f"Morning digest failed for org {org_id}: {e}")
 
 
 async def _send_evening_summaries():
-    """Send evening summary to all connected orgs."""
+    """Send evening summary to every PO whose personal schedule says
+    "yes, evening, today is a send day".
+
+    See ``_send_morning_digests`` for the rationale on the per-PO loop.
+    """
     from .daily_digest import (
-        get_connected_orgs, get_org_projects, get_po_email,
+        get_connected_orgs, get_org_projects, get_po_recipients_for_org,
         generate_evening_summary,
     )
     from .card_builders import slack_evening_summary, teams_evening_summary
     from .delivery_queue import enqueue_notification
+    from .digest_schedule_helper import should_send_for_user
+
+    now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as db:
         org_ids = await get_connected_orgs(db)
@@ -112,29 +157,47 @@ async def _send_evening_summaries():
                 continue
 
             try:
-                po_email = await get_po_email(db, org_id)
-                if not po_email:
+                po_recipients = await get_po_recipients_for_org(db, org_id)
+                if not po_recipients:
+                    continue
+
+                allowed: list[tuple[str, str]] = []
+                for user_id, email in po_recipients:
+                    if await should_send_for_user(db, user_id, "evening", now):
+                        allowed.append((user_id, email))
+                if not allowed:
+                    logger.info(
+                        f"Evening summary: org {org_id} has no PO wanting "
+                        f"evening today; skipping generation."
+                    )
+                    _sent_today.setdefault("evening", set()).add(org_id)
                     continue
 
                 projects = await get_org_projects(db, org_id)
                 for proj in projects:
                     data = await generate_evening_summary(db, org_id, proj["id"], proj["name"])
-
-                    await enqueue_notification(
-                        org_id=org_id,
-                        recipient_email=po_email,
-                        notification_type="daily_digest",
-                        slack_payload=slack_evening_summary(data),
-                        teams_payload=teams_evening_summary(data),
-                        in_app_payload={
-                            "title": f"📋 {proj['name']} — End of Day",
-                            "body": f"{data['completedToday']} stories completed today",
-                            "type": "daily_digest",
-                        },
-                    )
+                    slack_card = slack_evening_summary(data)
+                    teams_card = teams_evening_summary(data)
+                    in_app = {
+                        "title": f"📋 {proj['name']} — End of Day",
+                        "body": f"{data['completedToday']} stories completed today",
+                        "type": "daily_digest",
+                    }
+                    for _user_id, email in allowed:
+                        await enqueue_notification(
+                            org_id=org_id,
+                            recipient_email=email,
+                            notification_type="daily_digest",
+                            slack_payload=slack_card,
+                            teams_payload=teams_card,
+                            in_app_payload=in_app,
+                        )
 
                 _sent_today.setdefault("evening", set()).add(org_id)
-                logger.info(f"Evening summary sent for org {org_id} ({len(projects)} projects)")
+                logger.info(
+                    f"Evening summary sent for org {org_id}: {len(allowed)} PO(s) "
+                    f"× {len(projects)} project(s)"
+                )
 
             except Exception as e:
                 logger.warning(f"Evening summary failed for org {org_id}: {e}")
